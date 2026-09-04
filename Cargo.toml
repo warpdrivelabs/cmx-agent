@@ -1,0 +1,44 @@
+# cmx-agent —— 企业桌面智能体微服务（复刻并超越腾讯云 WorkBuddy）。
+#
+# 方案见 docs/20260902_WorkBuddy复刻方案_基于Codex与dsh的企业桌面智能体.md（形/核/体三层混合）。
+# 本 workspace 承载与平台/框架解耦的**智能体内核**（core）+ 工具（tools）+ 前门（cli/headless），
+# 逐里程碑 M0→M6 增量落地。
+#
+# 依赖策略（对齐 cmx-flowengine / cmx-rulesengine）：域内 agent crate 纯 path；外部 crate 走 aliyun
+# 镜像（见 .cargo/config.toml），版本与 cmx-container 根对齐以复用离线缓存。M0 内核不引 cmx-container
+# 基础设施（保持轻量、易测、可移植）；后续 store-pg / server / MCP 桥再按需以跨 workspace path 复用。
+[workspace]
+resolver = "2"
+# members 随实现进度增量加入（离线环境下 cargo 解析全 workspace，未落地的 crate 会阻断解析）。
+members = [
+    "crates/cmx-agent-core",
+    "crates/cmx-agent-tools",
+    "crates/cmx-agent-connectors",
+    "crates/cmx-agent-app",
+    "crates/cmx-agent-cli",
+    "crates/cmx-agent-web",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["skylake@pansoft.com"]
+
+[workspace.dependencies]
+# —— 域内 agent crate（纯 path）——
+cmx-agent-core = { path = "crates/cmx-agent-core", version = "0.1.0" }
+cmx-agent-tools = { path = "crates/cmx-agent-tools", version = "0.1.0" }
+cmx-agent-connectors = { path = "crates/cmx-agent-connectors", version = "0.1.0" }
+cmx-agent-app = { path = "crates/cmx-agent-app", version = "0.1.0" }
+
+# —— 外部 crate（版本照抄 cmx-container 根，复用离线缓存）——
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+thiserror = "2.0"
+anyhow = "1.0"
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.21", features = ["v4", "serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { version = "1.41", features = ["full"] }

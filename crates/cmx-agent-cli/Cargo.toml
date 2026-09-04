@@ -1,0 +1,21 @@
+[package]
+name = "cmx-agent-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "cmx-agent 无头前门：读一条指令，跑一个回合，打印会话事件日志（M0 冒烟 / e2e 入口）"
+
+[[bin]]
+name = "cmx-agent"
+path = "src/main.rs"
+
+[dependencies]
+cmx-agent-core.workspace = true
+cmx-agent-tools.workspace = true
+cmx-agent-app.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

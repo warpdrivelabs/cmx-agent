@@ -1,0 +1,23 @@
+[package]
+name = "cmx-agent-connectors"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "cmx-agent 连接器（M2）：把运行中的 cmx 微服务（flow/onto/report）经 HTTP 暴露为智能体工具 + live 健康探测"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dependencies]
+cmx-agent-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+# HTTP 客户端（照抄 cmx-ontology outbound 范式；rustls 免系统 openssl）。0.12 已离线缓存。
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+[dev-dependencies]
+# 单测走离线（mock 信封解析 / spec 断言）；live 集成测试标 #[ignore]，需真服务时手动跑。

@@ -1,0 +1,28 @@
+# cmx-agent 原生 Tauri 桌面壳。
+#
+# ⚠️ 本 crate **不是** cmx-agent 离线 workspace 的 member（那会让 tauri 未缓存时 `cargo build --offline`
+# 整体失败）。它是独立 crate + 自带 Cargo.lock，经 path 直接复用已测的 cmx-agent-app 核。
+# 构建：`cd cmx-agent/crates/cmx-agent-shell/src-tauri && cargo run`（首次联网拉 tauri 依赖并缓存）。
+[package]
+name = "cmx-agent-shell"
+version = "0.1.0"
+edition = "2021"
+description = "cmx 企业桌面智能体 · 原生 Tauri 壳（同核多壳：复用 cmx-agent-app 的 dispatch_json）"
+
+# 独立解析：本 crate 自成一个单成员 workspace，不向上并入 cmx-agent 离线 workspace。
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# 复用已建、已测的核（path 直引，不经 .workspace）。壳不含业务逻辑。
+cmx-agent-app = { path = "../../cmx-agent-app" }
+cmx-agent-core = { path = "../../cmx-agent-core" }
+tauri = { version = "2", features = [] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+directories = "5"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]

@@ -1,0 +1,9 @@
+/target
+**/*.rs.bk
+.DS_Store
+**/.DS_Store
+# 本地启动配置（若有 API Key，切勿提交）
+/.env
+/.env.*
+*.jsonback
+*.bak

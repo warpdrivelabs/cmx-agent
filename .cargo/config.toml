@@ -1,0 +1,19 @@
+# cmx-agent 使用国内 aliyun 镜像源拉取 crates.io（与 cmx-container / cmx-flowengine / cmx-rulesengine 一致）。
+[source.crates-io]
+replace-with = 'aliyun'
+
+[source.aliyun]
+registry = "sparse+https://mirrors.aliyun.com/crates.io-index/"
+
+# nora 私仓：本库自身不从 nora 拉任何依赖（M0 全 path/crates.io），但按平台约定在此**定义**该 registry
+# 名字——一旦后续 crate 以跨 workspace path 复用 cmx-container 基础设施，其 workspace 继承会要求
+# Cargo 解析 cmx-container 根 manifest（含 [patch.nora]），无 nora 定义则解析失败。提前镜像其定义，
+# 目标不在依赖图中故 index 实际从不被拉取。
+[registries.nora]
+index = "sparse+http://192.168.157.46:4000/cargo/index/"
+
+[http]
+check-revoke = false
+
+[net]
+git-fetch-with-cli = true

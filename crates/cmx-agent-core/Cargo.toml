@@ -1,0 +1,25 @@
+[package]
+name = "cmx-agent-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "cmx-agent 内核：回合循环 · 工具路由 · 会话事件日志 · 守卫管道 · 模型缝（形/核/体之「核」）"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+# 集成测试用内置工具验证内核↔工具↔守卫的端到端行为。dev-only 依赖，构成 dev 依赖环
+# （tools 的 normal-dep 依赖 core），Cargo 允许 dev-dep 环——不影响 normal 构建图。
+cmx-agent-tools = { path = "../cmx-agent-tools", version = "0.1.0" }

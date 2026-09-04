@@ -1,0 +1,23 @@
+[package]
+name = "cmx-agent-web"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "cmx-agent Web 桌面壳（离线可跑）：axum 服务 dispatch_json + 静态 UI，Chrome --app 模式当桌面窗口。同核多壳。"
+
+[[bin]]
+name = "cmx-agent-web"
+path = "src/main.rs"
+
+[dependencies]
+cmx-agent-app.workspace = true
+cmx-agent-core.workspace = true
+cmx-agent-tools.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+# 版本对齐 cmx-rulesengine（离线缓存命中：axum 0.8.9 / tower-http 0.6）。
+axum = { version = "0.8.9", features = ["macros"] }
+tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }

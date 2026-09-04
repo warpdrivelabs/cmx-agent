@@ -1,0 +1,16 @@
+[package]
+name = "cmx-agent-tools"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "cmx-agent 内置工具：echo/clock/add/fs_read（工具平面示例，后续接 cmx-* 引擎与 MCP）"
+
+[dependencies]
+cmx-agent-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
