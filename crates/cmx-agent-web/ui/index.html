@@ -230,8 +230,11 @@
   .tabview.active{display:flex}
   .session-view{flex:1;display:flex;flex-direction:column;min-height:0}
   .log{flex:1;overflow:auto;padding:22px;display:flex;flex-direction:column;gap:11px}
-  .row{display:flex;gap:10px;max-width:760px}
-  .row.user{align-self:flex-end;flex-direction:row-reverse}
+  .row{display:flex;gap:10px}
+  .row.user{align-self:flex-end;flex-direction:row-reverse;max-width:80%}
+  /* AI 气泡撑满该行（与工具卡片同宽），使整列内容左对齐、右边界一致；用户气泡仍随内容收缩 */
+  .row:not(.user){align-self:stretch}
+  .row:not(.user) .bubble{flex:1 1 auto;min-width:0}
   .avatar{width:30px;height:30px;border-radius:8px;flex:0 0 30px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff}
   .avatar.u{background:var(--magenta)} .avatar.a{background:var(--blue)}
   .bubble{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px 14px;font-size:14px;line-height:1.55;white-space:pre-wrap;word-break:break-word}
@@ -254,7 +257,7 @@
   .bubble.md .md-table th{background:var(--panel2);font-weight:700;color:var(--ink)}
   .bubble.md .md-table tr:nth-child(even) td{background:var(--panel2)}
   .row.user .bubble{background:var(--blue);color:#fff;border-color:transparent}
-  .tool{align-self:flex-start;max-width:760px;margin-left:40px;background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:8px 12px;font-size:12.5px;color:var(--ink2)}
+  .tool{align-self:flex-start;width:calc(100% - 40px);margin-left:40px;min-width:0;background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:8px 12px;font-size:12.5px;color:var(--ink2)}
   .tool.denied{border-color:var(--red)}
   .tool .tchead{display:flex;align-items:center;gap:7px;font-size:12.5px} .tool .tchead b{color:var(--aqua)} .tool.denied .tchead b{color:var(--red)}
   .tool .tcpath{font-family:"SF Mono",Menlo,monospace;font-size:11.5px;color:var(--ink2)} .tool .tcmeta{margin-left:auto;color:var(--muted);font-size:11px}
@@ -300,6 +303,24 @@
   .tool .chip b{color:var(--aqua)} .tool.denied .chip b{color:var(--red)}
   .tool .chip code{font-family:"SF Mono",Menlo,monospace;font-size:11.5px}
   .meta{font-size:11px;color:var(--muted);align-self:center;padding:2px 0}
+  /* 结果面板右上角操作按钮（复制/分享/点赞/差评）：仅图标 + 原生 tooltip */
+  .tool .tcacts{display:inline-flex;align-items:center;gap:1px;flex:0 0 auto}
+  .tool .tcact{display:inline-flex;align-items:center;justify-content:center;width:24px;height:22px;border-radius:6px;color:var(--muted);background:transparent;border:1px solid transparent;cursor:pointer;padding:0;transition:color .12s,background .12s}
+  .tool .tcact:hover{background:var(--hover);color:var(--ink)}
+  .tool .tcact svg{display:block;width:15px;height:15px}
+  .tool .tcact.liked{color:var(--aqua)} .tool .tcact.disliked{color:var(--red)}
+  /* 结果状态图标（替代 exit 文字）：成功绿 / 失败红 */
+  .tool .tcstatus{display:inline-flex;align-items:center} .tool .tcstatus svg{width:15px;height:15px;display:block}
+  .tool .tcstatus.ok{color:var(--green)} .tool .tcstatus.bad{color:var(--red)}
+  /* AI 文本气泡底部操作行 */
+  .bubble .tcacts.bubble-acts{display:flex;gap:1px;margin:8px -4px -2px;padding-top:2px}
+  .bubble .tcact{display:inline-flex;align-items:center;justify-content:center;width:24px;height:22px;border-radius:6px;color:var(--muted);background:transparent;border:1px solid transparent;cursor:pointer;padding:0;transition:color .12s,background .12s}
+  .bubble .tcact:hover{background:var(--hover);color:var(--ink)} .bubble .tcact svg{display:block;width:15px;height:15px}
+  .bubble .tcact.liked{color:var(--aqua)} .bubble .tcact.disliked{color:var(--red)}
+  .cmx-toast{position:fixed;left:50%;bottom:84px;transform:translateX(-50%) translateY(8px);background:var(--panel);color:var(--ink);
+    border:1px solid var(--border2);border-radius:10px;padding:8px 16px;font-size:13px;box-shadow:0 8px 28px rgba(0,0,0,.4);
+    opacity:0;pointer-events:none;transition:opacity .18s,transform .18s;z-index:9999}
+  .cmx-toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
   /* 打字指示器：AI 气泡里三个跳动圆点 */
   .bubble.typing{display:inline-flex;align-items:center;gap:5px;padding:13px 16px}
   .bubble.typing .dot{width:7px;height:7px;border-radius:50%;background:var(--aqua);opacity:.4;animation:typing 1.2s infinite ease-in-out}
@@ -816,7 +837,11 @@ function renderToolResult(ev){
   const r = o.result || o;   // run_tests 把 shell 结果包在 result 里
   if(r && (r.stdout!=null || r.exit_code!=null || r.timed_out!=null)){
     const out=(r.stdout||"").trimEnd(), err=(r.stderr||"").trimEnd();
-    let h=`<div class="tchead">✅ 结果 <span class="tcmeta">exit ${r.exit_code ?? (r.timed_out?"超时":"?")}</span></div>`;
+    const code=r.exit_code;
+    const failed = !!r.timed_out || (code!=null && code!==0);
+    const tip = r.timed_out ? "超时" : ("退出码 "+(code ?? "?"));
+    const status = `<span class="tcmeta tcstatus ${failed?"bad":"ok"}" title="${tip}">${failed?ICON_X:ICON_CHECK}</span>`;
+    let h=`<div class="tchead">${failed?"❌":"✅"} 结果 ${status}</div>`;
     if(out) h+=`<pre class="tterm">${esc(out)}</pre>`;
     if(err) h+=`<pre class="tterm tterr">${esc(err)}</pre>`;
     if(!out && !err) h+=`<div class="tcempty">（无输出）</div>`;
@@ -853,11 +878,13 @@ function renderEvent(log, ev, sid){
     log._sb=null; const r=el("row user"); r.append(el("avatar u","你"),el("bubble",esc(ev.text))); log.append(r);
   }
   else if(k==="model_message"){
-    if(log._sb){ log._sb.innerHTML=renderMarkdown(log._raw||ev.text||""); log._sb=null; }  // 收尾：定稿 markdown
-    else if(ev.text){ const r=el("row"); const b=el("bubble md"); b.innerHTML=renderMarkdown(ev.text); r.append(el("avatar a","AI"),b); log.append(r); }
+    let bub=null;
+    if(log._sb){ log._sb.innerHTML=renderMarkdown(log._raw||ev.text||""); bub=log._sb; log._sb=null; }  // 收尾：定稿 markdown
+    else if(ev.text){ const r=el("row"); const b=el("bubble md"); b.innerHTML=renderMarkdown(ev.text); r.append(el("avatar a","AI"),b); log.append(r); bub=b; }
+    if(bub) addBubbleActions(bub);   // AI 文本气泡也挂操作按钮（底部行）
   }
-  else if(k==="tool_invoked"){ log._sb=null; const t=el("tool"); t.innerHTML=renderToolInvoke(ev.call||{}); log.append(t); }
-  else if(k==="tool_result"){ const t=el("tool"+(ev.ok?"":" denied")); t.innerHTML=renderToolResult(ev); log.append(t); }
+  else if(k==="tool_invoked"){ log._sb=null; const t=el("tool"); t.innerHTML=renderToolInvoke(ev.call||{}); addToolActions(t); log.append(t); }
+  else if(k==="tool_result"){ const t=el("tool"+(ev.ok?"":" denied")); t.innerHTML=renderToolResult(ev); if(ev.ok) addToolActions(t); log.append(t); }
   else if(k==="approval_requested"){ log._sb=null;
     const t=el("tool approval"); t.dataset.callid=ev.call_id||""; t.dataset.sid=sid||"";
     t.innerHTML=`<div class="tchead">⏸ <b>需要审批</b> <span class="tcpath">${esc(ev.tool||"")}</span></div>`
@@ -1191,6 +1218,64 @@ function renderPlugins(){
   sec("市场推荐"); PLUG_MARKET.forEach(p=>row(p,false));
 }
 
+// 状态图标（替代 exit 码文字）：成功 ✓ / 失败 ✕
+const ICON_CHECK=`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+const ICON_X=`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+// ── 结果面板操作按钮（复制/分享/点赞/差评）：仅图标 + 原生 tooltip（title），注入到 .tchead 右侧 ──
+const TOOL_ACT_BTNS =
+  `<button class="tcact" data-act="toolCopy" title="复制" aria-label="复制"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>`+
+  `<button class="tcact" data-act="toolShare" title="分享" aria-label="分享"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg></button>`+
+  `<button class="tcact" data-act="toolLike" title="点赞" aria-label="点赞"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg></button>`+
+  `<button class="tcact" data-act="toolDislike" title="差评" aria-label="差评"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"/></svg></button>`;
+function addToolActions(card){
+  const head=card.querySelector(".tchead");
+  if(!head || head.querySelector(".tcacts")) return;
+  const acts=document.createElement("span"); acts.className="tcacts"; acts.innerHTML=TOOL_ACT_BTNS;
+  const meta=head.querySelector(".tcmeta");
+  if(meta){ meta.after(acts); }                              // 跟在「exit N / N 步」右侧
+  else { acts.style.marginLeft="auto"; head.appendChild(acts); }  // 无 meta 时按钮组自己靠右
+}
+// AI 文本气泡：把同款操作按钮作为底部行追加（气泡无表头，放底部）
+function addBubbleActions(bubble){
+  if(!bubble || !bubble.innerText.trim() || bubble.querySelector(":scope > .tcacts")) return;
+  const acts=document.createElement("div"); acts.className="tcacts bubble-acts"; acts.innerHTML=TOOL_ACT_BTNS;
+  bubble.appendChild(acts);
+}
+// 复制/分享取正文文本（去掉操作按钮本身）；工具卡取正文块，气泡取全文
+function panelText(box){
+  const clone=box.cloneNode(true); clone.querySelectorAll(".tcacts").forEach(a=>a.remove());
+  const parts=[...clone.querySelectorAll(".tterm,.tcode,.tcsub,.tcempty")].map(e=>e.innerText.trim()).filter(Boolean);
+  if(parts.length) return parts.join("\n\n");
+  const tbl=clone.querySelector(".tdata"); if(tbl) return tbl.innerText.trim();
+  return clone.innerText.trim();
+}
+async function copyText(txt){
+  try{ await navigator.clipboard.writeText(txt); return true; }
+  catch(e){ try{ const ta=document.createElement("textarea"); ta.value=txt; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); return true; }catch(_){ return false; } }
+}
+async function toolCopy(btn){ const ok=await copyText(panelText(btn.closest(".tool,.bubble"))); showToast(ok?"已复制到剪贴板":"复制失败"); }
+async function toolShare(btn){
+  const txt=panelText(btn.closest(".tool,.bubble"));
+  if(navigator.share){ try{ await navigator.share({text:txt}); return; }catch(e){ if(e&&e.name==="AbortError") return; } }
+  const ok=await copyText(txt); showToast(ok?"已复制，可粘贴分享":"分享失败");
+}
+function toolLike(btn){
+  const box=btn.closest(".tool,.bubble"); const dis=box.querySelector('[data-act="toolDislike"]');
+  const on=btn.classList.toggle("liked"); if(on&&dis) dis.classList.remove("disliked");
+  showToast(on?"已点赞 👍":"已取消点赞");
+}
+function toolDislike(btn){
+  const box=btn.closest(".tool,.bubble"); const lk=box.querySelector('[data-act="toolLike"]');
+  const on=btn.classList.toggle("disliked"); if(on&&lk) lk.classList.remove("liked");
+  showToast(on?"已记录反馈，谢谢":"已取消差评");
+}
+function showToast(msg){
+  let t=document.getElementById("cmx-toast");
+  if(!t){ t=document.createElement("div"); t.id="cmx-toast"; t.className="cmx-toast"; document.body.appendChild(t); }
+  t.textContent=msg; t.classList.add("on");
+  clearTimeout(showToast._t); showToast._t=setTimeout(()=>t.classList.remove("on"),1600);
+}
+
 // 内联 onclick 属性全被拦截。用委托（监听在 document 上，由 nonce'd 脚本注册）在两壳都工作。
 const ACTIONS = { newTask, openConnectors, startFromHome, toggleSidebar, toggleTheme, checkUpdate, applyUpdate, toggleMenu, menuSettings, menuAbout, toggleVoice, toggleUserMenu, userProfile, userSwitch, userWorkspace, userLogout,
   toggleTabOverflow, tabCtxClose, tabCtxCloseOthers, tabCtxCloseRight, tabCtxCloseAll };
@@ -1202,6 +1287,10 @@ document.addEventListener("click", e=>{
     runConnectorTool(el.dataset.tool, el.dataset.online === "1");
   } else if(act === "approveTool"){
     approveTool(el.dataset.callid, el.dataset.ok === "1", el.dataset.all === "1");
+  } else if(act === "toolCopy"){ toolCopy(el);
+  } else if(act === "toolShare"){ toolShare(el);
+  } else if(act === "toolLike"){ toolLike(el);
+  } else if(act === "toolDislike"){ toolDislike(el);
   } else if(act === "toggleVoice"){
     toggleVoice(el);
   } else if(act === "showPanel"){
