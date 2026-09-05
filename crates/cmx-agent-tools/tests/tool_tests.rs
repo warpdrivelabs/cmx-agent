@@ -150,7 +150,29 @@ fn danger_rm_is_flagged_high_risk_and_always_approval() {
 fn default_registry_exposes_all_tools_sorted() {
     let reg = cmx_agent_tools::default_registry();
     let names: Vec<String> = reg.specs().into_iter().map(|s| s.name).collect();
-    assert_eq!(names, vec!["add", "clock", "danger_rm", "echo", "fs_read"]);
+    // 基础工具 + 编码面（E1）+ 编码面进阶（E2）工具，按名排序。
+    assert_eq!(
+        names,
+        vec![
+            "add",
+            "apply_patch",
+            "bash",
+            "chart",
+            "clock",
+            "danger_rm",
+            "data_describe",
+            "echo",
+            "fs_edit",
+            "fs_read",
+            "fs_write",
+            "git",
+            "glob",
+            "grep",
+            "repo_map",
+            "run_tests",
+            "update_plan",
+        ]
+    );
     // 每个工具都能被路由取到
     for n in &names {
         assert!(reg.contains(n));

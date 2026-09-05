@@ -27,12 +27,50 @@ pub struct SessionMeta {
     pub event_count: usize,
 }
 
+/// 事件窗口：只含日志的一段（大会话分页 / 尾加载用，避免一次解析、传输、渲染全量事件）。
+#[derive(Debug, Clone)]
+pub struct EventWindow {
+    /// 窗口内事件（时间正序）。
+    pub events: Vec<SessionEvent>,
+    /// 该会话事件总数。
+    pub total: usize,
+    /// 窗口首个事件在全量日志中的下标（0=已到最早；>0=上方还有更早的，可继续「加载更早」）。
+    pub start: usize,
+    /// 会话标题（顺带回传，免前端再单独查 `list`）。
+    pub title: Option<String>,
+}
+
 /// 会话存储抽象。M1 提供文件实现 [`FileSessionStore`]；后续可加 pg 实现。
 pub trait SessionStore: Send + Sync {
     /// 追加若干新事件到某会话（不重写已有行）。
     fn append_events(&self, session_id: &str, events: &[SessionEvent]) -> AppResult<()>;
     /// 加载一个会话（重建其日志）。不存在返回 `AppError::NotFound`。
     fn load(&self, session_id: &str) -> AppResult<Session>;
+    /// 只加载事件日志的一个「窗口」（大会话分页 / 尾加载）。
+    /// `limit=None`→全量；`Some(n)`→取窗口末 `n` 条。
+    /// `before=None`→以日志末尾为右界（最新一屏）；`Some(k)`→以下标 `k`（不含）为右界，向前翻页。
+    /// 默认实现走 `load` 再切片（正确但仍全量解析）；文件实现覆盖为「只解析窗口内的行」。
+    fn load_events_window(
+        &self,
+        session_id: &str,
+        limit: Option<usize>,
+        before: Option<usize>,
+    ) -> AppResult<EventWindow> {
+        let session = self.load(session_id)?;
+        let all = session.log.events();
+        let total = all.len();
+        let end = before.unwrap_or(total).min(total);
+        let start = match limit {
+            Some(n) => end.saturating_sub(n),
+            None => 0,
+        };
+        Ok(EventWindow {
+            events: all[start..end].to_vec(),
+            total,
+            start,
+            title: None,
+        })
+    }
     /// 列出所有会话元数据（按 updated_at 倒序）。
     fn list(&self) -> AppResult<Vec<SessionMeta>>;
     /// 写入/更新会话元数据。
@@ -117,6 +155,48 @@ impl SessionStore for FileSessionStore {
         }
         let system = meta.and_then(|m| m.system);
         Ok(Session::from_events(session_id, system, events))
+    }
+
+    fn load_events_window(
+        &self,
+        session_id: &str,
+        limit: Option<usize>,
+        before: Option<usize>,
+    ) -> AppResult<EventWindow> {
+        let path = self.log_path(session_id)?;
+        if !path.exists() {
+            return Err(AppError::NotFound(format!("session '{session_id}'")));
+        }
+        // 只读「行」（不解析），先拿总数与窗口边界，再**只解析窗口内的行**——
+        // 这样大会话切换不必解析整段日志（JSON parse 是主要开销），是本次提速的关键。
+        let file = std::fs::File::open(&path)?;
+        let reader = BufReader::new(file);
+        let lines: Vec<String> = reader
+            .lines()
+            .collect::<std::io::Result<Vec<_>>>()?
+            .into_iter()
+            .filter(|l| !l.trim().is_empty())
+            .collect();
+        let total = lines.len();
+        let end = before.unwrap_or(total).min(total);
+        let start = match limit {
+            Some(n) => end.saturating_sub(n),
+            None => 0,
+        };
+        let mut events = Vec::with_capacity(end.saturating_sub(start));
+        for (i, line) in lines[start..end].iter().enumerate() {
+            let ev: SessionEvent = serde_json::from_str(line).map_err(|e| {
+                AppError::Corrupt(format!("session '{session_id}' line {}: {e}", start + i + 1))
+            })?;
+            events.push(ev);
+        }
+        let title = read_meta(&self.meta_path(session_id)?)?.and_then(|m| m.title);
+        Ok(EventWindow {
+            events,
+            total,
+            start,
+            title,
+        })
     }
 
     fn list(&self) -> AppResult<Vec<SessionMeta>> {

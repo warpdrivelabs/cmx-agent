@@ -13,7 +13,7 @@ use crate::event::{EventKind, StopReason};
 use crate::guard::{GuardCtx, GuardDecision, GuardPhase, GuardPipeline, SandboxMode, Subject};
 use crate::model::{ModelResponse, ModelSeam};
 use crate::session::Session;
-use crate::tool::{Approval, ToolCall, ToolCtx, ToolRegistry, ToolResult};
+use crate::tool::{Approval, Tool, ToolCall, ToolCtx, ToolRegistry, ToolResult, ToolSpec};
 
 /// 审批策略（两旋钮之「许可」——何时问你）。对齐 codex `approval_policy`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -27,10 +27,18 @@ pub enum ApprovalPolicy {
     UnlessTrusted,
 }
 
-/// 人在环审批者（③ 人在环 的解决方；真实实现接 cmx-flow 审批 / IM 二次确认）。
+/// 人在环审批者（③ 人在环 的解决方；真实实现接**交互式前端审批卡片** / cmx-flow 审批 / IM 二次确认）。
+/// `resolve` 为 async：交互式实现可在此**挂起等待**用户在前端点击「允许/拒绝」后再返回。
+#[async_trait::async_trait]
 pub trait Approver: Send + Sync {
     /// 返回 (是否批准, 审批人标识)。
-    fn resolve(&self, call: &ToolCall, reason: &str) -> (bool, String);
+    async fn resolve(&self, call: &ToolCall, reason: &str) -> (bool, String);
+
+    /// 该会话是否已被授予「本对话全部允许」——若是，内核跳过审批直接放行（不再弹审批卡）。默认 false。
+    /// 交互式审批者据此实现「本对话全部允许」：用户点一次后，本会话后续需审批的工具全部自动放行。
+    fn is_preapproved(&self, _session_id: &str) -> bool {
+        false
+    }
 }
 
 /// 自动审批者（测试/自动化）：按固定答案回应。
@@ -55,8 +63,9 @@ impl AutoApprover {
     }
 }
 
+#[async_trait::async_trait]
 impl Approver for AutoApprover {
-    fn resolve(&self, _call: &ToolCall, _reason: &str) -> (bool, String) {
+    async fn resolve(&self, _call: &ToolCall, _reason: &str) -> (bool, String) {
         (self.approve, self.by.clone())
     }
 }
@@ -125,6 +134,17 @@ impl Agent {
         session: &mut Session,
         user_input: &str,
     ) -> AgentResult<TurnOutcome> {
+        self.run_turn_observed(session, user_input, None).await
+    }
+
+    /// 流式回合：同 [`Self::run_turn`]，但模型文字增量经 `observer` 实时回调（打字机效果）。
+    /// deltas 不进日志；最终完整文本仍以 `ModelMessage` 事件落库。
+    pub async fn run_turn_observed(
+        &self,
+        session: &mut Session,
+        user_input: &str,
+        observer: Option<&dyn crate::model::TurnObserver>,
+    ) -> AgentResult<TurnOutcome> {
         let turn = session.next_turn_no();
         session.log.append(EventKind::TurnStarted {
             turn,
@@ -142,13 +162,20 @@ impl Agent {
             }
             steps += 1;
 
-            // ① 模型推理（上下文只从日志派生）
+            // ① 模型推理（上下文只从日志派生）。有 observer → 走流式，文字增量实时回调。
             let ctx = session.model_context(self.tools.specs());
-            let resp: ModelResponse = self
-                .model
-                .complete(&ctx)
-                .await
-                .map_err(|e| AgentError::Model(e.0))?;
+            let resp: ModelResponse = match observer {
+                Some(obs) => self
+                    .model
+                    .complete_streaming(&ctx, obs)
+                    .await
+                    .map_err(|e| AgentError::Model(e.0))?,
+                None => self
+                    .model
+                    .complete(&ctx)
+                    .await
+                    .map_err(|e| AgentError::Model(e.0))?,
+            };
 
             // 记录模型输出（模型可见 → 必落日志）
             session.log.append(EventKind::ModelMessage {
@@ -164,10 +191,10 @@ impl Agent {
                 break StopReason::Completed;
             }
 
-            // ②–⑥ 逐个处理工具调用
-            for call in &resp.tool_calls {
-                self.handle_tool_call(session, call).await;
-            }
+            // ②–⑥ 处理工具调用：一步内的多个调用**并发执行**（真并行 fan-out）。
+            // 前置(路由/守卫/审批)与结果回灌仍按序（借用 &mut session + 保持日志有序），
+            // 只有工具体 invoke() 并发——子智能体/网络 I/O 型调用总耗时≈最慢者而非累加。
+            self.handle_tool_calls(session, &resp.tool_calls).await;
         };
 
         session.log.append(EventKind::TurnEnded {
@@ -183,116 +210,157 @@ impl Agent {
         })
     }
 
-    /// 处理单个工具调用：路由 → pre 守卫 → 审批 → 执行 → post 守卫 → 回灌结果。
-    /// 任一环拒绝都以 `ToolResult::err` 回灌（让模型自愈，不中止回合）。
-    async fn handle_tool_call(&self, session: &mut Session, call: &ToolCall) {
-        session
-            .log
-            .append(EventKind::ToolInvoked { call: call.clone() });
+    /// 处理一步内的**一批**工具调用：**三段式**兼顾并发、借用安全与日志保序。
+    /// - 前置(串行, 需 `&mut session`)：ToolInvoked 落库 → 路由 → pre 守卫 → 审批闸门；
+    ///   失败者(未知工具 / 拒绝 / 审批否)当场以 `ToolResult::err` 回灌（让模型自愈，不中止回合）。
+    /// - 执行(**并发**)：所有通过前置的工具体 `invoke()` 用 `join_all` 并发跑——这一段不碰 session，
+    ///   故子智能体(task)/网络型工具由此**真并行**，一步总耗时≈最慢者而非累加。
+    /// - 回灌(串行, 需 `&mut session`)：按调用序逐个 post 守卫 + ToolResult 落库（保持日志有序）。
+    ///
+    /// 说明：`&mut Session` 无法被多个并发 future 共享，故只把「纯执行」并发化，
+    /// 而把所有会话写(事件落库/审批)留在串行段——这是 Rust 借用规则下并发与不变量的正确切分。
+    async fn handle_tool_calls(&self, session: &mut Session, calls: &[ToolCall]) {
+        /// 通过前置、待并发执行的工具调用。
+        struct Pending<'c> {
+            call: &'c ToolCall,
+            tool: Arc<dyn Tool>,
+            spec: ToolSpec,
+        }
 
-        // ② 路由：工具不存在 → 错误结果回灌
-        let Some(tool) = self.tools.get(&call.name) else {
-            self.push_result(
-                session,
-                &call.id,
-                ToolResult::err(format!("unknown tool '{}'", call.name)),
-            );
-            return;
-        };
-        let spec = tool.spec();
+        // —— ①–④ 前置(串行)：落库调用、路由、pre 守卫、审批 ——
+        let mut pending: Vec<Pending<'_>> = Vec::new();
+        for call in calls {
+            session
+                .log
+                .append(EventKind::ToolInvoked { call: call.clone() });
 
-        // ③ 护栏前置（pre）
-        let (guard_name, decision) = {
-            let gctx = GuardCtx {
-                phase: GuardPhase::PreExecute,
-                call,
-                spec: &spec,
-                sandbox: self.policy.sandbox,
-                subject: &self.policy.subject,
-                result: None,
-            };
-            self.guards.run(&gctx)
-        };
-
-        match decision {
-            GuardDecision::Deny { reason } => {
-                session.log.append(EventKind::GuardDecision {
-                    call_id: call.id.clone(),
-                    phase: GuardPhase::PreExecute,
-                    guard: guard_name,
-                    decision: GuardDecision::deny(reason.clone()),
-                });
+            // 路由：工具不存在 → 错误结果回灌
+            let Some(tool) = self.tools.get(&call.name) else {
                 self.push_result(
                     session,
                     &call.id,
-                    ToolResult::err(format!("denied: {reason}")),
+                    ToolResult::err(format!("unknown tool '{}'", call.name)),
                 );
-                return;
-            }
-            GuardDecision::NeedApproval { reason } => {
-                // ④ 审批闸门
-                if !self.resolve_approval(session, call, &spec.name, &reason) {
-                    self.push_result(session, &call.id, ToolResult::err("approval rejected"));
-                    return;
-                }
-            }
-            GuardDecision::Allow => {
-                // 即便守卫未要求审批，UnlessTrusted 策略下对非幂等工具也要问一次
-                if self.policy.approval == ApprovalPolicy::UnlessTrusted
-                    && spec.guard.requires_approval == Approval::Never
-                    && !spec.guard.idempotent
-                    && !self.resolve_approval(
+                continue;
+            };
+            let spec = tool.spec();
+
+            // 护栏前置(pre)
+            let (guard_name, decision) = {
+                let gctx = GuardCtx {
+                    phase: GuardPhase::PreExecute,
+                    call,
+                    spec: &spec,
+                    sandbox: self.policy.sandbox,
+                    subject: &self.policy.subject,
+                    result: None,
+                };
+                self.guards.run(&gctx)
+            };
+            match decision {
+                GuardDecision::Deny { reason } => {
+                    session.log.append(EventKind::GuardDecision {
+                        call_id: call.id.clone(),
+                        phase: GuardPhase::PreExecute,
+                        guard: guard_name,
+                        decision: GuardDecision::deny(reason.clone()),
+                    });
+                    self.push_result(
                         session,
-                        call,
-                        &spec.name,
-                        "policy UnlessTrusted: non-idempotent tool",
-                    )
-                {
-                    self.push_result(session, &call.id, ToolResult::err("approval rejected"));
-                    return;
+                        &call.id,
+                        ToolResult::err(format!("denied: {reason}")),
+                    );
+                    continue;
+                }
+                GuardDecision::NeedApproval { reason } => {
+                    // 审批闸门（可交互挂起等待用户）——串行，避免多卡片竞态。
+                    if !self.resolve_approval(session, call, &spec.name, &reason).await {
+                        self.push_result(session, &call.id, ToolResult::err("approval rejected"));
+                        continue;
+                    }
+                }
+                GuardDecision::Allow => {
+                    // 即便守卫未要求审批，UnlessTrusted 策略下对非幂等工具也要问一次
+                    if self.policy.approval == ApprovalPolicy::UnlessTrusted
+                        && spec.guard.requires_approval == Approval::Never
+                        && !spec.guard.idempotent
+                    {
+                        let ok = self
+                            .resolve_approval(
+                                session,
+                                call,
+                                &spec.name,
+                                "policy UnlessTrusted: non-idempotent tool",
+                            )
+                            .await;
+                        if !ok {
+                            self.push_result(
+                                session,
+                                &call.id,
+                                ToolResult::err("approval rejected"),
+                            );
+                            continue;
+                        }
+                    }
                 }
             }
+            pending.push(Pending { call, tool, spec });
         }
 
-        // ⑤ 沙箱执行
+        if pending.is_empty() {
+            return;
+        }
+
+        // —— ⑤ 沙箱执行(并发)：只有工具体 invoke() 并发；ToolCtx 只读、被所有 future 共享借用。
+        // join_all 在同一任务上协作式并发：子智能体/网络 I/O 型工具在此段真并行推进。
         let tctx = ToolCtx {
             sandbox: self.policy.sandbox,
             allowed_roots: &self.policy.allowed_roots,
         };
-        let result = match tool.invoke(call.input.clone(), &tctx).await {
-            Ok(r) => r,
-            Err(e) => ToolResult::err(e.0),
-        };
+        let results: Vec<ToolResult> =
+            futures_util::future::join_all(pending.iter().map(|p| {
+                let tool = p.tool.clone();
+                let input = p.call.input.clone();
+                let tctx = &tctx;
+                async move {
+                    match tool.invoke(input, tctx).await {
+                        Ok(r) => r,
+                        Err(e) => ToolResult::err(e.0),
+                    }
+                }
+            }))
+            .await; // join_all 保序：results[i] 对应 pending[i]
 
-        // ⑥ 观察回灌 + post 守卫（审计/脱敏），post 拒绝则替换为错误结果
-        let (post_guard, post_decision) = {
-            let gctx = GuardCtx {
-                phase: GuardPhase::PostExecute,
-                call,
-                spec: &spec,
-                sandbox: self.policy.sandbox,
-                subject: &self.policy.subject,
-                result: Some(&result),
+        // —— ⑥ 观察回灌 + post 守卫(串行, 按调用序保序落库) ——
+        for (p, result) in pending.iter().zip(results) {
+            let (post_guard, post_decision) = {
+                let gctx = GuardCtx {
+                    phase: GuardPhase::PostExecute,
+                    call: p.call,
+                    spec: &p.spec,
+                    sandbox: self.policy.sandbox,
+                    subject: &self.policy.subject,
+                    result: Some(&result),
+                };
+                self.guards.run(&gctx)
             };
-            self.guards.run(&gctx)
-        };
-        let final_result = if let GuardDecision::Deny { reason } = &post_decision {
-            session.log.append(EventKind::GuardDecision {
-                call_id: call.id.clone(),
-                phase: GuardPhase::PostExecute,
-                guard: post_guard,
-                decision: GuardDecision::deny(reason.clone()),
-            });
-            ToolResult::err(format!("post-guard denied: {reason}"))
-        } else {
-            result
-        };
-
-        self.push_result(session, &call.id, final_result);
+            let final_result = if let GuardDecision::Deny { reason } = &post_decision {
+                session.log.append(EventKind::GuardDecision {
+                    call_id: p.call.id.clone(),
+                    phase: GuardPhase::PostExecute,
+                    guard: post_guard,
+                    decision: GuardDecision::deny(reason.clone()),
+                });
+                ToolResult::err(format!("post-guard denied: {reason}"))
+            } else {
+                result
+            };
+            self.push_result(session, &p.call.id, final_result);
+        }
     }
 
     /// 触发并记录一次人在环审批，返回是否批准。
-    fn resolve_approval(
+    async fn resolve_approval(
         &self,
         session: &mut Session,
         call: &ToolCall,
@@ -313,12 +381,21 @@ impl Agent {
             });
             return false;
         }
+        // 本对话已授予「全部允许」→ 自动放行（留审计事件，不再弹审批卡）。
+        if self.approver.is_preapproved(&session.id) {
+            session.log.append(EventKind::ApprovalResolved {
+                call_id: call.id.clone(),
+                approved: true,
+                by: "auto:approve-all".into(),
+            });
+            return true;
+        }
         session.log.append(EventKind::ApprovalRequested {
             call_id: call.id.clone(),
             tool: tool.to_string(),
             reason: reason.to_string(),
         });
-        let (approved, by) = self.approver.resolve(call, reason);
+        let (approved, by) = self.approver.resolve(call, reason).await;
         session.log.append(EventKind::ApprovalResolved {
             call_id: call.id.clone(),
             approved,

@@ -11,6 +11,13 @@ serde.workspace = true
 serde_json.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
+tokio.workspace = true
+# 编码面（E1）：grep 用 regex，遍历用 walkdir，glob 用 glob。版本对齐 cmx-container 根，复用离线缓存。
+regex = "1"
+walkdir = "2.5"
+glob = "0.3"
+# 办公面（P3/U7）：数据分析用 csv 解析。已离线缓存 1.4。图表用手写 SVG（无额外依赖）。
+csv = "1.4"
 
 [dev-dependencies]
-tokio.workspace = true
+tokio = { workspace = true }

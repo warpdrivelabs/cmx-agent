@@ -17,6 +17,8 @@ async-trait.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 tracing.workspace = true
+# 回合内多工具调用并发执行（真并行 fan-out）用 join_all。与 cmx-agent-model 同版本，复用离线缓存。
+futures-util = "0.3"
 
 [dev-dependencies]
 tokio.workspace = true

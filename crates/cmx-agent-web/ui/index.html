@@ -235,12 +235,76 @@
   .avatar{width:30px;height:30px;border-radius:8px;flex:0 0 30px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff}
   .avatar.u{background:var(--magenta)} .avatar.a{background:var(--blue)}
   .bubble{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px 14px;font-size:14px;line-height:1.55;white-space:pre-wrap;word-break:break-word}
+  /* markdown 气泡：内部用块级排版，不再 pre-wrap（由各元素自管）*/
+  .bubble.md{white-space:normal}
+  .bubble.md>:first-child{margin-top:0} .bubble.md>:last-child{margin-bottom:0}
+  .bubble.md .md-h{margin:14px 0 8px;line-height:1.3;font-weight:700}
+  .bubble.md h1.md-h{font-size:20px} .bubble.md h2.md-h{font-size:18px;border-bottom:1px solid var(--border);padding-bottom:5px}
+  .bubble.md h3.md-h{font-size:16px} .bubble.md h4.md-h{font-size:14.5px} .bubble.md h5.md-h,.bubble.md h6.md-h{font-size:13.5px;color:var(--ink2)}
+  .bubble.md .md-p{margin:8px 0}
+  .bubble.md .md-ul,.bubble.md .md-ol{margin:8px 0;padding-left:22px} .bubble.md .md-ul li,.bubble.md .md-ol li{margin:3px 0}
+  .bubble.md .md-quote{margin:8px 0;padding:4px 12px;border-left:3px solid var(--aqua);color:var(--ink2);background:var(--panel2);border-radius:0 8px 8px 0}
+  .bubble.md .md-hr{border:none;border-top:1px solid var(--border);margin:12px 0}
+  .bubble.md code{font-family:"SF Mono",Menlo,monospace;font-size:12.5px;background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:1px 5px}
+  .bubble.md .md-pre{margin:10px 0;background:var(--bg2,#0d1420);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow:auto}
+  .bubble.md .md-pre code{background:none;border:none;padding:0;font-size:12.5px;line-height:1.5;color:var(--ink);white-space:pre}
+  .bubble.md a{color:var(--aqua);text-decoration:none} .bubble.md a:hover{text-decoration:underline}
+  .bubble.md .md-table{border-collapse:collapse;margin:10px 0;font-size:13px;display:block;overflow-x:auto}
+  .bubble.md .md-table th,.bubble.md .md-table td{border:1px solid var(--border2);padding:6px 11px;text-align:left}
+  .bubble.md .md-table th{background:var(--panel2);font-weight:700;color:var(--ink)}
+  .bubble.md .md-table tr:nth-child(even) td{background:var(--panel2)}
   .row.user .bubble{background:var(--blue);color:#fff;border-color:transparent}
-  .tool{align-self:flex-start;max-width:760px;margin-left:40px}
-  .tool .chip{display:inline-flex;align-items:center;gap:7px;background:var(--panel2);border:1px solid var(--border);border-radius:9px;padding:7px 11px;color:var(--ink2);font-size:12.5px}
+  .tool{align-self:flex-start;max-width:760px;margin-left:40px;background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:8px 12px;font-size:12.5px;color:var(--ink2)}
+  .tool.denied{border-color:var(--red)}
+  .tool .tchead{display:flex;align-items:center;gap:7px;font-size:12.5px} .tool .tchead b{color:var(--aqua)} .tool.denied .tchead b{color:var(--red)}
+  .tool .tcpath{font-family:"SF Mono",Menlo,monospace;font-size:11.5px;color:var(--ink2)} .tool .tcmeta{margin-left:auto;color:var(--muted);font-size:11px}
+  .tool .tterm{margin:7px 0 2px;background:#0a0e14;border:1px solid var(--border);border-radius:8px;padding:9px 12px;
+    font-family:"SF Mono",Menlo,monospace;font-size:11.5px;line-height:1.5;color:#c8d3e0;white-space:pre;overflow:auto;max-height:340px}
+  .tool .tterm.tterr{color:var(--red)}
+  .tool .tcode{margin:7px 0 2px;background:var(--bg2,#0d1420);border:1px solid var(--border);border-radius:8px;padding:9px 12px;
+    font-family:"SF Mono",Menlo,monospace;font-size:11.5px;line-height:1.5;color:var(--ink);white-space:pre;overflow:auto;max-height:340px}
+  .tool .tcempty{color:var(--muted);font-size:11.5px;margin-top:5px}
+  /* P3/U7 图表 + 数据概览 */
+  .tool .tchartimg{margin:8px 0 2px;background:#fff;border:1px solid var(--border);border-radius:10px;padding:8px;overflow:auto}
+  .tool .tchartimg img{display:block;max-width:100%;height:auto}
+  .tool .tdata{border-collapse:collapse;margin:7px 0 2px;font-size:11.5px;width:100%}
+  .tool .tdata th,.tool .tdata td{border:1px solid var(--border2);padding:4px 9px;text-align:left;color:var(--ink2)}
+  .tool .tdata th{background:var(--panel2);color:var(--ink);font-weight:700}
+  /* U5 红绿 diff（fs_edit / apply_patch）*/
+  .tool .tdiff{margin:7px 0 2px;background:#0a0e14;border:1px solid var(--border);border-radius:8px;padding:8px 0;
+    font-family:"SF Mono",Menlo,monospace;font-size:11.5px;line-height:1.55;overflow:auto;max-height:360px}
+  .tool .tdiff .dl{display:block;padding:0 12px;white-space:pre-wrap;word-break:break-word}
+  .tool .tdiff .add{color:#7ee2b8;background:rgba(34,197,94,.12)}
+  .tool .tdiff .del{color:#f0a0a0;background:rgba(229,96,95,.12)}
+  .tool .tdiff .hunk{color:var(--violet)} .tool .tdiff .ctx{color:var(--ink2)}
+  /* 子智能体 task 块：任务描述 + 最终回答 */
+  .tool .tcsub{margin:7px 0 2px;background:var(--panel);border:1px solid var(--violet);border-left:3px solid var(--violet);
+    border-radius:8px;padding:9px 12px;font-size:12.5px;color:var(--ink2);line-height:1.55}
+  .tool .tcsub.md{color:var(--ink)}
+  /* 人在环审批卡片（X4）*/
+  .tool.approval{border-color:var(--gold);background:linear-gradient(180deg,rgba(229,185,95,.06),transparent)}
+  .tool.approval .tchead b{color:var(--gold)}
+  .tool .apreason{margin:6px 0 10px;font-size:12.5px;color:var(--ink2);line-height:1.5}
+  .tool .aprow{display:flex;gap:9px}
+  .tool .apbtn{flex:0 0 auto;padding:7px 18px;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer;border:1px solid var(--border2);background:var(--panel)}
+  .tool .apbtn.allow{background:linear-gradient(135deg,var(--aqua),var(--green2));color:#fff;border-color:transparent}
+  .tool .apbtn.allow:hover{filter:brightness(1.08)}
+  .tool .apbtn.reject{color:var(--ink2)} .tool .apbtn.reject:hover{border-color:var(--red);color:var(--red)}
+  .tool .apbtn.allowall{color:var(--gold);border-color:var(--border2)} .tool .apbtn.allowall:hover{border-color:var(--gold);background:rgba(229,185,95,.10)}
+  .meta.apauto{color:var(--gold);opacity:.85}
+  .loadmore{align-self:center;margin:2px 0 12px;padding:6px 16px;border-radius:999px;font-size:12.5px;color:var(--ink2);background:var(--panel);border:1px solid var(--border2);cursor:pointer}
+  .loadmore:hover{border-color:var(--aqua);color:var(--aqua)}
+  .tool .appending{font-size:12px;color:var(--muted)}
+  .tool .apresolved{margin-top:6px;font-size:12.5px;font-weight:600} .tool .apresolved.ok{color:var(--green2)} .tool .apresolved.no{color:var(--red)}
+  .tool .chip{display:inline-flex;align-items:center;gap:7px;color:var(--ink2);font-size:12.5px}
   .tool .chip b{color:var(--aqua)} .tool.denied .chip b{color:var(--red)}
   .tool .chip code{font-family:"SF Mono",Menlo,monospace;font-size:11.5px}
   .meta{font-size:11px;color:var(--muted);align-self:center;padding:2px 0}
+  /* 打字指示器：AI 气泡里三个跳动圆点 */
+  .bubble.typing{display:inline-flex;align-items:center;gap:5px;padding:13px 16px}
+  .bubble.typing .dot{width:7px;height:7px;border-radius:50%;background:var(--aqua);opacity:.4;animation:typing 1.2s infinite ease-in-out}
+  .bubble.typing .dot:nth-child(2){animation-delay:.18s} .bubble.typing .dot:nth-child(3){animation-delay:.36s}
+  @keyframes typing{0%,60%,100%{opacity:.35;transform:translateY(0)}30%{opacity:1;transform:translateY(-4px)}}
   .chatfoot{padding:14px 26px 20px;border-top:1px solid var(--border);background:var(--bg)}
   .chatfoot .composer{max-width:900px;margin:0 auto}
   /* 会话输入框：更大、更专业 */
@@ -311,7 +375,7 @@
     <div class="act" id="act-im" data-act="showPanel" data-panel="im" title="即时通讯"><span>💬</span><span class="badge">3</span></div>
     <div class="act" id="act-plugins" data-act="showPanel" data-panel="plugins" title="插件管理"><span>🧩</span></div>
     <div class="act-sp"></div>
-    <button class="act user-act" data-act="toggleUserMenu" title="李逍遥"><span class="uic">🐷</span></button>
+    <button class="act user-act" id="user-act-btn" data-act="toggleUserMenu" title="未登录"><span class="uic" id="uic">👤</span></button>
     <button class="act cmx-act" data-act="toggleMenu" title="设置 · 关于 · 更多"><img src="cmx.png" alt="cmx" /></button>
   </div>
   <!-- ═════ 左侧栏（三面板切换）═════ -->
@@ -359,8 +423,8 @@
   <!-- 用户菜单（点活动栏底部用户头像弹出）：用户信息 + 常用功能 -->
   <div class="cmxmenu usermenu" id="usermenu">
     <div class="um-head">
-      <div class="um-av">🐷</div>
-      <div class="um-info"><div class="um-name">李逍遥</div><div class="um-mail">lixiaoyao@pansoft.com</div></div>
+      <div class="um-av" id="um-av">🐷</div>
+      <div class="um-info"><div class="um-name" id="um-name">未登录</div><div class="um-mail" id="um-mail">点此登录 cmx 门户</div></div>
     </div>
     <div class="mi-sep"></div>
     <div class="mi" data-act="userProfile"><span class="mi-i">👤</span> 账户信息</div>
@@ -466,6 +530,31 @@
 async function call(req){
   const r = await fetch("/api",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(req)});
   return await r.json();
+}
+// ── 流式对话桥（同核多壳）：原生 Tauri 壳走 invoke("send_stream")+事件；Web 壳走 POST /api/stream 的 SSE。──
+// onEvent 收到每个会话事件（含终止标记 {kind:"stream_done"} / {kind:"stream_error",message}）。
+async function streamSend(sessionId, text, onEvent){
+  if (window.__TAURI__ && window.__TAURI__.core){
+    const chan = "agentstream-" + Date.now() + "-" + Math.random().toString(36).slice(2,8);
+    const un = await window.__TAURI__.event.listen(chan, e => onEvent(e.payload));
+    try { await window.__TAURI__.core.invoke("send_stream", { sessionId, text, channel: chan }); }
+    finally { un(); }
+    return;
+  }
+  // Web：fetch + ReadableStream 手动解析 SSE（\n\n 分帧，取 data: 行）
+  const r = await fetch("/api/stream", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({session_id:sessionId, text})});
+  const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = "";
+  while(true){
+    const {value, done} = await reader.read(); if(done) break;
+    buf += dec.decode(value, {stream:true});
+    let idx;
+    while((idx = buf.indexOf("\n\n")) >= 0){
+      const frame = buf.slice(0, idx); buf = buf.slice(idx+2);
+      const dline = frame.split("\n").find(l => l.startsWith("data:"));
+      if(!dline) continue;
+      try { onEvent(JSON.parse(dline.slice(5).trim())); } catch(e){}
+    }
+  }
 }
 function esc(s){ return String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
 function el(cls,html){ const d=document.createElement("div"); d.className=cls; if(html!=null)d.innerHTML=html; return d; }
@@ -593,17 +682,206 @@ async function refreshTasks(){
 function ago(iso){ const d=(Date.now()-new Date(iso).getTime())/86400000;
   if(d<1) return "今天"; if(d<2) return "昨天"; return Math.floor(d)+"天前"; }
 
+// ── 轻量 Markdown 渲染（块级 + 行内）：标题/列表/表格/代码块/引用/粗斜体/行内代码/链接 ──
+// 安全：所有文本经 esc() 转义后再套标签，模型输出的原始 HTML 一律当文本（避免注入）。
+function mdInline(t){
+  return esc(t)
+    .replace(/`([^`]+)`/g,'<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g,'$1<em>$2</em>')
+    .replace(/~~([^~]+)~~/g,'<del>$1</del>')
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+}
+function renderMarkdown(src){
+  if(!src) return "";
+  const lines=String(src).replace(/\r\n/g,"\n").split("\n");
+  const out=[]; let i=0;
+  const isSpecial=(l)=> /^(#{1,6}\s|```|>\s?|\s*[-*+]\s|\s*\d+\.\s|(-{3,}|\*{3,}|_{3,})\s*$)/.test(l);
+  while(i<lines.length){
+    let line=lines[i];
+    if(/^```/.test(line)){                                   // 代码块
+      const buf=[]; i++;
+      while(i<lines.length && !/^```/.test(lines[i])){ buf.push(lines[i]); i++; }
+      i++; out.push('<pre class="md-pre"><code>'+esc(buf.join("\n"))+'</code></pre>'); continue;
+    }
+    const h=line.match(/^(#{1,6})\s+(.*)$/);                 // 标题
+    if(h){ const n=h[1].length; out.push(`<h${n} class="md-h">`+mdInline(h[2])+`</h${n}>`); i++; continue; }
+    if(/^(-{3,}|\*{3,}|_{3,})\s*$/.test(line)){ out.push('<hr class="md-hr">'); i++; continue; }  // 分隔线
+    // 表格：本行含 | 且下一行是 |---| 分隔
+    if(line.includes("|") && i+1<lines.length && /^\s*\|?[\s:|-]+\|?\s*$/.test(lines[i+1]) && lines[i+1].includes("-")){
+      const row=(l)=> l.replace(/^\s*\|/,"").replace(/\|\s*$/,"").split("|").map(c=>c.trim());
+      const heads=row(line); i+=2; const body=[];
+      while(i<lines.length && lines[i].includes("|") && lines[i].trim()!==""){ body.push(row(lines[i])); i++; }
+      let tb='<table class="md-table"><thead><tr>'+heads.map(c=>'<th>'+mdInline(c)+'</th>').join("")+'</tr></thead><tbody>';
+      for(const r of body){ tb+='<tr>'+r.map(c=>'<td>'+mdInline(c)+'</td>').join("")+'</tr>'; }
+      out.push(tb+'</tbody></table>'); continue;
+    }
+    if(/^>\s?/.test(line)){                                  // 引用
+      const buf=[]; while(i<lines.length && /^>\s?/.test(lines[i])){ buf.push(lines[i].replace(/^>\s?/,"")); i++; }
+      out.push('<blockquote class="md-quote">'+buf.map(mdInline).join("<br>")+'</blockquote>'); continue;
+    }
+    if(/^\s*[-*+]\s+/.test(line)){                           // 无序列表
+      const buf=[]; while(i<lines.length && /^\s*[-*+]\s+/.test(lines[i])){ buf.push('<li>'+mdInline(lines[i].replace(/^\s*[-*+]\s+/,""))+'</li>'); i++; }
+      out.push('<ul class="md-ul">'+buf.join("")+'</ul>'); continue;
+    }
+    if(/^\s*\d+\.\s+/.test(line)){                           // 有序列表
+      const buf=[]; while(i<lines.length && /^\s*\d+\.\s+/.test(lines[i])){ buf.push('<li>'+mdInline(lines[i].replace(/^\s*\d+\.\s+/,""))+'</li>'); i++; }
+      out.push('<ol class="md-ol">'+buf.join("")+'</ol>'); continue;
+    }
+    if(line.trim()===""){ i++; continue; }
+    const buf=[line]; i++;                                   // 段落（连续非空非特殊行，软换行→<br>）
+    while(i<lines.length && lines[i].trim()!=="" && !isSpecial(lines[i]) &&
+          !(lines[i].includes("|") && i+1<lines.length && /^\s*\|?[\s:|-]+\|?\s*$/.test(lines[i+1]))){ buf.push(lines[i]); i++; }
+    out.push('<p class="md-p">'+buf.map(mdInline).join("<br>")+'</p>');
+  }
+  return out.join("");
+}
+
+// ── 工具卡片渲染：bash/run_tests 显示终端块；write/edit 显示内容；其余紧凑 JSON ──
+function renderToolInvoke(c){
+  const name=c.name||"", input=c.input||{};
+  if(name==="task" && input.prompt!=null) return `<div class="tchead">🤖 <b>子智能体</b> <span class="tcpath">${esc(input.label||"子任务")}</span></div><div class="tcsub">${esc(String(input.prompt))}</div>`;
+  if(name==="bash" && input.cmd!=null) return `<div class="tchead">🔧 <b>bash</b></div><pre class="tterm">$ ${esc(input.cmd)}</pre>`;
+  // fs_edit → 红绿 diff（old_string 删除 / new_string 新增）
+  if(name==="fs_edit" && input.old_string!=null && input.new_string!=null)
+    return `<div class="tchead">✏️ <b>fs_edit</b> <span class="tcpath">${esc(input.path||"")}</span></div>${renderDiff(input.old_string, input.new_string)}`;
+  // apply_patch → 直接按补丁行着色（+绿 -红 @@/***头）
+  if(name==="apply_patch" && input.patch!=null)
+    return `<div class="tchead">🩹 <b>apply_patch</b></div>${renderPatch(input.patch)}`;
+  // fs_write → 内容代码块（新建/覆盖）
+  if(name==="fs_write" && input.content!=null)
+    return `<div class="tchead">🔧 <b>fs_write</b> <span class="tcpath">${esc(input.path||"")}</span></div><pre class="tcode">${esc(String(input.content))}</pre>`;
+  return `<div class="tchead">🔧 调用 <b>${esc(name)}</b> <code>${esc(compact(input))}</code></div>`;
+}
+// U5：红绿 diff 渲染。fs_edit 的 old→new 替换（各行加 -/+ 标记）。
+function renderDiff(oldStr, newStr){
+  let h='<pre class="tdiff">';
+  for(const l of String(oldStr).split("\n")) h+=`<span class="dl del">- ${esc(l)}</span>`;
+  for(const l of String(newStr).split("\n")) h+=`<span class="dl add">+ ${esc(l)}</span>`;
+  return h+'</pre>';
+}
+// U5：Codex 风格补丁按行着色。
+function renderPatch(txt){
+  let h='<pre class="tdiff">';
+  for(const raw of String(txt).split("\n")){
+    let cls="ctx";
+    if(raw.startsWith("+")) cls="add";
+    else if(raw.startsWith("-")) cls="del";
+    else if(raw.startsWith("@@")||raw.startsWith("***")) cls="hunk";
+    h+=`<span class="dl ${cls}">${esc(raw)||" "}</span>`;
+  }
+  return h+'</pre>';
+}
+function renderToolResult(ev){
+  const o=ev.output||{};
+  if(!ev.ok) return `<span class="chip">⛔ 被拦截 <code>${esc(compact(o))}</code></span>`;
+  // 子智能体 task：final=子智能体最终回答（渲染为 markdown 小块）
+  if(o.final!=null) return `<div class="tchead">🤖 子智能体完成 <span class="tcmeta">${o.steps??"?"} 步</span></div><div class="tcsub md">${renderMarkdown(String(o.final))}</div>`;
+  // chart：内联 SVG 图表（base64 img，安全）
+  if(o.svg!=null){
+    let b64=""; try{ b64=btoa(unescape(encodeURIComponent(o.svg))); }catch(e){}
+    const saved=o.saved?` <span class="tcpath">已存 ${esc(String(o.saved).split("/").pop())}</span>`:"";
+    return `<div class="tchead">📊 图表${saved}</div><div class="tchartimg"><img alt="chart" src="data:image/svg+xml;base64,${b64}"></div>`;
+  }
+  // data_describe：数据概览（行数 + 列统计）
+  if(o.rows!=null && Array.isArray(o.columns)){
+    const cols=o.columns.map(c=>{
+      if(c.type==="numeric") return `<tr><td>${esc(c.name)}</td><td>数值</td><td>min ${c.min} · max ${c.max} · 均值 ${c.mean}</td></tr>`;
+      const top=(c.top||[]).map(t=>esc(String(t.value))+"("+t.count+")").join("、");
+      return `<tr><td>${esc(c.name)}</td><td>文本</td><td>去重 ${c.distinct} · Top ${top}</td></tr>`;
+    }).join("");
+    return `<div class="tchead">📈 数据概览 <span class="tcmeta">${o.rows} 行 · ${o.columns.length} 列</span></div>`
+      +`<table class="tdata"><thead><tr><th>列</th><th>类型</th><th>统计</th></tr></thead><tbody>${cols}</tbody></table>`;
+  }
+  // U6 办公文档读取
+  if(o.kind==="excel" && Array.isArray(o.sheets)){
+    const sh=o.sheets[0]||{}; const rows=(sh.data||[]).slice(0,12);
+    const body=rows.map((r,i)=>`<tr>${r.slice(0,10).map(c=>i===0?`<th>${esc(String(c))}</th>`:`<td>${esc(String(c))}</td>`).join("")}</tr>`).join("");
+    return `<div class="tchead">📊 Excel <span class="tcmeta">${o.sheets.length} sheet · ${sh.name||""} ${sh.rows_total??"?"}×${sh.cols_total??"?"}</span></div><table class="tdata"><tbody>${body}</tbody></table>`;
+  }
+  if(o.kind==="pptx" && Array.isArray(o.slides)){
+    const s=o.slides.map(sl=>`<b>幻灯片 ${sl.slide}</b>\n${sl.text}`).join("\n\n");
+    return `<div class="tchead">📑 PPT <span class="tcmeta">${o.slides.length} 页</span></div><pre class="tcode">${esc(s)}</pre>`;
+  }
+  if((o.kind==="pdf"||o.kind==="docx"||o.kind==="text") && o.text!=null){
+    const label={pdf:"📄 PDF",docx:"📝 Word",text:"📄 文本"}[o.kind];
+    return `<div class="tchead">${label} <span class="tcmeta">${o.chars??""} 字符</span></div><pre class="tcode">${esc(String(o.text))}</pre>`;
+  }
+  // LSP 代码智能：诊断/悬停/符号/定位
+  if(o.diagnostics!=null) return `<div class="tchead">🔎 LSP 诊断 <span class="tcmeta">${o.diagnostics.length} 条</span></div>`+(o.diagnostics.length?`<pre class="tcode">${esc(o.diagnostics.join("\n"))}</pre>`:`<div class="tcempty">（无诊断）</div>`);
+  if(o.hover!=null) return `<div class="tchead">🔎 LSP 悬停</div><pre class="tcode">${esc(String(o.hover))||"（无信息）"}</pre>`;
+  if(o.symbols!=null) return `<div class="tchead">🔎 LSP 符号 <span class="tcmeta">${o.symbols.length}</span></div><pre class="tcode">${esc(o.symbols.join("\n"))||"（无）"}</pre>`;
+  if(o.locations!=null) return `<div class="tchead">🔎 LSP 定位 <span class="tcmeta">${o.locations.length}</span></div><pre class="tcode">${esc(o.locations.join("\n"))||"（无）"}</pre>`;
+  // bash / run_tests 风格：有 stdout/exit_code → 终端块
+  const r = o.result || o;   // run_tests 把 shell 结果包在 result 里
+  if(r && (r.stdout!=null || r.exit_code!=null || r.timed_out!=null)){
+    const out=(r.stdout||"").trimEnd(), err=(r.stderr||"").trimEnd();
+    let h=`<div class="tchead">✅ 结果 <span class="tcmeta">exit ${r.exit_code ?? (r.timed_out?"超时":"?")}</span></div>`;
+    if(out) h+=`<pre class="tterm">${esc(out)}</pre>`;
+    if(err) h+=`<pre class="tterm tterr">${esc(err)}</pre>`;
+    if(!out && !err) h+=`<div class="tcempty">（无输出）</div>`;
+    return h;
+  }
+  // fs_read / repo_map 等：有 text/tree → 文本块；否则紧凑 JSON
+  if(o.text!=null) return `<div class="tchead">✅ 读取 <span class="tcpath">${esc(o.path||"")}</span></div><pre class="tcode">${esc(String(o.text))}</pre>`;
+  if(o.tree!=null) return `<div class="tchead">✅ 目录结构</div><pre class="tcode">${esc(String(o.tree))}</pre>`;
+  return `<span class="chip">✅ 结果 <code>${esc(compact(o))}</code></span>`;
+}
+function compact(v){ try{ const s=JSON.stringify(v); return s.length>240?s.slice(0,240)+"…":s; }catch(e){ return String(v); } }
+
+// 打字等待指示器（AI 头像 + 三跳点）。多步回合里每次「AI 在忙但暂无可见输出」都显示。
+function showTyping(log){
+  if(log._typing) { log.append(log._typing); log.scrollTop=1e9; return; }  // 已存在则移到底部
+  const r=el("row typing-row");
+  r.append(el("avatar a","AI"), el("bubble typing","<span class='dot'></span><span class='dot'></span><span class='dot'></span>"));
+  log.append(r); log._typing=r; log.scrollTop=1e9;
+}
+function hideTyping(log){ if(log._typing){ log._typing.remove(); log._typing=null; } }
+
 // ── 会话渲染（渲染到指定 log 容器）──
-function renderEvent(log, ev){
+// 打字机：text_delta 累加到 log._raw，每次按 markdown 重渲当前气泡（log._sb）。
+function renderEvent(log, ev, sid){
   const k=ev.kind;
-  if(k==="user_message"){ const r=el("row user"); r.append(el("avatar u","你"),el("bubble",esc(ev.text))); log.append(r); }
-  else if(k==="model_message" && ev.text){ const r=el("row"); r.append(el("avatar a","AI"),el("bubble",esc(ev.text))); log.append(r); }
-  else if(k==="tool_invoked"){ const c=ev.call||{}; const t=el("tool");
-    t.innerHTML=`<span class="chip">🔧 调用工具 <b>${esc(c.name)}</b> <code>${esc(JSON.stringify(c.input||{}))}</code></span>`; log.append(t); }
-  else if(k==="tool_result"){ const t=el("tool"+(ev.ok?"":" denied"));
-    t.innerHTML=`<span class="chip">${ev.ok?"✅ 结果":"⛔ 被拦截"} <code>${esc(JSON.stringify(ev.output||{}))}</code></span>`; log.append(t); }
-  else if(k==="approval_requested"){ log.append(el("meta","⏸ 触发人在环审批："+esc(ev.reason||""))); }
-  else if(k==="turn_ended"){ log.append(el("meta","— 回合 #"+ev.turn+" 结束（"+ev.reason+"，"+ev.steps+" 步）—")); }
+  if(k==="text_delta"){
+    if(!log._sb){ const r=el("row"); const b=el("bubble md"); r.append(el("avatar a","AI"),b); log.append(r); log._sb=b; log._raw=""; }
+    log._raw=(log._raw||"")+(ev.text||"");
+    log._sb.innerHTML=renderMarkdown(log._raw);
+    log.scrollTop=1e9; return;
+  }
+  if(k==="user_message"){
+    if(log._skipUser){ log._skipUser=false; return; }   // 已乐观渲染，跳过流里的回显
+    log._sb=null; const r=el("row user"); r.append(el("avatar u","你"),el("bubble",esc(ev.text))); log.append(r);
+  }
+  else if(k==="model_message"){
+    if(log._sb){ log._sb.innerHTML=renderMarkdown(log._raw||ev.text||""); log._sb=null; }  // 收尾：定稿 markdown
+    else if(ev.text){ const r=el("row"); const b=el("bubble md"); b.innerHTML=renderMarkdown(ev.text); r.append(el("avatar a","AI"),b); log.append(r); }
+  }
+  else if(k==="tool_invoked"){ log._sb=null; const t=el("tool"); t.innerHTML=renderToolInvoke(ev.call||{}); log.append(t); }
+  else if(k==="tool_result"){ const t=el("tool"+(ev.ok?"":" denied")); t.innerHTML=renderToolResult(ev); log.append(t); }
+  else if(k==="approval_requested"){ log._sb=null;
+    const t=el("tool approval"); t.dataset.callid=ev.call_id||""; t.dataset.sid=sid||"";
+    t.innerHTML=`<div class="tchead">⏸ <b>需要审批</b> <span class="tcpath">${esc(ev.tool||"")}</span></div>`
+      +`<div class="apreason">${esc(ev.reason||"该操作需人工确认")}</div>`
+      +`<div class="aprow">`
+      +`<button class="apbtn reject" data-act="approveTool" data-callid="${esc(ev.call_id||"")}" data-ok="0" data-all="0">✕ 拒绝</button>`
+      +`<button class="apbtn allow" data-act="approveTool" data-callid="${esc(ev.call_id||"")}" data-ok="1" data-all="0">✓ 允许</button>`
+      +`<button class="apbtn allowall" data-act="approveTool" data-callid="${esc(ev.call_id||"")}" data-ok="1" data-all="1" title="本对话后续需审批的操作不再逐次询问">🔓 本对话全部允许</button>`
+      +`</div>`;
+    log.append(t); }
+  else if(k==="approval_resolved"){
+    let matched=false;
+    log.querySelectorAll(".tool.approval").forEach(c=>{ if(c.dataset.callid===ev.call_id){ matched=true;
+      const row=c.querySelector(".aprow"); if(row) row.remove();
+      const prev=c.querySelector(".apresolved"); if(prev) prev.remove();
+      const st=el("apresolved "+(ev.approved?"ok":"no"), ev.approved?("✓ 已允许"+(ev.by&&ev.by!=='user'?"（"+esc(ev.by)+"）":"")):"✕ 已拒绝");
+      c.appendChild(st);
+    }});
+    // 「本对话全部允许」后的自动放行：无对应审批卡 → 追加一条低调审计提示，而非弹卡。
+    if(!matched && ev.approved && (ev.by||"").indexOf("auto")===0){
+      log.append(el("meta apauto","🔓 已自动允许（本对话全部允许）"));
+    }
+  }
+  else if(k==="turn_ended"){ log._sb=null; log.append(el("meta","— 回合 #"+ev.turn+" 结束（"+ev.reason+"，"+ev.steps+" 步）—")); }
   log.scrollTop=1e9;
 }
 
@@ -653,6 +931,53 @@ async function runConnectorTool(tool, online){
   await openSession(id, prompt);
 }
 
+// ── 人在环审批（X4）：卡片点「允许/拒绝/本对话全部允许」→ 发 approve 命令唤醒挂起的回合 ──
+async function approveTool(callId, approved, all){
+  if(!callId) return;
+  // 取该卡片所属会话 id（「本对话全部允许」需按会话授权）；兜底用当前 active 会话。
+  const card=[...document.querySelectorAll(".tool.approval")].find(c=>c.dataset.callid===callId);
+  const sid=(card&&card.dataset.sid)||CURRENT||"";
+  // 立即禁用按钮 + 置「处理中」，避免重复点击
+  document.querySelectorAll(".tool.approval").forEach(c=>{ if(c.dataset.callid===callId){
+    const row=c.querySelector(".aprow"); if(row) row.innerHTML='<span class="appending">'+(all?'已允许，本对话后续不再询问…':'已提交，处理中…')+'</span>';
+  }});
+  try{ await call({cmd:"approve", call_id:callId, approved, all:!!all, session_id:sid}); }catch(e){}
+}
+
+// ── 会话历史：大会话只渲染最近一屏，更早的按需加载（减少解析/渲染/DOM，切换更快）──
+const HIST_PAGE = 300;
+// 把一段事件渲染进临时容器再整体搬入目标（一次性插入，避免逐条重排）。
+function renderInto(target, sid, events){
+  const tmp=document.createElement('div'); tmp._sb=null;
+  events.forEach(ev=>renderEvent(tmp, ev, sid));
+  while(tmp.firstChild) target.append(tmp.firstChild);
+}
+function makeLoadMore(log, sid, start, total){
+  const b=el("loadmore","↑ 加载更早的对话（共 "+total+" 条，已显示最近 "+(total-start)+" 条）");
+  b.dataset.sid=sid; b.dataset.before=start;
+  b.onclick=()=>loadEarlier(log, b);
+  return b;
+}
+function renderHistory(log, sid, events, start, total){
+  const frag=document.createDocumentFragment();
+  if(start>0) frag.append(makeLoadMore(log, sid, start, total));   // 上方还有更早的
+  renderInto(frag, sid, events);
+  log.innerHTML=""; log.append(frag);
+}
+async function loadEarlier(log, btn){
+  const sid=btn.dataset.sid, before=parseInt(btn.dataset.before||"0",10);
+  btn.textContent="加载中…";
+  const resp=await call({cmd:"get_events",session_id:sid,limit:HIST_PAGE,before});
+  const d=(resp&&resp.ok&&resp.data)||{}; const evs=d.events||[];
+  const prevH=log.scrollHeight, prevTop=log.scrollTop;   // 锚点：插入更早内容后维持视口
+  const frag=document.createDocumentFragment();
+  renderInto(frag, sid, evs);
+  btn.after(frag);
+  if((d.start||0)>0){ btn.dataset.before=d.start; btn.textContent="↑ 加载更早的对话（共 "+d.total+" 条）"; }
+  else btn.remove();
+  log.scrollTop=prevTop+(log.scrollHeight-prevH);
+}
+
 // ── 会话：作为一个 tab 打开（每 tab 独立 log+composer）──
 async function openSession(sessionId, autoPrompt){
   const tabId="s:"+sessionId;
@@ -666,14 +991,19 @@ async function openSession(sessionId, autoPrompt){
     inp.addEventListener("keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendChatTab(t);} });
     inp.addEventListener("input",e=>autoGrow(e.target));
     t.view.querySelector(".tab-send").onclick=()=>sendChatTab(t);
-    // 载入历史
+    // 载入历史：只取最近一屏（大会话不再解析/渲染全量）；标题随响应返回，免再查 list_sessions。
     const log=t.view.querySelector(".log"); log.innerHTML="";
-    const resp=await call({cmd:"get_events",session_id:sessionId});
-    (resp.ok&&resp.data.events||[]).forEach(ev=>renderEvent(log,ev));
-    const meta=(await call({cmd:"list_sessions"})).data.sessions.find(m=>m.id===sessionId);
-    if(meta) t.title=meta.title||sessionId;
+    const resp=await call({cmd:"get_events",session_id:sessionId,limit:HIST_PAGE});
+    const d=(resp&&resp.ok&&resp.data)||{};
+    renderHistory(log, sessionId, d.events||[], d.start||0, d.total||0);
+    if(d.title) t.title=d.title||sessionId;
   }
   activateTab(tabId);
+  // 打开会话后自动滚到最新消息（底部）：历史是在 tab 隐藏时渲染的，激活后才完成布局，
+  // 故延到下一帧再滚（双 rAF 兜底图表/字体导致的二次布局）。
+  const _log=t.view.querySelector(".log");
+  if(_log) requestAnimationFrame(()=>{ _log.scrollTop=_log.scrollHeight;
+    requestAnimationFrame(()=>{ _log.scrollTop=_log.scrollHeight; }); });
   refreshTasks();
   if(autoPrompt){ await doSendTab(t, autoPrompt); }
   else { const inp=t.view.querySelector(".inp2"); if(inp) inp.focus(); }
@@ -681,9 +1011,22 @@ async function openSession(sessionId, autoPrompt){
 
 async function doSendTab(t, text){
   const log=t.view.querySelector(".log");
-  const resp=await call({cmd:"send",session_id:t.sessionId,text});
-  if(!resp.ok){ renderEvent(log,{kind:"model_message",text:"⚠ "+(resp.error?.message||"错误")}); return; }
-  (resp.data.new_events||[]).forEach(ev=>renderEvent(log,ev));
+  // 1) 立即乐观渲染用户气泡，并让流里的 user_message 事件跳过一次，避免重复。
+  renderEvent(log, {kind:"user_message", text}, t.sessionId);
+  log._skipUser = true;
+  // 2) 打字等待指示器：立即出现，覆盖「发送→首个 token」的等待。
+  showTyping(log);
+  await streamSend(t.sessionId, text, (ev)=>{
+    if(ev.kind==="stream_done"){ hideTyping(log); return; }
+    if(ev.kind==="stream_error"){ hideTyping(log); renderEvent(log,{kind:"model_message",text:"⚠ "+(ev.message||"错误")}, t.sessionId); return; }
+    // 有可见输出（文字流/工具卡/模型消息）到达 → 先撤等待动画，再渲染。
+    if(ev.kind==="text_delta" || ev.kind==="tool_invoked" || ev.kind==="model_message") hideTyping(log);
+    renderEvent(log, ev, t.sessionId);
+    // 工具刚出结果 → 模型将继续思考，重新显示等待动画（这是之前缺失的多步等待提示）。
+    if(ev.kind==="tool_result") showTyping(log);
+    else if(ev.kind==="turn_ended" || ev.kind==="approval_requested") hideTyping(log);
+  });
+  hideTyping(log);
   const m=(await call({cmd:"list_sessions"})).data.sessions.find(x=>x.id===t.sessionId);
   if(m){ t.title=m.title||t.sessionId; renderTabs(); }
   refreshTasks();
@@ -756,11 +1099,39 @@ function closeMenu(){ document.getElementById("cmxmenu").classList.remove("on");
 function menuSettings(){ closeMenu(); alert("设置\n\n（M2 占位：主题、工作空间、默认权限、连接器地址等设置项将在此配置。）"); }
 function menuAbout(){ closeMenu(); alert("cmx 企业桌面智能体\n版本 "+APP_VERSION+"\n\n复刻并超越 WorkBuddy · 同核多壳架构\n形(前门) / 核(回合循环+守卫) / 体(cmx 引擎连接器)"); }
 // 用户菜单
+let CURRENT_USER = null;   // {user_id, username, nickname, roles} 或 null
+// 拉取当前登录用户（前门 current_user），填充活动栏头像 + 用户菜单。未登录则显示占位。
+async function refreshUser(){
+  try{
+    const r = await call({cmd:"current_user"});
+    CURRENT_USER = (r.ok && r.data && r.data.user) || null;
+  }catch(e){ CURRENT_USER = null; }
+  const u = CURRENT_USER;
+  const name = u ? (u.nickname || u.username) : "未登录";
+  const initial = name && name !== "未登录" ? name.trim().charAt(0).toUpperCase() : "👤";
+  document.getElementById("uic").textContent = initial;
+  document.getElementById("user-act-btn").title = name;
+  document.getElementById("um-av").textContent = initial;
+  document.getElementById("um-name").textContent = name;
+  document.getElementById("um-mail").textContent = u
+    ? ("@"+u.username + (u.roles && u.roles.length ? " · "+u.roles.join("/") : ""))
+    : "点此登录 cmx 门户";
+}
 function toggleUserMenu(){ document.getElementById("cmxmenu").classList.remove("on"); document.getElementById("usermenu").classList.toggle("on"); }
-function userProfile(){ closeMenu(); alert("账户信息\n\n李逍遥\nlixiaoyao@pansoft.com\n租户：default · 角色：admin\n\n（M2 占位：真实账户体系接 cmx IAM）"); }
-function userSwitch(){ closeMenu(); alert("切换账户（占位）\n\n将支持多账户/多租户快速切换。"); }
+function userProfile(){ closeMenu();
+  const u = CURRENT_USER;
+  if(!u){ alert("尚未登录。"); return; }
+  alert("账户信息\n\n"+(u.nickname||u.username)+"（@"+u.username+"）\n用户 ID："+u.user_id+"\n角色："+((u.roles||[]).join("、")||"—")+"\n\n对接 cmx 门户统一认证（/api/auth）。"); }
+function userSwitch(){ closeMenu(); alert("切换账户\n\n退出后重新登录即可切换账户/租户。"); }
 function userWorkspace(){ closeMenu(); alert("工作空间（占位）\n\n管理沙箱工作区根目录与数据目录。"); }
-function userLogout(){ closeMenu(); if(confirm("确定退出登录？\n\n（M2 占位：真实登录态接 cmx IAM 后生效）")) alert("已退出登录（占位）。"); }
+async function userLogout(){ closeMenu();
+  if(!confirm("确定退出登录？")) return;
+  try{ await call({cmd:"logout"}); }catch(e){}
+  CURRENT_USER = null;
+  // 原生壳：回到登录窗（关主窗、开登录窗）；Web 壳：跳登录页。
+  if(window.__TAURI__ && window.__TAURI__.core){ try{ await window.__TAURI__.core.invoke("logout_to_login"); return; }catch(e){} }
+  window.location.href = "login";
+}
 
 // ── 活动栏面板切换（Agent / 即时通讯 / 插件管理）：切换左侧操作面板；右侧为共享 tab 区 ──
 function showPanel(name){
@@ -829,6 +1200,8 @@ document.addEventListener("click", e=>{
   const act = el.dataset.act;
   if(act === "runConnectorTool"){
     runConnectorTool(el.dataset.tool, el.dataset.online === "1");
+  } else if(act === "approveTool"){
+    approveTool(el.dataset.callid, el.dataset.ok === "1", el.dataset.all === "1");
   } else if(act === "toggleVoice"){
     toggleVoice(el);
   } else if(act === "showPanel"){
@@ -862,8 +1235,12 @@ applyTheme((()=>{ try{ return localStorage.getItem("cmx-theme")||"dark"; }catch(
   sp.addEventListener("pointerup", end); sp.addEventListener("pointercancel", end);
 })();
 
-// 启动：初始化 tab 条（空态显示首页）、更新按钮（默认隐藏），聚焦输入框
-(async()=>{ renderUpdateBtn(); await refreshTasks(); renderTabs(); document.getElementById("inp").focus(); })();
+// 启动：初始化 tab 条（空态显示首页）、更新按钮（默认隐藏）、当前用户，聚焦输入框
+(async()=>{ renderUpdateBtn(); refreshUser(); await refreshTasks(); renderTabs(); document.getElementById("inp").focus(); })();
+
+// 登录后主窗口被显示时刷新用户信息：原生壳监听 Tauri "logged-in" 事件；并兜底监听窗口 focus。
+if(window.__TAURI__ && window.__TAURI__.event){ window.__TAURI__.event.listen("logged-in", ()=>refreshUser()); }
+window.addEventListener("focus", ()=>{ refreshUser(); });
 </script>
 </body>
 </html>

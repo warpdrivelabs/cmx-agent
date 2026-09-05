@@ -133,3 +133,66 @@ async fn bad_session_id_is_rejected_via_envelope() {
     assert_eq!(v["ok"], false);
     assert_eq!(v["error"]["code"], "bad_request");
 }
+
+#[tokio::test]
+async fn approve_command_accepts_all_and_session_and_is_backward_compatible() {
+    let tmp = TempDir::new("proto-approve");
+    // 需交互式审批者，approve 命令才有落点。
+    let app = DesktopAppBuilder::new(tmp.path(), tmp.path(), Arc::new(MockModel::saying("hi")))
+        .interactive_approval()
+        .build()
+        .unwrap();
+
+    // 新形态：带 all + session_id（「本对话全部允许」）。无待决审批 → resolved=false 属正常，
+    // 但命令应被接受并回显 all=true（会话已被标记为全部允许）。
+    let resp = dispatch_json(
+        &app,
+        r#"{"cmd":"approve","call_id":"none","approved":true,"all":true,"session_id":"s1"}"#,
+    )
+    .await;
+    let v: serde_json::Value = serde_json::from_str(&resp).unwrap();
+    assert_eq!(v["ok"], true);
+    assert_eq!(v["data"]["all"], true);
+
+    // 旧形态：只有 call_id + approved（serde default 补齐 all=false/session_id=""）应仍兼容。
+    let resp2 = dispatch_json(&app, r#"{"cmd":"approve","call_id":"x","approved":false}"#).await;
+    let v2: serde_json::Value = serde_json::from_str(&resp2).unwrap();
+    assert_eq!(v2["ok"], true);
+    assert_eq!(v2["data"]["all"], false);
+}
+
+#[tokio::test]
+async fn get_events_paginates_with_limit_total_start() {
+    let tmp = TempDir::new("proto-getpage");
+    let app = app_with(
+        &tmp,
+        MockModel::new([
+            ModelResponse::calls(vec![ToolCall::with_id(
+                "c1",
+                "add",
+                serde_json::json!({"a":1,"b":1}),
+            )]),
+            ModelResponse::text("2"),
+        ]),
+    );
+    let _ = dispatch_json(&app, r#"{"cmd":"create_session","id":"p1"}"#).await;
+    let _ = dispatch_json(&app, r#"{"cmd":"send","session_id":"p1","text":"go"}"#).await;
+
+    // 全量：start=0、total=事件数
+    let full: serde_json::Value =
+        serde_json::from_str(&dispatch_json(&app, r#"{"cmd":"get_events","session_id":"p1"}"#).await)
+            .unwrap();
+    let total = full["data"]["events"].as_array().unwrap().len();
+    assert!(total >= 5, "一个含工具调用的回合应产生多条事件");
+    assert_eq!(full["data"]["total"].as_u64().unwrap() as usize, total);
+    assert_eq!(full["data"]["start"].as_u64().unwrap(), 0);
+
+    // 尾窗口 limit=2：只回 2 条，start=total-2，total 不变
+    let win: serde_json::Value = serde_json::from_str(
+        &dispatch_json(&app, r#"{"cmd":"get_events","session_id":"p1","limit":2}"#).await,
+    )
+    .unwrap();
+    assert_eq!(win["data"]["events"].as_array().unwrap().len(), 2);
+    assert_eq!(win["data"]["total"].as_u64().unwrap() as usize, total);
+    assert_eq!(win["data"]["start"].as_u64().unwrap() as usize, total - 2);
+}

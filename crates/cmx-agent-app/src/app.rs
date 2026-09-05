@@ -5,8 +5,9 @@
 //! 这一层与前门无关（同核多壳）：CLI、Tauri invoke、Headless HTTP 都调它。见 [`crate::protocol`]。
 
 use std::sync::Arc;
+use std::sync::Mutex;
 
-use cmx_agent_connectors::{ConnectorCard, ConnectorRegistry};
+use cmx_agent_connectors::{AuthProvider, ConnectorCard, ConnectorRegistry, LoggedInUser};
 use cmx_agent_core::event::StopReason;
 use cmx_agent_core::{Agent, Session};
 
@@ -32,6 +33,12 @@ pub struct AgentApp {
     default_system: Option<String>,
     /// 连接器注册表（面板查询用）。None = 未启用连接器。
     connectors: Option<Arc<ConnectorRegistry>>,
+    /// 认证提供者（对接门户 /api/auth/*）。None = 未启用登录门。
+    auth: Option<Arc<AuthProvider>>,
+    /// 交互式审批者（X4）。Some = 桌面壳交互审批；None = 非交互（CLI 自动审批）。
+    approver: Option<Arc<crate::approval::InteractiveApprover>>,
+    /// 当前登录用户（登录后置入；登出清空）。跨命令共享，故用 Mutex。
+    current_user: Arc<Mutex<Option<LoggedInUser>>>,
 }
 
 impl AgentApp {
@@ -41,6 +48,9 @@ impl AgentApp {
             store,
             default_system: None,
             connectors: None,
+            auth: None,
+            approver: None,
+            current_user: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -53,6 +63,79 @@ impl AgentApp {
     pub fn with_connectors(mut self, connectors: Arc<ConnectorRegistry>) -> Self {
         self.connectors = Some(connectors);
         self
+    }
+
+    /// 注入认证提供者（由 DesktopAppBuilder 调用）。
+    pub fn with_auth(mut self, auth: Arc<AuthProvider>) -> Self {
+        self.auth = auth.into();
+        self
+    }
+
+    /// 注入交互式审批者（由 DesktopAppBuilder 调用，桌面壳交互审批用）。
+    pub fn with_approver(mut self, approver: Arc<crate::approval::InteractiveApprover>) -> Self {
+        self.approver = Some(approver);
+        self
+    }
+
+    /// 前端送回审批决定（`approve` 命令）：唤醒挂起的回合。返回是否命中一个待决审批。
+    /// 前端送回审批决定。`all=true` 表示「本对话全部允许」：先把该会话标记为全部允许
+    /// （此后该会话需审批的工具全部自动放行、不再弹卡），再放行当前这次调用。
+    pub fn resolve_approval_decision(
+        &self,
+        call_id: &str,
+        approved: bool,
+        all: bool,
+        session_id: &str,
+    ) -> bool {
+        match &self.approver {
+            Some(a) => {
+                if all && approved && !session_id.is_empty() {
+                    a.allow_session(session_id);
+                }
+                a.decide(call_id, approved)
+            }
+            None => false,
+        }
+    }
+
+    /// 登录：校验凭据（对接门户 /api/auth/login）→ 成功后置入当前用户 → 返回前端可见用户信息（不含令牌）。
+    pub async fn login(&self, username: &str, password: &str) -> AppResult<serde_json::Value> {
+        let auth = self
+            .auth
+            .as_ref()
+            .ok_or_else(|| AppError::Auth("未配置认证服务".into()))?;
+        if username.trim().is_empty() || password.is_empty() {
+            return Err(AppError::Auth("请输入用户名和密码".into()));
+        }
+        let user = auth
+            .login(username.trim(), password)
+            .await
+            .map_err(|e| AppError::Auth(friendly_auth_error(e, auth.base_url())))?;
+        let public = user.public_json();
+        *self.current_user.lock().expect("current_user lock") = Some(user);
+        Ok(public)
+    }
+
+    /// 当前登录用户（前端可见信息，不含令牌）。未登录返回 None。
+    pub fn current_user(&self) -> Option<serde_json::Value> {
+        self.current_user
+            .lock()
+            .expect("current_user lock")
+            .as_ref()
+            .map(|u| u.public_json())
+    }
+
+    /// 是否已登录。
+    pub fn is_authenticated(&self) -> bool {
+        self.current_user
+            .lock()
+            .expect("current_user lock")
+            .is_some()
+    }
+
+    /// 登出：清当前用户（本地态；令牌失效由服务端会话过期兜底）。
+    pub fn logout(&self) {
+        *self.current_user.lock().expect("current_user lock") = None;
     }
 
     /// 列出连接器卡片（描述 + live 健康）。未启用连接器时返回空表。
@@ -85,6 +168,27 @@ impl AgentApp {
     /// 向某会话发一条用户消息，跑一个回合，**增量落库**新事件，返回结果。
     /// 若会话已有持久化日志，先加载恢复（回合号、历史上下文都续上）。
     pub async fn send(&self, session_id: &str, user_input: &str) -> AppResult<SendOutcome> {
+        self.send_inner(session_id, user_input, None).await
+    }
+
+    /// 流式版：同 [`Self::send`]，但在回合开始前给会话日志挂上 `sink`——回合中每产生一个事件
+    /// （模型消息 / 工具调用 / 工具结果 / 收尾）就实时通知 sink；同时模型**文字增量**（token 流）
+    /// 也经同一 sink 实时回调（打字机效果）。返回值同 `send`（含全部新事件，供落库与兜底）。
+    pub async fn send_streaming(
+        &self,
+        session_id: &str,
+        user_input: &str,
+        sink: std::sync::Arc<crate::stream::ChannelSink>,
+    ) -> AppResult<SendOutcome> {
+        self.send_inner(session_id, user_input, Some(sink)).await
+    }
+
+    async fn send_inner(
+        &self,
+        session_id: &str,
+        user_input: &str,
+        sink: Option<std::sync::Arc<crate::stream::ChannelSink>>,
+    ) -> AppResult<SendOutcome> {
         // 加载已有会话；不存在则以默认 system 新建一个内存会话（并补落元数据）。
         let mut session = match self.store.load(session_id) {
             Ok(s) => s,
@@ -99,8 +203,18 @@ impl AgentApp {
             Err(e) => return Err(e),
         };
 
+        // 流式：加载完历史后挂 sink（历史用 push_restored 不触发 sink，故只流式本回合新事件）。
+        // 同一个 sink 既是事件 EventSink（全量事件）又是 TurnObserver（文字增量）。
         let before = session.log.len();
-        let outcome = self.agent.run_turn(&mut session, user_input).await?;
+        let outcome = match &sink {
+            Some(s) => {
+                session.log.add_sink(s.clone());
+                self.agent
+                    .run_turn_observed(&mut session, user_input, Some(s.as_ref()))
+                    .await?
+            }
+            None => self.agent.run_turn(&mut session, user_input).await?,
+        };
 
         // 只取本回合新增的事件，append 落库（不重写历史行）。
         let new_events: Vec<_> = session.log.events()[before..].to_vec();
@@ -142,6 +256,17 @@ impl AgentApp {
         Ok(session.log.events().to_vec())
     }
 
+    /// 分页 / 尾加载事件（大会话切换提速）：只取最近一屏，需要时再「加载更早」。
+    /// 见 [`crate::store::SessionStore::load_events_window`]。
+    pub fn get_events_window(
+        &self,
+        session_id: &str,
+        limit: Option<usize>,
+        before: Option<usize>,
+    ) -> AppResult<crate::store::EventWindow> {
+        self.store.load_events_window(session_id, limit, before)
+    }
+
     /// 列出所有会话元数据。
     pub fn list_sessions(&self) -> AppResult<Vec<SessionMeta>> {
         self.store.list()
@@ -149,11 +274,30 @@ impl AgentApp {
 
     /// 删除一个会话。
     pub fn delete_session(&self, session_id: &str) -> AppResult<()> {
+        // 会话删除时一并撤销其「本对话全部允许」授权，避免同名会话复用旧授权。
+        if let Some(a) = &self.approver {
+            a.revoke_session(session_id);
+        }
         self.store.delete(session_id)
     }
 
     pub fn agent(&self) -> &Agent {
         &self.agent
+    }
+}
+
+/// 把连接器 [`ClientError`] 映射为面向用户的干净登录错误文案。
+fn friendly_auth_error(e: cmx_agent_connectors::ClientError, base: &str) -> String {
+    use cmx_agent_connectors::ClientError;
+    match e {
+        // 服务端业务错误（如 401 用户名/密码错误）——直接用其 msg（已是中文提示）。
+        ClientError::Envelope { msg, .. } => msg,
+        // 连不上认证服务（门户未启动等）。
+        ClientError::Transport(_) => {
+            format!("无法连接认证服务（{base}），请确认 cmx 门户服务已启动")
+        }
+        ClientError::Http(code) => format!("认证服务返回 HTTP {code}"),
+        ClientError::Decode(m) => format!("认证响应解析失败：{m}"),
     }
 }
 

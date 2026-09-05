@@ -1,0 +1,28 @@
+[package]
+name = "cmx-agent-office"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "cmx-agent 办公文档（U6）：读 Excel/PDF/Word/PPT + 写 Excel。重依赖(calamine/pdf-extract/docx-rs/zip)隔离于本 crate"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dependencies]
+cmx-agent-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+# Excel 读（xlsx/xls/ods）
+calamine = "0.26"
+# Excel 写
+rust_xlsxwriter = "0.79"
+# 解压 pptx/docx（其本质是 zip+XML）
+zip = { version = "2", default-features = false, features = ["deflate"] }
+# PDF 文本抽取
+pdf-extract = "0.7"
+
+[dev-dependencies]
+tokio = { workspace = true }

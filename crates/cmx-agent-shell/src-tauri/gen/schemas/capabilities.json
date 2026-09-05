@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"放行主窗口调用自定义 agent 命令（核心 IPC 默认能力）+ 标题栏拖动。","local":true,"windows":["main"],"permissions":["core:default","core:window:allow-start-dragging"]}}
+{"default":{"identifier":"default","description":"放行主窗口 + 登录窗口调用自定义命令（核心 IPC 默认能力）+ 标题栏拖动。","local":true,"windows":["main","login"],"permissions":["core:default","core:window:allow-start-dragging"]}}

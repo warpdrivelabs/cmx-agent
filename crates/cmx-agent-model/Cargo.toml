@@ -1,0 +1,23 @@
+[package]
+name = "cmx-agent-model"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "cmx-agent E0：真实模型缝——OpenAI 兼容多 provider（DeepSeek/OpenAI/Qwen/本地）ModelSeam，含工具调用"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dependencies]
+cmx-agent-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+# HTTP 客户端（照抄 connectors 范式；rustls 免系统 openssl）。0.12 已离线缓存。stream 特性用于 token 流式。
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+futures-util = "0.3"
+
+[dev-dependencies]
+tokio = { workspace = true }

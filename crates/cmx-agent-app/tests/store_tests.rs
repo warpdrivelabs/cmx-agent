@@ -293,3 +293,51 @@ async fn long_title_is_truncated() {
     );
     assert!(title.chars().count() <= 25, "title must be truncated");
 }
+
+#[test]
+fn load_events_window_tails_pages_and_full() {
+    let tmp = TempDir::new("store-window");
+    let store = FileSessionStore::new(tmp.path()).unwrap();
+    let n = 25usize;
+    let evs: Vec<SessionEvent> = (0..n)
+        .map(|i| SessionEvent {
+            seq: (i + 1) as u64,
+            ts: chrono::Utc::now(),
+            kind: EventKind::UserMessage {
+                text: format!("m{i}"),
+            },
+        })
+        .collect();
+    store.append_events("s1", &evs).unwrap();
+    store
+        .put_meta(&SessionMeta {
+            id: "s1".into(),
+            title: Some("我的任务".into()),
+            system: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            event_count: n,
+        })
+        .unwrap();
+
+    // 尾窗口：最近 10 条（start=15，标题一并回传）
+    let w = store.load_events_window("s1", Some(10), None).unwrap();
+    assert_eq!(w.total, 25);
+    assert_eq!(w.start, 15);
+    assert_eq!(w.events.len(), 10);
+    assert_eq!(w.title.as_deref(), Some("我的任务"));
+    assert!(matches!(&w.events[0].kind, EventKind::UserMessage { text } if text == "m15"));
+
+    // 向前翻页：before=15 → [5,15)
+    let w2 = store.load_events_window("s1", Some(10), Some(w.start)).unwrap();
+    assert_eq!(w2.start, 5);
+    assert_eq!(w2.events.len(), 10);
+    assert!(matches!(&w2.events[0].kind, EventKind::UserMessage { text } if text == "m5"));
+    assert!(matches!(&w2.events[9].kind, EventKind::UserMessage { text } if text == "m14"));
+
+    // 全量（limit=None）与超额 limit：均 start=0、返回全部
+    assert_eq!(store.load_events_window("s1", None, None).unwrap().events.len(), 25);
+    let big = store.load_events_window("s1", Some(1000), None).unwrap();
+    assert_eq!(big.start, 0);
+    assert_eq!(big.events.len(), 25);
+}

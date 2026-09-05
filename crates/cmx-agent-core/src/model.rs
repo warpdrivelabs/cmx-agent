@@ -82,10 +82,33 @@ impl ModelResponse {
 #[error("model seam error: {0}")]
 pub struct ModelError(pub String);
 
+/// 回合观察者：接收**瞬时**的文字增量（token 流），用于打字机效果。**不进日志**（区别于 EventSink）——
+/// 最终完整文本仍以 `ModelMessage` 事件落库，deltas 仅用于实时 UI。
+pub trait TurnObserver: Send + Sync {
+    /// 模型产出一段文字增量（可能是几个字/一句）。
+    fn on_text_delta(&self, delta: &str);
+}
+
 /// 模型缝 trait。`complete` = 给定上下文，产出下一步响应。
 #[async_trait]
 pub trait ModelSeam: Send + Sync {
     async fn complete(&self, ctx: &ModelContext) -> Result<ModelResponse, ModelError>;
+
+    /// 流式版：产出文字增量经 `observer.on_text_delta` 实时回调，最终返回完整 [`ModelResponse`]。
+    /// 默认实现回退到非流式 `complete`（把全文当作一个 delta 回调），保证 Mock/Demo 等无需改动。
+    async fn complete_streaming(
+        &self,
+        ctx: &ModelContext,
+        observer: &dyn TurnObserver,
+    ) -> Result<ModelResponse, ModelError> {
+        let resp = self.complete(ctx).await?;
+        if let Some(t) = &resp.text {
+            if !t.is_empty() {
+                observer.on_text_delta(t);
+            }
+        }
+        Ok(resp)
+    }
 }
 
 /// 确定性 Mock 模型：按注入的脚本逐次弹出响应；脚本耗尽后返回一句收尾文本（无工具调用 → Completed）。

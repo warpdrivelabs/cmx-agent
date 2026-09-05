@@ -1,55 +1,28 @@
-//! `fs_read` —— 读取一个文本文件的前若干字节。**演示沙箱纵深**：
-//! 目标路径必须落在 `ctx.allowed_roots` 之内（工作区隔离），否则拒绝——即便 OS 层还没上 Seatbelt/Landlock，
-//! 应用层也先做一道路径围栏（纵深防御）。needs `requires_auth = "fs:read"`（护栏① 演示）。
+//! `fs_read` —— 读取工作区内某文本文件的前若干字节。
+//!
+//! 路径经 [`crate::sandbox::resolve`] 统一解析（与 fs_write/fs_edit 同一套）：相对路径按工作根
+//! （`allowed_roots[0]`）解析，绝对路径校验落在根内；`../` 逃逸被拒。needs `requires_auth = "fs:read"`。
 
 use async_trait::async_trait;
 use cmx_agent_core::tool::GuardHints;
 use cmx_agent_core::{Tool, ToolCtx, ToolError, ToolResult, ToolSpec};
 use serde_json::{Value, json};
-use std::path::{Path, PathBuf};
+
+use crate::sandbox;
 
 pub struct FsReadTool;
-
-/// 判断 `target` 是否在某个允许根之下（按规范化后的前缀）。
-///
-/// 安全要点：对 target 与 root **都**尽力 `canonicalize`（解析符号链接）——否则在 macOS 上
-/// `/var`→`/private/var` 这类符号链接会让"字面 target"与"规范化 root"前缀不匹配；更重要的是，
-/// canonicalize target 能挡住"根内符号链接指向根外"的逃逸。canonicalize 失败（路径不存在）时
-/// 回退到词法归一，仍能挡 `../` 字面逃逸（纵深防御）。
-fn within_roots(target: &Path, roots: &[PathBuf]) -> bool {
-    let t = std::fs::canonicalize(target).unwrap_or_else(|_| normalize(target));
-    roots.iter().any(|r| {
-        let r = std::fs::canonicalize(r).unwrap_or_else(|_| normalize(r));
-        t.starts_with(&r)
-    })
-}
-
-/// 词法归一化：移除 `.`，按 `..` 回退，不触碰文件系统。防 `../` 逃逸。
-fn normalize(p: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for comp in p.components() {
-        match comp {
-            std::path::Component::ParentDir => {
-                out.pop();
-            }
-            std::path::Component::CurDir => {}
-            other => out.push(other.as_os_str()),
-        }
-    }
-    out
-}
 
 #[async_trait]
 impl Tool for FsReadTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec::new(
             "fs_read",
-            "读取 allowed_roots 内某文本文件的前 max_bytes 字节",
+            "读取工作区内某文本文件的前 max_bytes 字节（相对路径按工作根解析）",
         )
         .schema(json!({
             "type": "object",
             "properties": {
-                "path": { "type": "string" },
+                "path": { "type": "string", "description": "工作区内文件路径（相对工作根或绝对路径）" },
                 "max_bytes": { "type": "integer", "default": 4096 }
             },
             "required": ["path"]
@@ -62,36 +35,96 @@ impl Tool for FsReadTool {
     }
 
     async fn invoke(&self, input: Value, ctx: &ToolCtx<'_>) -> Result<ToolResult, ToolError> {
-        let path = match input.get("path").and_then(|v| v.as_str()) {
-            Some(p) => PathBuf::from(p),
-            None => return Ok(ToolResult::err("fs_read: 'path' is required")),
+        let Some(path) = input.get("path").and_then(|v| v.as_str()) else {
+            return Ok(ToolResult::err("fs_read: 'path' is required"));
         };
         let max_bytes = input
             .get("max_bytes")
             .and_then(|v| v.as_u64())
             .unwrap_or(4096) as usize;
 
-        if ctx.allowed_roots.is_empty() {
-            return Ok(ToolResult::err(
-                "fs_read: no allowed_roots configured (sandbox denies all fs)",
-            ));
-        }
-        if !within_roots(&path, ctx.allowed_roots) {
-            return Ok(ToolResult::err(format!(
-                "fs_read: path '{}' escapes sandbox allowed_roots",
-                path.display()
-            )));
-        }
+        // 与 fs_write/fs_edit 同一套解析：相对路径挂到工作根，绝对路径校验在根内。
+        let abs = match sandbox::resolve(path, ctx) {
+            Ok(p) => p,
+            Err(e) => return Ok(ToolResult::err(format!("fs_read: {e}"))),
+        };
 
-        match std::fs::read(&path) {
+        match std::fs::read(&abs) {
             Ok(bytes) => {
                 let n = bytes.len().min(max_bytes);
                 let text = String::from_utf8_lossy(&bytes[..n]).to_string();
-                Ok(ToolResult::ok(
-                    json!({ "path": path.display().to_string(), "bytes": n, "text": text }),
-                ))
+                Ok(ToolResult::ok(json!({
+                    "path": abs.display().to_string(),
+                    "bytes": n,
+                    "total_bytes": bytes.len(),
+                    "truncated": bytes.len() > n,
+                    "text": text,
+                })))
             }
             Err(e) => Ok(ToolResult::err(format!("fs_read: {e}"))),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cmx_agent_core::guard::SandboxMode;
+    use std::path::PathBuf;
+
+    fn setup(name: &str, content: &str) -> (PathBuf, Vec<PathBuf>) {
+        let root = crate::testutil::unique_dir("cmx-fsr");
+        std::fs::write(root.join(name), content).unwrap();
+        (root.clone(), vec![root])
+    }
+
+    #[tokio::test]
+    async fn reads_relative_path_against_workspace_root() {
+        // 回归：相对路径「notes.md」应按工作根解析（此前误按进程 CWD → 逃逸拒绝）。
+        let (root, roots) = setup("notes.md", "hello office");
+        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots };
+        let r = FsReadTool.invoke(json!({"path":"notes.md"}), &ctx).await.unwrap();
+        assert!(r.ok, "相对路径应被接受: {r:?}");
+        assert_eq!(r.output["text"], "hello office");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[tokio::test]
+    async fn reads_absolute_path_within_root() {
+        let (root, roots) = setup("a.txt", "abc");
+        let abs = root.join("a.txt");
+        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots };
+        let r = FsReadTool.invoke(json!({"path": abs.display().to_string()}), &ctx).await.unwrap();
+        assert!(r.ok, "{r:?}");
+        assert_eq!(r.output["text"], "abc");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[tokio::test]
+    async fn truncates_to_max_bytes() {
+        let (root, roots) = setup("big.txt", "0123456789");
+        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots };
+        let r = FsReadTool.invoke(json!({"path":"big.txt","max_bytes":4}), &ctx).await.unwrap();
+        assert_eq!(r.output["text"], "0123");
+        assert_eq!(r.output["truncated"], true);
+        assert_eq!(r.output["total_bytes"], 10);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[tokio::test]
+    async fn dotdot_escape_denied() {
+        let (root, roots) = setup("f.txt", "x");
+        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots };
+        let r = FsReadTool.invoke(json!({"path":"../../../etc/passwd"}), &ctx).await.unwrap();
+        assert!(!r.ok);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[tokio::test]
+    async fn no_roots_denies() {
+        let roots: Vec<PathBuf> = vec![];
+        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots };
+        let r = FsReadTool.invoke(json!({"path":"x"}), &ctx).await.unwrap();
+        assert!(!r.ok);
     }
 }

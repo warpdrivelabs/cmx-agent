@@ -17,13 +17,37 @@ pub enum AppRequest {
     /// 发一条用户消息，跑一个回合。
     Send { session_id: String, text: String },
     /// 读取会话全部事件。
-    GetEvents { session_id: String },
+    /// 读取会话事件。`limit`/`before` 用于大会话分页尾加载：`limit=None` 全量（向后兼容）；
+    /// `Some(n)` 取最近 n 条，`before=Some(k)` 向前翻页。响应含 events/total/start/title。
+    GetEvents {
+        session_id: String,
+        #[serde(default)]
+        limit: Option<usize>,
+        #[serde(default)]
+        before: Option<usize>,
+    },
     /// 列出所有会话。
     ListSessions,
     /// 删除会话。
     DeleteSession { session_id: String },
     /// 列出连接器（描述 + live 健康）——侧栏「专家·技能·连接器」面板用。
     ListConnectors,
+    /// 登录（对接门户 /api/auth/login）。成功后前门持有当前用户。
+    Login { username: String, password: String },
+    /// 取当前登录用户（前端启动时填充用户菜单；未登录 data.user=null）。
+    CurrentUser,
+    /// 登出（清当前用户）。
+    Logout,
+    /// 人在环审批决定（X4）：前端在审批卡片点「允许/拒绝」后发来，唤醒挂起的回合。
+    /// `all=true`（「本对话全部允许」）时，把 `session_id` 会话标记为全部允许，后续不再弹卡。
+    Approve {
+        call_id: String,
+        approved: bool,
+        #[serde(default)]
+        all: bool,
+        #[serde(default)]
+        session_id: String,
+    },
 }
 
 /// 前门响应（`ok=false` 时 `error` 有值；成功时 `data` 按命令而异）。统一信封，便于前端一致处理。
@@ -69,6 +93,7 @@ fn error_code(e: &AppError) -> &'static str {
     match e {
         AppError::NotFound(_) => "not_found",
         AppError::BadRequest(_) => "bad_request",
+        AppError::Auth(_) => "auth_error",
         AppError::Corrupt(_) => "corrupt_store",
         AppError::Agent(_) => "agent_error",
         AppError::Io(_) => "io_error",
@@ -95,9 +120,12 @@ async fn dispatch_inner(app: &AgentApp, req: AppRequest) -> Result<AppResponse, 
             let outcome: SendOutcome = app.send(&session_id, &text).await?;
             Ok(AppResponse::ok(serde_json::to_value(outcome)?))
         }
-        AppRequest::GetEvents { session_id } => {
-            let events = app.get_events(&session_id)?;
-            Ok(AppResponse::ok(serde_json::json!({ "events": events })))
+        AppRequest::GetEvents { session_id, limit, before } => {
+            // 分页 / 尾加载。limit=None 时仍返回全量（向后兼容），但前端现在会带 limit 只取一屏。
+            let w = app.get_events_window(&session_id, limit, before)?;
+            Ok(AppResponse::ok(serde_json::json!({
+                "events": w.events, "total": w.total, "start": w.start, "title": w.title
+            })))
         }
         AppRequest::ListSessions => {
             let sessions: Vec<SessionMeta> = app.list_sessions()?;
@@ -113,6 +141,23 @@ async fn dispatch_inner(app: &AgentApp, req: AppRequest) -> Result<AppResponse, 
             let connectors = app.list_connectors().await;
             Ok(AppResponse::ok(
                 serde_json::json!({ "connectors": connectors }),
+            ))
+        }
+        AppRequest::Login { username, password } => {
+            let user = app.login(&username, &password).await?;
+            Ok(AppResponse::ok(serde_json::json!({ "user": user })))
+        }
+        AppRequest::CurrentUser => Ok(AppResponse::ok(
+            serde_json::json!({ "user": app.current_user() }),
+        )),
+        AppRequest::Logout => {
+            app.logout();
+            Ok(AppResponse::ok(serde_json::json!({ "ok": true })))
+        }
+        AppRequest::Approve { call_id, approved, all, session_id } => {
+            let hit = app.resolve_approval_decision(&call_id, approved, all, &session_id);
+            Ok(AppResponse::ok(
+                serde_json::json!({ "resolved": hit, "call_id": call_id, "approved": approved, "all": all }),
             ))
         }
     }

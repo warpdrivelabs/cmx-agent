@@ -109,6 +109,64 @@ impl CmxServiceClient {
             .await
             .map_err(|e| ClientError::Decode(e.to_string()))
     }
+
+    /// POST 一段 JSON body 到返回 `{code,msg,data}` 信封的端点，成功取 `data`。
+    /// 认证端点（/api/auth/login）不带 X-Tenant/X-User（无意义），只发 body。
+    pub async fn post_data(&self, path: &str, body: Value) -> Result<Value, ClientError> {
+        let url = format!("{}{}", self.base_url, path);
+        let resp = client()
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ClientError::Transport(e.to_string()))?;
+        // 认证端点用信封 code 表达 401（HTTP 常为 200）；仅当 HTTP 5xx/连接层失败才当传输错。
+        let status = resp.status();
+        let parsed: Value = resp
+            .json()
+            .await
+            .map_err(|e| ClientError::Decode(e.to_string()))?;
+        // 若 body 是信封则按 code 解；否则遇 HTTP 错再报 Http。
+        match unwrap_envelope(parsed) {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                if status.is_success() {
+                    Err(e)
+                } else {
+                    Err(ClientError::Http(status.as_u16()))
+                }
+            }
+        }
+    }
+
+    /// GET 一个返回信封的端点，带 `Authorization: Bearer <token>`（如 /api/auth/me）。
+    pub async fn get_data_bearer(&self, path: &str, token: &str) -> Result<Value, ClientError> {
+        let url = format!("{}{}", self.base_url, path);
+        let resp = client()
+            .get(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .map_err(|e| ClientError::Transport(e.to_string()))?;
+        let status = resp.status();
+        let parsed: Value = resp
+            .json()
+            .await
+            .map_err(|e| ClientError::Decode(e.to_string()))?;
+        match unwrap_envelope(parsed) {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                if status.is_success() {
+                    Err(e)
+                } else {
+                    Err(ClientError::Http(status.as_u16()))
+                }
+            }
+        }
+    }
 }
 
 /// 解 cmx `{code,msg,data}` 信封。`code==0`（或缺省）→ 取 `data`；否则 Envelope 错误。

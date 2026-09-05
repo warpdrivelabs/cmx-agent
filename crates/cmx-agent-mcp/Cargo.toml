@@ -1,0 +1,21 @@
+[package]
+name = "cmx-agent-mcp"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "cmx-agent MCP 客户端（U3）：作为 MCP host 连接外部 MCP server（stdio JSON-RPC），把其工具归一进 ToolRegistry"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dependencies]
+cmx-agent-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+async-trait.workspace = true
+tokio = { workspace = true }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true }

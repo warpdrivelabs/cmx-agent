@@ -21,7 +21,9 @@ pub use guard::{
     ApprovalGuard, AuthGuard, Guard, GuardCtx, GuardDecision, GuardPhase, GuardPipeline,
     HighRiskGuard, SandboxMode, Subject,
 };
-pub use model::{MockModel, ModelContext, ModelError, ModelMessage, ModelResponse, ModelSeam};
+pub use model::{
+    MockModel, ModelContext, ModelError, ModelMessage, ModelResponse, ModelSeam, TurnObserver,
+};
 pub use session::Session;
 pub use tool::{
     Approval, GuardHints, Tool, ToolCall, ToolCtx, ToolError, ToolRegistry, ToolResult, ToolSpec,

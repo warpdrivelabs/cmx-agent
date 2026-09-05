@@ -130,6 +130,54 @@ async fn approval_required_and_granted() {
 }
 
 #[tokio::test]
+async fn preapproved_session_skips_card() {
+    // 会话被授予「本对话全部允许」→ 需审批的工具自动放行：
+    // 无 ApprovalRequested（不弹卡）、有 by="auto:approve-all" 的 Resolved（留审计）、工具照跑。
+    struct PreapprovedApprover;
+    #[async_trait::async_trait]
+    impl cmx_agent_core::Approver for PreapprovedApprover {
+        async fn resolve(&self, _c: &cmx_agent_core::ToolCall, _r: &str) -> (bool, String) {
+            panic!("session 已 pre-approved，resolve 不应被调用");
+        }
+        fn is_preapproved(&self, _sid: &str) -> bool {
+            true
+        }
+    }
+    let mut guards = GuardPipeline::new();
+    guards.add(Arc::new(ApprovalGuard));
+    let agent = Agent::builder()
+        .model(Arc::new(call_tool(
+            "danger_rm",
+            serde_json::json!({"path":"/tmp/x"}),
+        )))
+        .tools(default_registry())
+        .guards(guards)
+        .approver(Arc::new(PreapprovedApprover))
+        .policy(Policy {
+            sandbox: SandboxMode::DangerFullAccess,
+            ..Default::default()
+        })
+        .build()
+        .unwrap();
+    let mut s = Session::new("appr-all");
+    agent.run_turn(&mut s, "rm").await.unwrap();
+
+    assert!(
+        !s.log
+            .iter()
+            .any(|e| matches!(e.kind, EventKind::ApprovalRequested { .. })),
+        "pre-approved 会话不应弹审批卡"
+    );
+    assert!(
+        s.log.iter().any(|e| matches!(&e.kind,
+            EventKind::ApprovalResolved { approved: true, by, .. } if by == "auto:approve-all")),
+        "应留 auto:approve-all 审计事件"
+    );
+    let (ok, _) = last_tool_result(&s);
+    assert!(ok, "自动放行后工具应正常执行");
+}
+
+#[tokio::test]
 async fn approval_required_and_rejected_blocks_tool() {
     let mut guards = GuardPipeline::new();
     guards.add(Arc::new(ApprovalGuard));

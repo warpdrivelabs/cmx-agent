@@ -6,11 +6,13 @@
 //! 与内核解耦：连接器工具实现 `cmx_agent_core::Tool`，挂进同一个 `ToolRegistry`，内核零改动。
 //! 网络依赖（reqwest）隔离在本 crate，`cmx-agent-core`/`tools` 仍零网络、纯离线可测。
 
+pub mod auth;
 pub mod client;
 pub mod connectors;
 pub mod health;
 pub mod registry;
 
+pub use auth::{AuthConfig, AuthProvider, LoggedInUser};
 pub use client::{ClientError, CmxServiceClient};
 pub use connectors::{FlowConnector, OntoConnector, ReportConnector};
 pub use health::{ConnectorStatus, probe};
