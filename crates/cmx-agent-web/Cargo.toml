@@ -14,6 +14,7 @@ cmx-agent-app.workspace = true
 cmx-agent-core.workspace = true
 cmx-agent-tools.workspace = true
 cmx-agent-mcp.workspace = true
+cmx-agent-plugin.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

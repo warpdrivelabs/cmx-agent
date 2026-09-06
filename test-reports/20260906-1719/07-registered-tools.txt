@@ -1,0 +1,10 @@
+cmx_agent_lsp::LspTool
+cmx_agent_net::BrowserDoTool
+cmx_agent_net::BrowserReadTool
+cmx_agent_net::BrowserScreenshotTool
+cmx_agent_net::ComputerUseTool
+cmx_agent_net::WebFetchTool
+cmx_agent_net::WebSearchTool
+cmx_agent_office::DocReadTool
+cmx_agent_office::XlsxWriteTool
+cmx_agent_tools::TaskTool

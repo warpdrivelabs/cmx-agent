@@ -1,0 +1,11 @@
+   Compiling cmx-agent-web v0.1.0 (/Users/nanomesh/Workspace/presentation/cmx-agent/crates/cmx-agent-web)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.64s
+     Running `/Users/nanomesh/.cargo-shared-target/debug/cmx-agent-web --no-open`
+[2m2026-09-06T13:45:51.236754Z[0m [32m INFO[0m cmx-agent 模型：DemoModel（未配置真实模型，回退离线演示）
+[2m2026-09-06T13:45:51.243219Z[0m [32m INFO[0m cmx-agent 桌面界面已就绪：http://127.0.0.1:50018/
+
+  cmx 企业桌面智能体 · Web 壳
+  ▶ http://127.0.0.1:50018/
+
+  (--no-open：仅起服务，未开窗。用浏览器访问上面地址即可。)
+

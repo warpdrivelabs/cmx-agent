@@ -9,11 +9,16 @@
 pub mod auth;
 pub mod client;
 pub mod connectors;
+pub mod dataauth;
 pub mod health;
 pub mod registry;
 
 pub use auth::{AuthConfig, AuthProvider, LoggedInUser};
-pub use client::{ClientError, CmxServiceClient};
-pub use connectors::{FlowConnector, OntoConnector, ReportConnector};
+pub use client::{ClientError, CmxServiceClient, TokenStore};
+pub use connectors::{
+    EngineChain, EnterpriseContext, FlowCompleteTask, FlowConnector, FlowStartInstance,
+    OntoConnector, OntoExecuteAction, OntoPutObject, ReportCompute, ReportConnector,
+};
+pub use dataauth::{DataAuthPep, ENFORCED_PERMS};
 pub use health::{ConnectorStatus, probe};
 pub use registry::{ConnectorCard, ConnectorConfig, ConnectorDescriptor, ConnectorRegistry};

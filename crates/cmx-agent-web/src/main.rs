@@ -77,12 +77,16 @@ async fn build_app(workdir: &std::path::Path, data_dir: &std::path::Path) -> Age
     // 真实模型缝在 cmx-agent-model，壳与前端不变；识别「列出流程/对象/报表」等仍走连接器工具。
     let model = cmx_agent_app::select_model(Some(data_dir));
     // U3：从 <data_dir>/mcp.json 连接外部 MCP server（opt-in，文件不存在则无 MCP 工具）。
-    let mcp_tools = cmx_agent_mcp::load_and_connect(&data_dir.join("mcp.json")).await;
+    let mut mcp_tools = cmx_agent_mcp::load_and_connect(&data_dir.join("mcp.json")).await;
+    // U15：plugins 目录里 kind:"mcp" 的插件清单，也作为 MCP server 连上（统一插件面入口）。
+    mcp_tools.extend(cmx_agent_plugin::connect_mcp_plugins(&data_dir.join("plugins")).await);
+    // U13：opt-in 数据权限接地——设 CMX_AGENT_DATAAUTH_URL 指向 cmx-data-auth 即启用真 PEP；否则 allow_all 占位。
     DesktopAppBuilder::new(workdir, data_dir, model)
         .connectors(cmx_agent_app::ConnectorConfig::default())
         .auth(cmx_agent_app::AuthConfig::default())
         .interactive_approval() // X4：bash 等需审批工具挂起等前端点按
-        .mcp_tools(mcp_tools)   // U3：外部 MCP 工具
+        .mcp_tools(mcp_tools) // U3：外部 MCP 工具
+        .maybe_data_auth(std::env::var("CMX_AGENT_DATAAUTH_URL").ok())
         .build()
         .expect("build agent app")
 }

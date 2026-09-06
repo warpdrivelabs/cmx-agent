@@ -1,0 +1,28 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running unittests src/lib.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/cmx_agent_connectors-d6bd447e31a78436)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+     Running tests/connector_tests.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/connector_tests-9158c868ae2117a2)
+
+running 2 tests
+test live_probe_flow_online ... ok
+test live_flow_lists_real_definitions ... FAILED
+
+failures:
+
+---- live_flow_lists_real_definitions stdout ----
+
+thread 'live_flow_lists_real_definitions' (461072) panicked at crates/cmx-agent-connectors/tests/connector_tests.rs:105:5:
+live flow call failed: Object {"error": String("flow 连接器调用失败: 服务返回 HTTP 404")}
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    live_flow_lists_real_definitions
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p cmx-agent-connectors --test connector_tests`

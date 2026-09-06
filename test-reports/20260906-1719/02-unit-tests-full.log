@@ -1,0 +1,446 @@
+warning: unused import: `std::sync::Arc`
+ --> crates/cmx-agent-lsp/tests/lsp_integration.rs:5:5
+  |
+5 | use std::sync::Arc;
+  |     ^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::time::Duration`
+ --> crates/cmx-agent-lsp/tests/lsp_integration.rs:6:5
+  |
+6 | use std::time::Duration;
+  |     ^^^^^^^^^^^^^^^^^^^
+
+warning: `cmx-agent-lsp` (test "lsp_integration") generated 2 warnings (run `cargo fix --test "lsp_integration" -p cmx-agent-lsp` to apply 2 suggestions)
+   Compiling cmx-agent-web v0.1.0 (/Users/nanomesh/Workspace/presentation/cmx-agent/crates/cmx-agent-web)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s
+     Running unittests src/lib.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/cmx_agent_app-0e4c7501a7c3e33a)
+
+running 5 tests
+test approval::tests::decide_unknown_id_is_noop ... ok
+test approval::tests::allow_session_scopes_preapproval_per_conversation ... ok
+test approval::tests::decide_approves_pending ... ok
+test approval::tests::decide_rejects_pending ... ok
+test approval::tests::timeout_rejects ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/connector_integration_tests.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/connector_integration_tests-2feeeefb340ddfde)
+
+running 3 tests
+test without_connectors_list_is_empty ... ok
+test list_connectors_command_returns_three_cards ... ok
+test agent_can_invoke_connector_tool_and_degrades_gracefully ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/demo_model_tests.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/demo_model_tests-fa563d0213fa8ca7)
+
+running 5 tests
+test unknown_input_yields_text_no_tool ... ok
+test routes_flow_keyword_to_flow_tool ... ok
+test routes_object_keyword_to_onto_tool ... ok
+test routes_add_keyword_and_extracts_numbers ... ok
+test summarizes_flow_result_when_tool_output_present ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/desktop_fs_tests.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/desktop_fs_tests-8b86938f7274a1c2)
+
+running 2 tests
+test desktop_reads_file_within_workspace ... ok
+test desktop_blocks_read_outside_workspace ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/protocol_tests.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/protocol_tests-57c534b59f7b9d9c)
+
+running 7 tests
+test bad_session_id_is_rejected_via_envelope ... ok
+test approve_command_accepts_all_and_session_and_is_backward_compatible ... ok
+test invalid_json_returns_bad_request_envelope_not_panic ... ok
+test unknown_command_is_bad_request ... ok
+test send_command_roundtrips_through_json ... ok
+test create_list_get_delete_lifecycle ... ok
+test get_events_paginates_with_limit_total_start ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/store_tests.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/store_tests-72072abe56085e72)
+
+running 12 tests
+test load_missing_is_not_found ... ok
+test path_injection_is_rejected ... ok
+test delete_is_idempotent ... ok
+test append_and_load_roundtrip ... ok
+test corrupt_line_is_detected ... ok
+test restored_session_continues_turn_numbering ... ok
+test incremental_append_does_not_rewrite_history ... ok
+test load_events_window_tails_pages_and_full ... ok
+test list_sorts_by_updated_desc ... ok
+test long_title_is_truncated ... ok
+test session_title_derived_from_first_message_and_stable ... ok
+test end_to_end_persist_and_resume_across_restart ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/main.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/cmx_agent-1560004cfd127d22)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/cmx_agent_connectors-ae1a2278c52a500c)
+
+running 10 tests
+test auth::tests::default_base_is_portal ... ok
+test auth::tests::logged_in_user_serialize_skips_token ... ok
+test client::tests::bare_object_without_code_passes_through ... ok
+test client::tests::client_trims_trailing_slash_and_defaults_identity ... ok
+test client::tests::envelope_error_is_reported ... ok
+test auth::tests::public_json_omits_token ... ok
+test dataauth::tests::fail_closed_vs_open_on_cache_miss ... ok
+test client::tests::envelope_ok_extracts_data ... ok
+test dataauth::tests::perm_maps_to_kind_action ... ok
+test health::tests::offline_status_has_detail ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/connector_tests.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/connector_tests-684292c3db2e1ea5)
+
+running 12 tests
+test live_flow_lists_real_definitions ... ignored, 需要 live cmx-flow 服务在 :8091
+test live_probe_flow_online ... ignored, 需要 live cmx-flow 服务在 :8091
+test connector_tools_carry_read_guard_hints ... ok
+test registry_exposes_three_connectors_with_tools ... ok
+test register_into_adds_connector_tools_to_registry ... ok
+test probe_offline_service_returns_offline_status ... ok
+test connector_tool_gracefully_degrades_when_service_down ... ok
+test flow_start_instance_posts_and_unwraps_envelope ... ok
+test onto_execute_action_posts_params_and_dryrun ... ok
+test dataauth_pep_permits_and_denies_via_mock_pdp ... ok
+test enterprise_context_aggregates_domain_model ... ok
+test business_chain_threads_refs_across_steps ... ok
+
+test result: ok. 10 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.28s
+
+     Running unittests src/lib.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/cmx_agent_core-aea44c715efbc638)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/guard_tests.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/guard_tests-2b0312b14fbd605a)
+
+running 11 tests
+test approval_required_and_granted ... ok
+test auth_guard_allows_with_permission ... ok
+test approval_policy_never_treats_needapproval_as_deny ... ok
+test high_risk_allowed_under_danger_full_access ... ok
+test unless_trusted_asks_for_nonidempotent_tool ... ok
+test preapproved_session_skips_card ... ok
+test approval_required_and_rejected_blocks_tool ... ok
+test auth_guard_denies_without_permission ... ok
+test high_risk_blocked_under_workspace_write ... ok
+test post_guard_can_deny_after_execution ... ok
+test pipeline_short_circuits_on_first_deny ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/invariant_tests.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/invariant_tests-6224a9c5dbb58ea0)
+
+running 5 tests
+test turn_is_bracketed_by_start_and_end ... ok
+test log_is_append_only_monotonic ... ok
+test context_size_matches_logged_visible_events ... ok
+test every_model_visible_message_has_a_logged_source ... ok
+test events_roundtrip_through_json ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/loop_tests.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/loop_tests-bea1296e41c268ce)
+
+running 7 tests
+test single_text_turn_completes ... ok
+test multi_turn_accumulates_history ... ok
+test tool_call_then_finish_two_steps ... ok
+test parallel_tool_calls_in_one_step_all_execute ... ok
+test tool_result_is_fed_back_into_model_context ... ok
+test unknown_tool_yields_error_result_not_crash ... ok
+test max_steps_guard_stops_runaway_loop ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/parallel_tests.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/parallel_tests-807f96bbfc1ac9ba)
+
+running 1 test
+test multiple_tool_calls_run_concurrently ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+
+     Running unittests src/lib.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/cmx_agent_im-1707c26a2b3ed024)
+
+running 1 test
+test tests::chunk_splits_on_limit ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge_tests.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/bridge_tests-92c3345cc67192be)
+
+running 3 tests
+test bridge_blocks_unauthorized ... ok
+test bridge_runs_turn_and_replies ... ok
+test same_chat_reuses_session ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/cmx_agent_lsp-7478ae3b014da7bc)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/lsp_integration.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/lsp_integration-bbae8dc9dd77d127)
+
+running 3 tests
+test unconfigured_degrades_gracefully ... ok
+test unknown_extension_reports ... ok
+test lsp_hover_and_symbols_and_diagnostics ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running unittests src/lib.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/cmx_agent_mcp-769b1e90adacb396)
+
+running 2 tests
+test client::tests::is_error_flag ... ok
+test client::tests::extract_text_joins_parts ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/mcp_integration.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/mcp_integration-3a56187216399e6d)
+
+running 2 tests
+test connect_failure_is_error ... ok
+test mcp_end_to_end_via_mock_server ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running unittests src/lib.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/cmx_agent_model-f0b1055ac1a73bf3)
+
+running 12 tests
+test config::tests::new_trims_trailing_slash ... ok
+test config::tests::from_json_str_reads_deepseek ... ok
+test openai::tests::parse_malformed_arguments_falls_back_to_raw ... ok
+test openai::tests::parse_upstream_error ... ok
+test config::tests::from_json_str_empty_is_none ... ok
+test openai::tests::parse_plain_text ... ok
+test openai::tests::parse_tool_call ... ok
+test openai::tests::stream_accumulates_text_deltas ... ok
+test openai::tests::request_encodes_assistant_toolcall_and_tool_result ... ok
+test openai::tests::request_includes_system_user_and_tools ... ok
+test openai::tests::stream_accumulates_fragmented_tool_call ... ok
+test config::tests::resolve_reads_file_when_env_absent ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/cmx_agent_net-492becfb2110a97d)
+
+running 14 tests
+test computer::tests::live_computer_use_loop ... ignored
+test browser::tests::escapes_sandbox_rejected ... ok
+test tests::allows_public ... ok
+test tests::blocks_private_and_loopback ... ok
+test html::tests::decode_numeric_entities ... ok
+test html::tests::parse_ddg_html_variant ... ok
+test html::tests::html_to_text_strips_script_style_tags ... ok
+test html::tests::parse_ddg_results_with_uddg_redirect ... ok
+test vision::tests::parse_actions_from_messy_reply ... ok
+test vision::tests::build_body_has_image_and_model ... ok
+test interact::tests::cdp_fill_click_read ... ok
+test computer::tests::element_hints_and_click_snapping ... ok
+test computer::tests::cdp_visual_primitives_via_file_url ... ok
+test browser::tests::chrome_renders_js_and_screenshots_via_file_url ... ok
+
+test result: ok. 13 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 3.89s
+
+     Running tests/net_integration.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/net_integration-74c318d79622df7a)
+
+running 1 test
+test web_fetch_and_search_via_mock ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+     Running unittests src/lib.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/cmx_agent_office-cc10accc8bfe89af)
+
+running 5 tests
+test text::tests::unescape_works ... ok
+test text::tests::extract_tag_text_basic ... ok
+test tool::tests::missing_file_errors ... ok
+test tool::tests::read_plain_text ... ok
+test tool::tests::xlsx_write_then_read_roundtrip ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/cmx_agent_plugin-2d0f04851e82b2c5)
+
+running 3 tests
+test tests::kind_recognition ... ok
+test tests::subst_replaces_placeholders ... ok
+test tests::manifest_parse_and_spec ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/plugin_tests.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/plugin_tests-fa242cd4ccd07ec8)
+
+running 6 tests
+test mcp_manifest_listed_but_no_sync_tool ... ok
+test command_plugin_loads_and_runs ... ok
+test plugin_install_then_list_roundtrip ... ok
+test wasm_plugin_invokes_module ... ok
+test http_plugin_calls_endpoint ... ok
+test marketplace_list_and_remote_install ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s
+
+     Running unittests src/lib.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/cmx_agent_tools-1d05997e6342d6e1)
+
+running 49 tests
+test apply_patch::tests::apply_hunks_missing_context_errors ... ok
+test apply_patch::tests::apply_hunks_replaces_block ... ok
+test chart::tests::bar_chart_returns_svg ... ok
+test bash::tests::denied_in_readonly ... ok
+test chart::tests::empty_errors ... ok
+test fs_read::tests::no_roots_denies ... ok
+test apply_patch::tests::escape_denied_whole_patch ... ok
+test chart::tests::pie_and_save ... ok
+test data_describe::tests::missing_file_errors ... ok
+test fs_edit::tests::ambiguous_denied_without_replace_all ... ok
+test data_describe::tests::describes_numeric_and_text ... ok
+test fs_edit::tests::unique_replace_ok ... ok
+test fs_edit::tests::not_found_errors ... ok
+test fs_edit::tests::replace_all_ok ... ok
+test fs_read::tests::dotdot_escape_denied ... ok
+test fs_write::tests::denied_escape ... ok
+test fs_read::tests::reads_absolute_path_within_root ... ok
+test fs_write::tests::denied_in_readonly ... ok
+test fs_read::tests::truncates_to_max_bytes ... ok
+test plan::tests::records_plan_with_progress ... ok
+test fs_read::tests::reads_relative_path_against_workspace_root ... ok
+test plan::tests::rejects_bad_status ... ok
+test plan::tests::warns_multiple_in_progress ... ok
+test glob_tool::tests::matches_rs_files ... ok
+test glob_tool::tests::matches_single_dir ... ok
+test run_tests::tests::detect_none ... ok
+test run_tests::tests::detect_cargo ... ok
+test sandbox::tests::normalize_strips_dotdot ... ok
+test run_tests::tests::unknown_framework_errors ... ok
+test sandbox::tests::resolve_dotdot_escape_denied ... ok
+test sandbox::tests::resolve_new_file_under_symlinked_root_ok ... ok
+test task::tests::concurrent_siblings_not_blocked_by_depth_gate ... ok
+test task::tests::depth_guard_blocks_when_maxed ... ok
+test task::tests::missing_prompt_errors ... ok
+test task::tests::subagent_runs_and_returns_final ... ok
+test apply_patch::tests::add_update_delete_flow ... ok
+test fs_write::tests::writes_file_and_creates_parents ... ok
+test bash::tests::nonzero_exit_reported ... ok
+test bash::tests::runs_and_captures_stdout ... ok
+test grep::tests::finds_regex_matches ... ok
+test grep::tests::glob_filter_and_ignore_case ... ok
+test repo_map::tests::maps_tree_and_ignores_target ... ok
+test run_tests::tests::custom_command_runs ... ok
+test bash::tests::cwd_is_workspace_root ... ok
+test git::tests::unknown_subcommand_rejected ... ok
+test git::tests::write_denied_in_readonly ... ok
+test git::tests::status_on_empty_repo ... ok
+test git::tests::add_commit_then_log ... ok
+test bash::tests::timeout_terminates ... ok
+
+test result: ok. 49 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+     Running tests/tool_tests.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/tool_tests-c295264107e614ab)
+
+running 8 tests
+test danger_rm_is_flagged_high_risk_and_always_approval ... ok
+test add_handles_missing_args_gracefully ... ok
+test clock_fixed_is_deterministic ... ok
+test fs_read_denies_empty_roots ... ok
+test echo_roundtrips_text ... ok
+test default_registry_exposes_all_tools_sorted ... ok
+test fs_read_reads_within_root ... ok
+test fs_read_blocks_parent_dir_escape ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/cmx_agent_web-3a5750a5b12a541a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests cmx_agent_app
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests cmx_agent_connectors
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests cmx_agent_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests cmx_agent_im
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests cmx_agent_lsp
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests cmx_agent_mcp
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests cmx_agent_model
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests cmx_agent_net
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests cmx_agent_office
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests cmx_agent_plugin
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests cmx_agent_tools
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

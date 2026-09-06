@@ -1,0 +1,21 @@
+[package]
+name = "cmx-agent-im"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "cmx-agent IM 遥控（U9）：把 IM 会话桥接到 AgentApp（收消息→跑回合→回复）。transport 无关 + Telegram 参考 provider"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dependencies]
+cmx-agent-app.workspace = true
+cmx-agent-core.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+tokio = { workspace = true }
+tracing.workspace = true
+# IM HTTP provider（Telegram/自建网关）：版本/特性对齐 cmx-agent-model，复用离线缓存
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+[dev-dependencies]

@@ -31,7 +31,48 @@ async fn main() -> anyhow::Result<()> {
     if args.first().map(|s| s.as_str()) == Some("serve") {
         return serve(args.get(1).cloned()).await;
     }
+    if args.first().map(|s| s.as_str()) == Some("im") {
+        return im_mode(args.get(1).cloned()).await;
+    }
     demo(args).await
+}
+
+/// im 模式：`cmx-agent im [data_dir]`——把 IM（Telegram 参考）桥接到真实模型 agent，长轮询遥控。
+/// 需 env：`CMX_AGENT_IM_TOKEN`（bot token）+ `CMX_AGENT_IM_ALLOW`（逗号分隔的 chat_id 白名单，安全必需）。
+async fn im_mode(data_dir: Option<String>) -> anyhow::Result<()> {
+    let data_dir = data_dir.unwrap_or_else(|| {
+        std::env::temp_dir()
+            .join("cmx-agent-data")
+            .to_string_lossy()
+            .into_owned()
+    });
+    let workdir = std::path::Path::new(&data_dir).join("workspace");
+    std::fs::create_dir_all(&workdir)?;
+
+    // 真实模型（DeepSeek 等，按 env/model.json）——IM 遥控要真回答。
+    let model = cmx_agent_app::select_model(Some(std::path::Path::new(&data_dir)));
+    let app = Arc::new(
+        DesktopAppBuilder::new(&workdir, &data_dir, model)
+            .build()
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?,
+    );
+
+    let provider = cmx_agent_im::TelegramProvider::from_env()
+        .ok_or_else(|| anyhow::anyhow!("缺 CMX_AGENT_IM_TOKEN（Telegram bot token）"))?;
+    let allow: std::collections::HashSet<String> = std::env::var("CMX_AGENT_IM_ALLOW")
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if allow.is_empty() {
+        anyhow::bail!(
+            "IM 遥控需白名单：设 CMX_AGENT_IM_ALLOW=逗号分隔的 chat_id（避免任何人驱动你的 agent）"
+        );
+    }
+    let bridge = cmx_agent_im::ImBridge::new(app, Arc::new(provider), Some(allow));
+    bridge.run().await;
+    Ok(())
 }
 
 /// serve 模式：stdin JSONL 命令 → app dispatch → stdout JSONL 响应（Headless 前门）。

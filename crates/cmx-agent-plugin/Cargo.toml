@@ -1,0 +1,22 @@
+[package]
+name = "cmx-agent-plugin"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "cmx-agent 插件面（U15）：cmx-plugin.json 清单驱动，把 http/command/wasm/mcp 能力包装成工具 + 清单/安装/远程市场。重依赖隔离本 crate"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dependencies]
+cmx-agent-core.workspace = true
+cmx-agent-mcp.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+tokio = { workspace = true }
+tracing.workspace = true
+# http 类插件：包装任意 REST 端点。版本/特性对齐其它 crate，复用离线缓存。
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+[dev-dependencies]

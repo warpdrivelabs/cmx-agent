@@ -1,0 +1,182 @@
+{
+  "base": "http://127.0.0.1:59176",
+  "total": 2,
+  "passed": 2,
+  "failed": 0,
+  "results": [
+    {
+      "name": "R1_real_add",
+      "desc": "真模型:add(3+5=8)",
+      "request": {
+        "text": "请用工具计算 3 加 5"
+      },
+      "response": {
+        "ok": true,
+        "data": {
+          "session_id": "rt-add",
+          "turn": 1,
+          "reason": "completed",
+          "steps": 2,
+          "final_text": "3 加 5 等于 **8**。",
+          "new_events": [
+            {
+              "seq": 1,
+              "ts": "2026-09-06T09:29:38.168396Z",
+              "kind": "turn_started",
+              "turn": 1,
+              "user_input": "请用工具计算 3 加 5 等于多少"
+            },
+            {
+              "seq": 2,
+              "ts": "2026-09-06T09:29:38.168397Z",
+              "kind": "user_message",
+              "text": "请用工具计算 3 加 5 等于多少"
+            },
+            {
+              "seq": 3,
+              "ts": "2026-09-06T09:29:39.321415Z",
+              "kind": "model_message",
+              "text": null,
+              "tool_calls": [
+                {
+                  "id": "call_00_OEqqVVMt42qBwx3Tk7sZ4275",
+                  "name": "add",
+                  "input": {
+                    "a": 3,
+                    "b": 5
+                  }
+                }
+              ]
+            },
+            {
+              "seq": 4,
+              "ts": "2026-09-06T09:29:39.321420Z",
+              "kind": "tool_invoked",
+              "call": {
+                "id": "call_00_OEqqVVMt42qBwx3Tk7sZ4275",
+                "name": "add",
+                "input": {
+                  "a": 3,
+                  "b": 5
+                }
+              }
+            },
+            {
+              "seq": 5,
+              "ts": "2026-09-06T09:29:39.321499Z",
+              "kind": "tool_result",
+              "call_id": "call_00_OEqqVVMt42qBwx3Tk7sZ4275",
+              "ok": true,
+              "output": {
+                "sum": 8.0
+              }
+            },
+            {
+              "seq": 6,
+              "ts": "2026-09-06T09:29:39.823482Z",
+              "kind": "model_message",
+              "text": "3 加 5 等于 **8**。",
+              "tool_calls": []
+            },
+            {
+              "seq": 7,
+              "ts": "2026-09-06T09:29:39.823525Z",
+              "kind": "turn_ended",
+              "turn": 1,
+              "reason": "completed",
+              "steps": 2
+            }
+          ]
+        }
+      },
+      "ms": 1657,
+      "pass": true,
+      "note": "tools=['add'] sum8=True final=3 加 5 等于 **8**。"
+    },
+    {
+      "name": "R2_real_onto",
+      "desc": "真模型:onto连接器→live",
+      "request": {
+        "text": "列出对象类型"
+      },
+      "response": {
+        "ok": true,
+        "data": {
+          "session_id": "rt-onto",
+          "turn": 1,
+          "reason": "completed",
+          "steps": 2,
+          "final_text": "本体平台（cmx-ontology）目前**没有任何对象类型**（返回 count=0）。\n\n如需进一步排查，我可以：\n1. 尝试用 `enterprise_context` 拉取完整的域模型（本体/流程/报表）看是否有其他数据源可用；\n2. 检查平台服务配置是否正常。\n\n要试一下吗？",
+          "new_events": [
+            {
+              "seq": 1,
+              "ts": "2026-09-06T09:29:39.826674Z",
+              "kind": "turn_started",
+              "turn": 1,
+              "user_input": "帮我列出本体平台里有哪些对象类型"
+            },
+            {
+              "seq": 2,
+              "ts": "2026-09-06T09:29:39.826675Z",
+              "kind": "user_message",
+              "text": "帮我列出本体平台里有哪些对象类型"
+            },
+            {
+              "seq": 3,
+              "ts": "2026-09-06T09:29:40.406090Z",
+              "kind": "model_message",
+              "text": null,
+              "tool_calls": [
+                {
+                  "id": "call_00_yaWkYojafEwr8U3sPtOD6481",
+                  "name": "onto_list_object_types",
+                  "input": {}
+                }
+              ]
+            },
+            {
+              "seq": 4,
+              "ts": "2026-09-06T09:29:40.406095Z",
+              "kind": "tool_invoked",
+              "call": {
+                "id": "call_00_yaWkYojafEwr8U3sPtOD6481",
+                "name": "onto_list_object_types",
+                "input": {}
+              }
+            },
+            {
+              "seq": 5,
+              "ts": "2026-09-06T09:29:40.410131Z",
+              "kind": "tool_result",
+              "call_id": "call_00_yaWkYojafEwr8U3sPtOD6481",
+              "ok": true,
+              "output": {
+                "service": "cmx-ontology",
+                "count": 0,
+                "objectTypes": []
+              }
+            },
+            {
+              "seq": 6,
+              "ts": "2026-09-06T09:29:41.657082Z",
+              "kind": "model_message",
+              "text": "本体平台（cmx-ontology）目前**没有任何对象类型**（返回 count=0）。\n\n如需进一步排查，我可以：\n1. 尝试用 `enterprise_context` 拉取完整的域模型（本体/流程/报表）看是否有其他数据源可用；\n2. 检查平台服务配置是否正常。\n\n要试一下吗？",
+              "tool_calls": []
+            },
+            {
+              "seq": 7,
+              "ts": "2026-09-06T09:29:41.657213Z",
+              "kind": "turn_ended",
+              "turn": 1,
+              "reason": "completed",
+              "steps": 2
+            }
+          ]
+        }
+      },
+      "ms": 1833,
+      "pass": true,
+      "note": "tools=['onto_list_object_types'] final=本体平台（cmx-ontology）目前**没有任何对象类型**（返回 count=0）。\n\n如需进"
+    }
+  ]
+}

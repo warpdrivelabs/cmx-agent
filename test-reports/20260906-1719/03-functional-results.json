@@ -1,0 +1,912 @@
+{
+  "base": "http://127.0.0.1:58834",
+  "total": 19,
+  "passed": 19,
+  "failed": 0,
+  "results": [
+    {
+      "name": "F1_health",
+      "desc": "GET /health",
+      "request": {
+        "GET": "/health"
+      },
+      "response": "ok",
+      "ms": 0,
+      "pass": true,
+      "note": ""
+    },
+    {
+      "name": "F2_current_user_unauth",
+      "desc": "未登录取用户",
+      "request": {
+        "cmd": "current_user"
+      },
+      "response": {
+        "ok": true,
+        "data": {
+          "user": null
+        }
+      },
+      "ms": 1,
+      "pass": true,
+      "note": ""
+    },
+    {
+      "name": "F3_create_session",
+      "desc": "新建会话",
+      "request": {
+        "cmd": "create_session"
+      },
+      "response": {
+        "ok": true,
+        "data": {
+          "session_id": "ftest-basic"
+        }
+      },
+      "ms": 1,
+      "pass": true,
+      "note": ""
+    },
+    {
+      "name": "F4_list_sessions",
+      "desc": "列会话含新建",
+      "request": {
+        "cmd": "list_sessions"
+      },
+      "response": {
+        "ok": true,
+        "data": {
+          "sessions": [
+            {
+              "id": "ftest-basic",
+              "title": null,
+              "system": "你是 cmx 企业桌面办公智能体，帮助用户处理日常办公与文件工作。\n\n工作区（沙箱根）：你的所有文件操作都在当前工作区内进行。**文件路径用相对工作根的相对路径即可**（例如直接写 `notes.md`、`docs/plan.md`），工具会自动挂到工作区根下；不要臆造绝对路径。\n\n可用能力：\n- 文件：fs_read 读文件、fs_write 写/建文件、fs_edit 精确改、apply_patch 打补丁、glob 找文件、grep 搜内容、repo_map 看目录结构。\n- 执行：bash 跑命令、run_tests 跑测试、git 版本控制（都在工作区内）。\n- 联网：web_search 搜索、web_fetch 抓网页取正文（查资料、读在线文档；优先用它们而不是 bash+curl）；动态/JS 页面(SPA)用 browser_read 无头渲染后取正文、browser_screenshot 网页截图；需点按/填表/搜索的交互页用 browser_do；无稳定选择器、必须看画面操作的用 computer_use(视觉回环)。\n- 计划：update_plan 登记多步任务清单（复杂任务先列计划再逐步执行）。\n- 企业引擎（如可用）：flow 流程、onto 本体、report 报表等连接器工具。**做企业读写前先用 enterprise_context 拉域模型接地**（知道有哪些对象/动作/流程再动手，别猜 key）。\n\n工作原则：\n1. 能用工具就用工具，别只是描述；动手完成用户的实际诉求。\n2. 多步任务先用 update_plan 列清单，再逐步推进。\n3. 改动文件后自我校验（读回确认 / 跑测试）。\n4. 高危或不确定的操作先说明并征询，安全第一。\n5. 用简洁中文回复，结论在前。",
+              "created_at": "2026-09-06T09:27:44.639287Z",
+              "updated_at": "2026-09-06T09:27:44.639287Z",
+              "event_count": 0
+            }
+          ]
+        }
+      },
+      "ms": 1,
+      "pass": true,
+      "note": ""
+    },
+    {
+      "name": "F5_add_tool",
+      "desc": "加法回合(fresh):add→sum5",
+      "request": {
+        "text": "算 2 加 3"
+      },
+      "response": {
+        "ok": true,
+        "data": {
+          "session_id": "ft-add",
+          "turn": 1,
+          "reason": "completed",
+          "steps": 2,
+          "final_text": "✅ 计算结果：5.0。",
+          "new_events": [
+            {
+              "seq": 1,
+              "ts": "2026-09-06T09:27:44.641389Z",
+              "kind": "turn_started",
+              "turn": 1,
+              "user_input": "算 2 加 3"
+            },
+            {
+              "seq": 2,
+              "ts": "2026-09-06T09:27:44.641389Z",
+              "kind": "user_message",
+              "text": "算 2 加 3"
+            },
+            {
+              "seq": 3,
+              "ts": "2026-09-06T09:27:44.641702Z",
+              "kind": "model_message",
+              "text": "我来算一下……",
+              "tool_calls": [
+                {
+                  "id": "call-add",
+                  "name": "add",
+                  "input": {
+                    "a": 2.0,
+                    "b": 3.0
+                  }
+                }
+              ]
+            },
+            {
+              "seq": 4,
+              "ts": "2026-09-06T09:27:44.641703Z",
+              "kind": "tool_invoked",
+              "call": {
+                "id": "call-add",
+                "name": "add",
+                "input": {
+                  "a": 2.0,
+                  "b": 3.0
+                }
+              }
+            },
+            {
+              "seq": 5,
+              "ts": "2026-09-06T09:27:44.641717Z",
+              "kind": "tool_result",
+              "call_id": "call-add",
+              "ok": true,
+              "output": {
+                "sum": 5.0
+              }
+            },
+            {
+              "seq": 6,
+              "ts": "2026-09-06T09:27:44.641983Z",
+              "kind": "model_message",
+              "text": "✅ 计算结果：5.0。",
+              "tool_calls": []
+            },
+            {
+              "seq": 7,
+              "ts": "2026-09-06T09:27:44.642005Z",
+              "kind": "turn_ended",
+              "turn": 1,
+              "reason": "completed",
+              "steps": 2
+            }
+          ]
+        }
+      },
+      "ms": 2,
+      "pass": true,
+      "note": "add_called=True sum5=True"
+    },
+    {
+      "name": "F6_get_events",
+      "desc": "事件类型齐全",
+      "request": {
+        "cmd": "get_events"
+      },
+      "response": {
+        "ok": true,
+        "data": {
+          "events": [
+            {
+              "seq": 1,
+              "ts": "2026-09-06T09:27:44.641389Z",
+              "kind": "turn_started",
+              "turn": 1,
+              "user_input": "算 2 加 3"
+            },
+            {
+              "seq": 2,
+              "ts": "2026-09-06T09:27:44.641389Z",
+              "kind": "user_message",
+              "text": "算 2 加 3"
+            },
+            {
+              "seq": 3,
+              "ts": "2026-09-06T09:27:44.641702Z",
+              "kind": "model_message",
+              "text": "我来算一下……",
+              "tool_calls": [
+                {
+                  "id": "call-add",
+                  "name": "add",
+                  "input": {
+                    "a": 2.0,
+                    "b": 3.0
+                  }
+                }
+              ]
+            },
+            {
+              "seq": 4,
+              "ts": "2026-09-06T09:27:44.641703Z",
+              "kind": "tool_invoked",
+              "call": {
+                "id": "call-add",
+                "name": "add",
+                "input": {
+                  "a": 2.0,
+                  "b": 3.0
+                }
+              }
+            },
+            {
+              "seq": 5,
+              "ts": "2026-09-06T09:27:44.641717Z",
+              "kind": "tool_result",
+              "call_id": "call-add",
+              "ok": true,
+              "output": {
+                "sum": 5.0
+              }
+            },
+            {
+              "seq": 6,
+              "ts": "2026-09-06T09:27:44.641983Z",
+              "kind": "model_message",
+              "text": "✅ 计算结果：5.0。",
+              "tool_calls": []
+            },
+            {
+              "seq": 7,
+              "ts": "2026-09-06T09:27:44.642005Z",
+              "kind": "turn_ended",
+              "turn": 1,
+              "reason": "completed",
+              "steps": 2
+            }
+          ],
+          "total": 7,
+          "start": 0,
+          "title": "算 2 加 3"
+        }
+      },
+      "ms": 1,
+      "pass": true,
+      "note": "kinds=['model_message', 'tool_invoked', 'tool_result', 'turn_ended', 'turn_started', 'user_message']"
+    },
+    {
+      "name": "F7_clock_tool",
+      "desc": "时钟回合(fresh):clock",
+      "request": {
+        "text": "现在几点了"
+      },
+      "response": {
+        "ok": true,
+        "data": {
+          "session_id": "ft-clock",
+          "turn": 1,
+          "reason": "completed",
+          "steps": 2,
+          "final_text": "✅ 现在是 2026-09-06T09:27:44.644383+00:00。",
+          "new_events": [
+            {
+              "seq": 1,
+              "ts": "2026-09-06T09:27:44.644096Z",
+              "kind": "turn_started",
+              "turn": 1,
+              "user_input": "现在几点了"
+            },
+            {
+              "seq": 2,
+              "ts": "2026-09-06T09:27:44.644097Z",
+              "kind": "user_message",
+              "text": "现在几点了"
+            },
+            {
+              "seq": 3,
+              "ts": "2026-09-06T09:27:44.644379Z",
+              "kind": "model_message",
+              "text": "让我看看现在几点……",
+              "tool_calls": [
+                {
+                  "id": "call-clock",
+                  "name": "clock",
+                  "input": {}
+                }
+              ]
+            },
+            {
+              "seq": 4,
+              "ts": "2026-09-06T09:27:44.644379Z",
+              "kind": "tool_invoked",
+              "call": {
+                "id": "call-clock",
+                "name": "clock",
+                "input": {}
+              }
+            },
+            {
+              "seq": 5,
+              "ts": "2026-09-06T09:27:44.644387Z",
+              "kind": "tool_result",
+              "call_id": "call-clock",
+              "ok": true,
+              "output": {
+                "now": "2026-09-06T09:27:44.644383+00:00"
+              }
+            },
+            {
+              "seq": 6,
+              "ts": "2026-09-06T09:27:44.644658Z",
+              "kind": "model_message",
+              "text": "✅ 现在是 2026-09-06T09:27:44.644383+00:00。",
+              "tool_calls": []
+            },
+            {
+              "seq": 7,
+              "ts": "2026-09-06T09:27:44.644681Z",
+              "kind": "turn_ended",
+              "turn": 1,
+              "reason": "completed",
+              "steps": 2
+            }
+          ]
+        }
+      },
+      "ms": 1,
+      "pass": true,
+      "note": "clock_called=True"
+    },
+    {
+      "name": "F8_flow_connector",
+      "desc": "flow连接器→live:8091",
+      "request": {
+        "text": "列出所有流程定义"
+      },
+      "response": {
+        "ok": true,
+        "data": {
+          "session_id": "ft-flow",
+          "turn": 1,
+          "reason": "completed",
+          "steps": 2,
+          "final_text": "✅ 完成。工具返回：{\"error\":\"flow 连接器调用失败: 服务返回 HTTP 404\"}",
+          "new_events": [
+            {
+              "seq": 1,
+              "ts": "2026-09-06T09:27:44.646251Z",
+              "kind": "turn_started",
+              "turn": 1,
+              "user_input": "列出所有流程定义"
+            },
+            {
+              "seq": 2,
+              "ts": "2026-09-06T09:27:44.646251Z",
+              "kind": "user_message",
+              "text": "列出所有流程定义"
+            },
+            {
+              "seq": 3,
+              "ts": "2026-09-06T09:27:44.646539Z",
+              "kind": "model_message",
+              "text": "好的，我去问 cmx-flow 流程引擎……",
+              "tool_calls": [
+                {
+                  "id": "call-flow",
+                  "name": "flow_list_definitions",
+                  "input": {}
+                }
+              ]
+            },
+            {
+              "seq": 4,
+              "ts": "2026-09-06T09:27:44.646540Z",
+              "kind": "tool_invoked",
+              "call": {
+                "id": "call-flow",
+                "name": "flow_list_definitions",
+                "input": {}
+              }
+            },
+            {
+              "seq": 5,
+              "ts": "2026-09-06T09:27:44.647081Z",
+              "kind": "tool_result",
+              "call_id": "call-flow",
+              "ok": false,
+              "output": {
+                "error": "flow 连接器调用失败: 服务返回 HTTP 404"
+              }
+            },
+            {
+              "seq": 6,
+              "ts": "2026-09-06T09:27:44.647373Z",
+              "kind": "model_message",
+              "text": "✅ 完成。工具返回：{\"error\":\"flow 连接器调用失败: 服务返回 HTTP 404\"}",
+              "tool_calls": []
+            },
+            {
+              "seq": 7,
+              "ts": "2026-09-06T09:27:44.647395Z",
+              "kind": "turn_ended",
+              "turn": 1,
+              "reason": "completed",
+              "steps": 2
+            }
+          ]
+        }
+      },
+      "ms": 2,
+      "pass": true,
+      "note": "called=True tool_ok=False out={\"error\": \"flow 连接器调用失败: 服务返回 HTTP 404\"}"
+    },
+    {
+      "name": "F9_onto_connector",
+      "desc": "onto连接器→live:8097",
+      "request": {
+        "text": "列出对象类型"
+      },
+      "response": {
+        "ok": true,
+        "data": {
+          "session_id": "ft-onto",
+          "turn": 1,
+          "reason": "completed",
+          "steps": 2,
+          "final_text": "✅ cmx-ontology 本体平台里有 0 个对象类型：（无）。",
+          "new_events": [
+            {
+              "seq": 1,
+              "ts": "2026-09-06T09:27:44.649085Z",
+              "kind": "turn_started",
+              "turn": 1,
+              "user_input": "列出对象类型"
+            },
+            {
+              "seq": 2,
+              "ts": "2026-09-06T09:27:44.649085Z",
+              "kind": "user_message",
+              "text": "列出对象类型"
+            },
+            {
+              "seq": 3,
+              "ts": "2026-09-06T09:27:44.649358Z",
+              "kind": "model_message",
+              "text": "好的，我去问 cmx-ontology 本体平台……",
+              "tool_calls": [
+                {
+                  "id": "call-onto",
+                  "name": "onto_list_object_types",
+                  "input": {}
+                }
+              ]
+            },
+            {
+              "seq": 4,
+              "ts": "2026-09-06T09:27:44.649359Z",
+              "kind": "tool_invoked",
+              "call": {
+                "id": "call-onto",
+                "name": "onto_list_object_types",
+                "input": {}
+              }
+            },
+            {
+              "seq": 5,
+              "ts": "2026-09-06T09:27:44.656276Z",
+              "kind": "tool_result",
+              "call_id": "call-onto",
+              "ok": true,
+              "output": {
+                "service": "cmx-ontology",
+                "count": 0,
+                "objectTypes": []
+              }
+            },
+            {
+              "seq": 6,
+              "ts": "2026-09-06T09:27:44.656575Z",
+              "kind": "model_message",
+              "text": "✅ cmx-ontology 本体平台里有 0 个对象类型：（无）。",
+              "tool_calls": []
+            },
+            {
+              "seq": 7,
+              "ts": "2026-09-06T09:27:44.656597Z",
+              "kind": "turn_ended",
+              "turn": 1,
+              "reason": "completed",
+              "steps": 2
+            }
+          ]
+        }
+      },
+      "ms": 8,
+      "pass": true,
+      "note": "called=True tool_ok=True out={\"service\": \"cmx-ontology\", \"count\": 0, \"objectTypes\": []}"
+    },
+    {
+      "name": "F10_report_connector",
+      "desc": "report连接器→live:8092",
+      "request": {
+        "text": "列出报表"
+      },
+      "response": {
+        "ok": true,
+        "data": {
+          "session_id": "ft-report",
+          "turn": 1,
+          "reason": "completed",
+          "steps": 2,
+          "final_text": "✅ 完成。工具返回：{\"error\":\"report 连接器：未找到可用的报表列表端点（服务可能未启动或端点路径不同）\"}",
+          "new_events": [
+            {
+              "seq": 1,
+              "ts": "2026-09-06T09:27:44.658154Z",
+              "kind": "turn_started",
+              "turn": 1,
+              "user_input": "列出报表"
+            },
+            {
+              "seq": 2,
+              "ts": "2026-09-06T09:27:44.658154Z",
+              "kind": "user_message",
+              "text": "列出报表"
+            },
+            {
+              "seq": 3,
+              "ts": "2026-09-06T09:27:44.658431Z",
+              "kind": "model_message",
+              "text": "好的，我去问 cmx-report 报表平台……",
+              "tool_calls": [
+                {
+                  "id": "call-report",
+                  "name": "report_list_reports",
+                  "input": {}
+                }
+              ]
+            },
+            {
+              "seq": 4,
+              "ts": "2026-09-06T09:27:44.658432Z",
+              "kind": "tool_invoked",
+              "call": {
+                "id": "call-report",
+                "name": "report_list_reports",
+                "input": {}
+              }
+            },
+            {
+              "seq": 5,
+              "ts": "2026-09-06T09:27:44.659221Z",
+              "kind": "tool_result",
+              "call_id": "call-report",
+              "ok": false,
+              "output": {
+                "error": "report 连接器：未找到可用的报表列表端点（服务可能未启动或端点路径不同）"
+              }
+            },
+            {
+              "seq": 6,
+              "ts": "2026-09-06T09:27:44.659488Z",
+              "kind": "model_message",
+              "text": "✅ 完成。工具返回：{\"error\":\"report 连接器：未找到可用的报表列表端点（服务可能未启动或端点路径不同）\"}",
+              "tool_calls": []
+            },
+            {
+              "seq": 7,
+              "ts": "2026-09-06T09:27:44.659510Z",
+              "kind": "turn_ended",
+              "turn": 1,
+              "reason": "completed",
+              "steps": 2
+            }
+          ]
+        }
+      },
+      "ms": 2,
+      "pass": true,
+      "note": "called=True tool_ok=False out={\"error\": \"report 连接器：未找到可用的报表列表端点（服务可能未启动或端点路径不同）\"}"
+    },
+    {
+      "name": "F11_text_fallback",
+      "desc": "无关键词→纯文本兜底(fresh)",
+      "request": {
+        "text": "你好呀"
+      },
+      "response": {
+        "ok": true,
+        "data": {
+          "session_id": "ft-fb",
+          "turn": 1,
+          "reason": "completed",
+          "steps": 1,
+          "final_text": "我是 cmx 企业桌面智能体（演示模型）。你说的是「你好呀」。\n试试：「列出所有流程定义」调 cmx-flow，「列出对象类型」调 cmx-ontology，「算 2 加 3」用内置工具。\n（真实大模型将在后续接入，届时可自然对话。）",
+          "new_events": [
+            {
+              "seq": 1,
+              "ts": "2026-09-06T09:27:44.661018Z",
+              "kind": "turn_started",
+              "turn": 1,
+              "user_input": "你好呀"
+            },
+            {
+              "seq": 2,
+              "ts": "2026-09-06T09:27:44.661019Z",
+              "kind": "user_message",
+              "text": "你好呀"
+            },
+            {
+              "seq": 3,
+              "ts": "2026-09-06T09:27:44.661284Z",
+              "kind": "model_message",
+              "text": "我是 cmx 企业桌面智能体（演示模型）。你说的是「你好呀」。\n试试：「列出所有流程定义」调 cmx-flow，「列出对象类型」调 cmx-ontology，「算 2 加 3」用内置工具。\n（真实大模型将在后续接入，届时可自然对话。）",
+              "tool_calls": []
+            },
+            {
+              "seq": 4,
+              "ts": "2026-09-06T09:27:44.661306Z",
+              "kind": "turn_ended",
+              "turn": 1,
+              "reason": "completed",
+              "steps": 1
+            }
+          ]
+        }
+      },
+      "ms": 1,
+      "pass": true,
+      "note": "fallback_text=True"
+    },
+    {
+      "name": "F12_pagination",
+      "desc": "分页尾加载 limit=2",
+      "request": {
+        "cmd": "get_events",
+        "limit": 2
+      },
+      "response": {
+        "ok": true,
+        "data": {
+          "events": [
+            {
+              "seq": 6,
+              "ts": "2026-09-06T09:27:44.641983Z",
+              "kind": "model_message",
+              "text": "✅ 计算结果：5.0。",
+              "tool_calls": []
+            },
+            {
+              "seq": 7,
+              "ts": "2026-09-06T09:27:44.642005Z",
+              "kind": "turn_ended",
+              "turn": 1,
+              "reason": "completed",
+              "steps": 2
+            }
+          ],
+          "total": 7,
+          "start": 5,
+          "title": "算 2 加 3"
+        }
+      },
+      "ms": 1,
+      "pass": true,
+      "note": "total=7 got=2"
+    },
+    {
+      "name": "F13_list_connectors",
+      "desc": "连接器面板+live健康",
+      "request": {
+        "cmd": "list_connectors"
+      },
+      "response": {
+        "ok": true,
+        "data": {
+          "connectors": [
+            {
+              "id": "flow",
+              "name": "流程引擎",
+              "service": "cmx-flow",
+              "base_url": "http://127.0.0.1:8091",
+              "tools": [
+                "flow_list_definitions"
+              ],
+              "description": "发起/查询审批流程，读流程定义",
+              "status": {
+                "online": true,
+                "service_name": "cmx-flow 流程引擎",
+                "uptime_secs": 1582,
+                "latency_ms": 0,
+                "detail": null
+              }
+            },
+            {
+              "id": "onto",
+              "name": "本体平台",
+              "service": "cmx-ontology",
+              "base_url": "http://127.0.0.1:8097",
+              "tools": [
+                "onto_list_object_types"
+              ],
+              "description": "读业务对象类型与实例（企业数字孪生）",
+              "status": {
+                "online": true,
+                "service_name": "cmx-ontology 本体平台",
+                "uptime_secs": 109,
+                "latency_ms": 0,
+                "detail": null
+              }
+            },
+            {
+              "id": "report",
+              "name": "报表平台",
+              "service": "cmx-report",
+              "base_url": "http://127.0.0.1:8092",
+              "tools": [
+                "report_list_reports"
+              ],
+              "description": "读报表定义与财报模板",
+              "status": {
+                "online": true,
+                "service_name": "cmx-rpt 报表平台",
+                "uptime_secs": 1582,
+                "latency_ms": 0,
+                "detail": null
+              }
+            }
+          ]
+        }
+      },
+      "ms": 1,
+      "pass": true,
+      "note": ""
+    },
+    {
+      "name": "F14_login_live",
+      "desc": "门户真登录 admin",
+      "request": {
+        "cmd": "login"
+      },
+      "response": {
+        "ok": true,
+        "data": {
+          "user": {
+            "user_id": "7476096793115533312",
+            "username": "admin",
+            "nickname": "Super Admin",
+            "roles": [
+              "admin",
+              "df_finance",
+              "mdm_approver"
+            ]
+          }
+        }
+      },
+      "ms": 1184,
+      "pass": true,
+      "note": ""
+    },
+    {
+      "name": "F15_current_user_auth",
+      "desc": "登录后取用户",
+      "request": {
+        "cmd": "current_user"
+      },
+      "response": {
+        "ok": true,
+        "data": {
+          "user": {
+            "user_id": "7476096793115533312",
+            "username": "admin",
+            "nickname": "Super Admin",
+            "roles": [
+              "admin",
+              "df_finance",
+              "mdm_approver"
+            ]
+          }
+        }
+      },
+      "ms": 1,
+      "pass": true,
+      "note": "user={'user_id': '7476096793115533312', 'username': 'admin', 'nickname': 'Super Admin', 'roles': ['admin', 'df_finance', 'mdm_approver']}"
+    },
+    {
+      "name": "F16_logout",
+      "desc": "登出",
+      "request": {
+        "cmd": "logout"
+      },
+      "response": {
+        "ok": true,
+        "data": {
+          "ok": true
+        }
+      },
+      "ms": 0,
+      "pass": true,
+      "note": ""
+    },
+    {
+      "name": "F16b_logout_verify",
+      "desc": "登出后用户空",
+      "request": {
+        "cmd": "current_user"
+      },
+      "response": {
+        "ok": true,
+        "data": {
+          "user": null
+        }
+      },
+      "ms": 0,
+      "pass": true,
+      "note": ""
+    },
+    {
+      "name": "F17_delete_session",
+      "desc": "删会话并校验消失",
+      "request": {
+        "cmd": "delete_session"
+      },
+      "response": {
+        "del": {
+          "ok": true,
+          "data": {
+            "deleted": "ft-add"
+          }
+        },
+        "list": {
+          "ok": true,
+          "data": {
+            "sessions": [
+              {
+                "id": "ft-fb",
+                "title": "你好呀",
+                "system": "你是 cmx 企业桌面办公智能体，帮助用户处理日常办公与文件工作。\n\n工作区（沙箱根）：你的所有文件操作都在当前工作区内进行。**文件路径用相对工作根的相对路径即可**（例如直接写 `notes.md`、`docs/plan.md`），工具会自动挂到工作区根下；不要臆造绝对路径。\n\n可用能力：\n- 文件：fs_read 读文件、fs_write 写/建文件、fs_edit 精确改、apply_patch 打补丁、glob 找文件、grep 搜内容、repo_map 看目录结构。\n- 执行：bash 跑命令、run_tests 跑测试、git 版本控制（都在工作区内）。\n- 联网：web_search 搜索、web_fetch 抓网页取正文（查资料、读在线文档；优先用它们而不是 bash+curl）；动态/JS 页面(SPA)用 browser_read 无头渲染后取正文、browser_screenshot 网页截图；需点按/填表/搜索的交互页用 browser_do；无稳定选择器、必须看画面操作的用 computer_use(视觉回环)。\n- 计划：update_plan 登记多步任务清单（复杂任务先列计划再逐步执行）。\n- 企业引擎（如可用）：flow 流程、onto 本体、report 报表等连接器工具。**做企业读写前先用 enterprise_context 拉域模型接地**（知道有哪些对象/动作/流程再动手，别猜 key）。\n\n工作原则：\n1. 能用工具就用工具，别只是描述；动手完成用户的实际诉求。\n2. 多步任务先用 update_plan 列清单，再逐步推进。\n3. 改动文件后自我校验（读回确认 / 跑测试）。\n4. 高危或不确定的操作先说明并征询，安全第一。\n5. 用简洁中文回复，结论在前。",
+                "created_at": "2026-09-06T09:27:44.660930Z",
+                "updated_at": "2026-09-06T09:27:44.661396Z",
+                "event_count": 4
+              },
+              {
+                "id": "ft-report",
+                "title": "列出报表",
+                "system": "你是 cmx 企业桌面办公智能体，帮助用户处理日常办公与文件工作。\n\n工作区（沙箱根）：你的所有文件操作都在当前工作区内进行。**文件路径用相对工作根的相对路径即可**（例如直接写 `notes.md`、`docs/plan.md`），工具会自动挂到工作区根下；不要臆造绝对路径。\n\n可用能力：\n- 文件：fs_read 读文件、fs_write 写/建文件、fs_edit 精确改、apply_patch 打补丁、glob 找文件、grep 搜内容、repo_map 看目录结构。\n- 执行：bash 跑命令、run_tests 跑测试、git 版本控制（都在工作区内）。\n- 联网：web_search 搜索、web_fetch 抓网页取正文（查资料、读在线文档；优先用它们而不是 bash+curl）；动态/JS 页面(SPA)用 browser_read 无头渲染后取正文、browser_screenshot 网页截图；需点按/填表/搜索的交互页用 browser_do；无稳定选择器、必须看画面操作的用 computer_use(视觉回环)。\n- 计划：update_plan 登记多步任务清单（复杂任务先列计划再逐步执行）。\n- 企业引擎（如可用）：flow 流程、onto 本体、report 报表等连接器工具。**做企业读写前先用 enterprise_context 拉域模型接地**（知道有哪些对象/动作/流程再动手，别猜 key）。\n\n工作原则：\n1. 能用工具就用工具，别只是描述；动手完成用户的实际诉求。\n2. 多步任务先用 update_plan 列清单，再逐步推进。\n3. 改动文件后自我校验（读回确认 / 跑测试）。\n4. 高危或不确定的操作先说明并征询，安全第一。\n5. 用简洁中文回复，结论在前。",
+                "created_at": "2026-09-06T09:27:44.658057Z",
+                "updated_at": "2026-09-06T09:27:44.659631Z",
+                "event_count": 7
+              },
+              {
+                "id": "ft-onto",
+                "title": "列出对象类型",
+                "system": "你是 cmx 企业桌面办公智能体，帮助用户处理日常办公与文件工作。\n\n工作区（沙箱根）：你的所有文件操作都在当前工作区内进行。**文件路径用相对工作根的相对路径即可**（例如直接写 `notes.md`、`docs/plan.md`），工具会自动挂到工作区根下；不要臆造绝对路径。\n\n可用能力：\n- 文件：fs_read 读文件、fs_write 写/建文件、fs_edit 精确改、apply_patch 打补丁、glob 找文件、grep 搜内容、repo_map 看目录结构。\n- 执行：bash 跑命令、run_tests 跑测试、git 版本控制（都在工作区内）。\n- 联网：web_search 搜索、web_fetch 抓网页取正文（查资料、读在线文档；优先用它们而不是 bash+curl）；动态/JS 页面(SPA)用 browser_read 无头渲染后取正文、browser_screenshot 网页截图；需点按/填表/搜索的交互页用 browser_do；无稳定选择器、必须看画面操作的用 computer_use(视觉回环)。\n- 计划：update_plan 登记多步任务清单（复杂任务先列计划再逐步执行）。\n- 企业引擎（如可用）：flow 流程、onto 本体、report 报表等连接器工具。**做企业读写前先用 enterprise_context 拉域模型接地**（知道有哪些对象/动作/流程再动手，别猜 key）。\n\n工作原则：\n1. 能用工具就用工具，别只是描述；动手完成用户的实际诉求。\n2. 多步任务先用 update_plan 列清单，再逐步推进。\n3. 改动文件后自我校验（读回确认 / 跑测试）。\n4. 高危或不确定的操作先说明并征询，安全第一。\n5. 用简洁中文回复，结论在前。",
+                "created_at": "2026-09-06T09:27:44.648989Z",
+                "updated_at": "2026-09-06T09:27:44.656724Z",
+                "event_count": 7
+              },
+              {
+                "id": "ft-flow",
+                "title": "列出所有流程定义",
+                "system": "你是 cmx 企业桌面办公智能体，帮助用户处理日常办公与文件工作。\n\n工作区（沙箱根）：你的所有文件操作都在当前工作区内进行。**文件路径用相对工作根的相对路径即可**（例如直接写 `notes.md`、`docs/plan.md`），工具会自动挂到工作区根下；不要臆造绝对路径。\n\n可用能力：\n- 文件：fs_read 读文件、fs_write 写/建文件、fs_edit 精确改、apply_patch 打补丁、glob 找文件、grep 搜内容、repo_map 看目录结构。\n- 执行：bash 跑命令、run_tests 跑测试、git 版本控制（都在工作区内）。\n- 联网：web_search 搜索、web_fetch 抓网页取正文（查资料、读在线文档；优先用它们而不是 bash+curl）；动态/JS 页面(SPA)用 browser_read 无头渲染后取正文、browser_screenshot 网页截图；需点按/填表/搜索的交互页用 browser_do；无稳定选择器、必须看画面操作的用 computer_use(视觉回环)。\n- 计划：update_plan 登记多步任务清单（复杂任务先列计划再逐步执行）。\n- 企业引擎（如可用）：flow 流程、onto 本体、report 报表等连接器工具。**做企业读写前先用 enterprise_context 拉域模型接地**（知道有哪些对象/动作/流程再动手，别猜 key）。\n\n工作原则：\n1. 能用工具就用工具，别只是描述；动手完成用户的实际诉求。\n2. 多步任务先用 update_plan 列清单，再逐步推进。\n3. 改动文件后自我校验（读回确认 / 跑测试）。\n4. 高危或不确定的操作先说明并征询，安全第一。\n5. 用简洁中文回复，结论在前。",
+                "created_at": "2026-09-06T09:27:44.646138Z",
+                "updated_at": "2026-09-06T09:27:44.647559Z",
+                "event_count": 7
+              },
+              {
+                "id": "ft-clock",
+                "title": "现在几点了",
+                "system": "你是 cmx 企业桌面办公智能体，帮助用户处理日常办公与文件工作。\n\n工作区（沙箱根）：你的所有文件操作都在当前工作区内进行。**文件路径用相对工作根的相对路径即可**（例如直接写 `notes.md`、`docs/plan.md`），工具会自动挂到工作区根下；不要臆造绝对路径。\n\n可用能力：\n- 文件：fs_read 读文件、fs_write 写/建文件、fs_edit 精确改、apply_patch 打补丁、glob 找文件、grep 搜内容、repo_map 看目录结构。\n- 执行：bash 跑命令、run_tests 跑测试、git 版本控制（都在工作区内）。\n- 联网：web_search 搜索、web_fetch 抓网页取正文（查资料、读在线文档；优先用它们而不是 bash+curl）；动态/JS 页面(SPA)用 browser_read 无头渲染后取正文、browser_screenshot 网页截图；需点按/填表/搜索的交互页用 browser_do；无稳定选择器、必须看画面操作的用 computer_use(视觉回环)。\n- 计划：update_plan 登记多步任务清单（复杂任务先列计划再逐步执行）。\n- 企业引擎（如可用）：flow 流程、onto 本体、report 报表等连接器工具。**做企业读写前先用 enterprise_context 拉域模型接地**（知道有哪些对象/动作/流程再动手，别猜 key）。\n\n工作原则：\n1. 能用工具就用工具，别只是描述；动手完成用户的实际诉求。\n2. 多步任务先用 update_plan 列清单，再逐步推进。\n3. 改动文件后自我校验（读回确认 / 跑测试）。\n4. 高危或不确定的操作先说明并征询，安全第一。\n5. 用简洁中文回复，结论在前。",
+                "created_at": "2026-09-06T09:27:44.643984Z",
+                "updated_at": "2026-09-06T09:27:44.644793Z",
+                "event_count": 7
+              },
+              {
+                "id": "ftest-basic",
+                "title": null,
+                "system": "你是 cmx 企业桌面办公智能体，帮助用户处理日常办公与文件工作。\n\n工作区（沙箱根）：你的所有文件操作都在当前工作区内进行。**文件路径用相对工作根的相对路径即可**（例如直接写 `notes.md`、`docs/plan.md`），工具会自动挂到工作区根下；不要臆造绝对路径。\n\n可用能力：\n- 文件：fs_read 读文件、fs_write 写/建文件、fs_edit 精确改、apply_patch 打补丁、glob 找文件、grep 搜内容、repo_map 看目录结构。\n- 执行：bash 跑命令、run_tests 跑测试、git 版本控制（都在工作区内）。\n- 联网：web_search 搜索、web_fetch 抓网页取正文（查资料、读在线文档；优先用它们而不是 bash+curl）；动态/JS 页面(SPA)用 browser_read 无头渲染后取正文、browser_screenshot 网页截图；需点按/填表/搜索的交互页用 browser_do；无稳定选择器、必须看画面操作的用 computer_use(视觉回环)。\n- 计划：update_plan 登记多步任务清单（复杂任务先列计划再逐步执行）。\n- 企业引擎（如可用）：flow 流程、onto 本体、report 报表等连接器工具。**做企业读写前先用 enterprise_context 拉域模型接地**（知道有哪些对象/动作/流程再动手，别猜 key）。\n\n工作原则：\n1. 能用工具就用工具，别只是描述；动手完成用户的实际诉求。\n2. 多步任务先用 update_plan 列清单，再逐步推进。\n3. 改动文件后自我校验（读回确认 / 跑测试）。\n4. 高危或不确定的操作先说明并征询，安全第一。\n5. 用简洁中文回复，结论在前。",
+                "created_at": "2026-09-06T09:27:44.639287Z",
+                "updated_at": "2026-09-06T09:27:44.639287Z",
+                "event_count": 0
+              }
+            ]
+          }
+        }
+      },
+      "ms": 1,
+      "pass": true,
+      "note": ""
+    },
+    {
+      "name": "F18_bad_cmd",
+      "desc": "未知命令→错误信封",
+      "request": {
+        "cmd": "no_such_command"
+      },
+      "response": {
+        "ok": false,
+        "error": {
+          "code": "bad_request",
+          "message": "invalid request json: unknown variant `no_such_command`, expected one of `create_session`, `send`, `get_events`, `list_sessions`, `delete_session`, `list_connectors`, `login`, `current_user`, `logout`, `approve` at line 1 column 25"
+        }
+      },
+      "ms": 0,
+      "pass": true,
+      "note": ""
+    }
+  ]
+}

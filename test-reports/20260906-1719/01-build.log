@@ -1,0 +1,4 @@
+   Compiling cmx-agent-cli v0.1.0 (/Users/nanomesh/Workspace/presentation/cmx-agent/crates/cmx-agent-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.36s
+   Compiling cmx-agent-shell v0.1.0 (/Users/nanomesh/Workspace/presentation/cmx-agent/crates/cmx-agent-shell/src-tauri)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.19s

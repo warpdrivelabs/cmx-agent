@@ -394,7 +394,9 @@ dependencies = [
  "cmx-agent-core",
  "cmx-agent-lsp",
  "cmx-agent-model",
+ "cmx-agent-net",
  "cmx-agent-office",
+ "cmx-agent-plugin",
  "cmx-agent-tools",
  "serde",
  "serde_json",
@@ -473,6 +475,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "cmx-agent-net"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "cmx-agent-core",
+ "reqwest 0.12.28",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "cmx-agent-office"
 version = "0.1.0"
 dependencies = [
@@ -489,12 +504,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "cmx-agent-plugin"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "cmx-agent-core",
+ "cmx-agent-mcp",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "cmx-agent-shell"
 version = "0.1.0"
 dependencies = [
  "cmx-agent-app",
  "cmx-agent-core",
  "cmx-agent-mcp",
+ "cmx-agent-plugin",
  "directories",
  "serde_json",
  "tauri",

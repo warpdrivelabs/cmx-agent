@@ -267,6 +267,20 @@
   .tool .tcode{margin:7px 0 2px;background:var(--bg2,#0d1420);border:1px solid var(--border);border-radius:8px;padding:9px 12px;
     font-family:"SF Mono",Menlo,monospace;font-size:11.5px;line-height:1.5;color:var(--ink);white-space:pre;overflow:auto;max-height:340px}
   .tool .tcempty{color:var(--muted);font-size:11.5px;margin-top:5px}
+  /* U10 web_search 结果条 + web_fetch 页头 */
+  .tool .wsr{margin:8px 0;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface)}
+  .tool .wsr .wsr-t{font-size:13.5px;font-weight:600;color:var(--aqua);line-height:1.4}
+  .tool .wsr .wsr-u{font-size:11px;color:var(--muted);font-family:"SF Mono",Menlo,monospace;margin:2px 0;word-break:break-all}
+  .tool .wsr .wsr-s{font-size:12.5px;color:var(--ink2);line-height:1.5;margin-top:3px}
+  .tool .wf-title{font-size:14px;font-weight:700;color:var(--ink);margin:7px 0 2px}
+  .tool .wf-url{font-size:11px;color:var(--muted);font-family:"SF Mono",Menlo,monospace;margin-bottom:4px;word-break:break-all}
+  /* U8 computer_use 轨迹 */
+  .tool .cutrace{display:flex;flex-wrap:wrap;gap:5px;margin:7px 0}
+  .tool .cuact{font-size:11.5px;font-family:"SF Mono",Menlo,monospace;color:var(--ink2);background:var(--panel);border:1px solid var(--border2);border-radius:6px;padding:2px 8px}
+  /* U12 企业域模型分组 */
+  .tool .ecrow{display:flex;gap:8px;align-items:baseline;margin:6px 0}
+  .tool .ecrow .ecl{flex:0 0 64px;font-size:12px;color:var(--muted)} .tool .ecrow .ecl b{color:var(--aqua)}
+  .tool .ecrow .ecc{display:flex;flex-wrap:wrap;gap:5px}
   /* P3/U7 图表 + 数据概览 */
   .tool .tchartimg{margin:8px 0 2px;background:#fff;border:1px solid var(--border);border-radius:10px;padding:8px;overflow:auto}
   .tool .tchartimg img{display:block;max-width:100%;height:auto}
@@ -353,6 +367,55 @@
   .conn-toolbar .ct{font-weight:600;font-size:14px} .conn-toolbar .cm{color:var(--muted);font-size:12px}
   .conn-toolbar .back{color:var(--ink2);font-size:13px;padding:5px 9px;border-radius:7px} .conn-toolbar .back:hover{background:var(--hover)}
   .connlist{flex:1;overflow:auto;padding:22px;display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;align-content:start}
+
+  /* 插件 master-detail：列表在侧栏（原位置），详情在主内容区 tab（VSCode 式） */
+  .pg-search{display:flex;gap:6px;padding:2px 0 10px}
+  .pg-search input{flex:1;background:var(--surface);border:1px solid var(--border2);color:var(--ink);border-radius:8px;padding:7px 10px;font-size:12.5px;outline:none}
+  .pg-search input:focus{border-color:var(--aqua)}
+  .pg-refresh{flex:0 0 auto;background:var(--surface);border:1px solid var(--border2);color:var(--ink2);border-radius:8px;padding:0 10px;cursor:pointer}
+  .pg-refresh:hover{background:var(--hover)}
+  .pg-list{flex:1;overflow:auto;margin:0 -4px}
+  .pg-sec{font-size:11px;font-weight:700;color:var(--muted);padding:12px 8px 5px;letter-spacing:.5px}
+  .pg-hint,.pg-loading{color:var(--muted);font-size:12px;padding:8px 10px}
+  .pg-item.sel{background:var(--accent-soft)}
+  .pg-item.sel .pn{color:var(--aqua)}
+  /* 详情（主内容区 tab） */
+  .plugins-detail-view{flex:1;display:flex;flex-direction:column;min-height:0}
+  .pg-detail{flex:1;min-width:0;overflow:auto;background:var(--bg)}
+  .pg-empty{color:var(--muted);font-size:13px;padding:40px 30px;text-align:center}
+  .pg-empty.sm{padding:16px;text-align:left}
+  .pg-detail-inner{padding:0 0 30px}
+  .pg-topbar{height:3px;background:var(--muted)}
+  .pg-detail-inner.is-installed .pg-topbar{background:var(--aqua)}
+  .pg-head{display:flex;gap:16px;padding:22px 26px 12px}
+  .pg-ico{width:64px;height:64px;flex:0 0 64px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:34px;color:#fff}
+  .pg-h-main{min-width:0;flex:1}
+  .pg-title{font-size:19px;font-weight:700;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .pg-sub{color:var(--muted);font-size:12.5px;margin-top:4px}
+  .pg-desc{color:var(--ink2);font-size:13.5px;margin-top:8px;line-height:1.5}
+  .pg-badge{font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;border:1px solid}
+  .pg-badge.installed{color:var(--aqua);border-color:var(--aqua);background:var(--accent-soft)}
+  .pg-badge.market{color:var(--muted);border-color:var(--border2)}
+  .pg-actions{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+  .pg-actbtn{font-size:12.5px;padding:6px 14px;border-radius:8px;border:1px solid var(--border2);background:var(--surface);color:var(--ink);cursor:pointer}
+  .pg-actbtn:hover{background:var(--hover)}
+  .pg-actbtn.primary{background:var(--aqua);border-color:var(--aqua);color:#fff}
+  .pg-actbtn.primary:hover{filter:brightness(1.06)}
+  .pg-actbtn.ghost{background:transparent;color:var(--ink2)}
+  .pg-actbtn.danger{background:var(--red);border-color:var(--red);color:#fff}
+  .pg-actbtn:disabled{opacity:.6;cursor:default}
+  .pg-sec-h{font-size:12px;font-weight:700;color:var(--muted);letter-spacing:.5px;padding:16px 26px 8px;border-top:1px solid var(--border);margin-top:14px}
+  .pg-chips{display:flex;flex-wrap:wrap;gap:7px;padding:2px 26px 4px}
+  .pg-chip{font-size:11.5px;padding:4px 10px;border-radius:7px;background:var(--surface);border:1px solid var(--border2);color:var(--ink2)}
+  .pg-chip.perm{color:var(--violet);border-color:var(--violet)}
+  .pg-chip.warn{color:var(--orange);border-color:var(--orange)}
+  .pg-kvs{padding:6px 26px}
+  .pg-kv{display:flex;gap:10px;font-size:12.5px;padding:3px 0}
+  .pg-kv .k{flex:0 0 90px;color:var(--muted)} .pg-kv .v{color:var(--ink2);word-break:break-all;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .pg-frame-bar{padding:4px 26px 8px;font-size:12px;color:var(--muted)}
+  .pg-link{color:var(--blue);cursor:pointer;text-decoration:underline;word-break:break-all}
+  .pg-frame-hint{color:var(--muted);margin-left:6px}
+  .pg-frame{display:block;width:calc(100% - 52px);height:60vh;margin:0 26px;border:1px solid var(--border2);border-radius:10px;background:#fff}
   .empty-detail{text-align:center;max-width:420px}
   .empty-detail .ed-ico{font-size:52px;margin-bottom:14px;opacity:.9}
   .empty-detail .ed-t{font-size:20px;font-weight:700;margin-bottom:10px}
@@ -427,8 +490,8 @@
     <!-- 插件管理面板（VSCode 式）-->
     <div class="panel plugins-panel" id="panel-plugins">
       <div class="brand"><span class="uname">插件管理</span></div>
-      <div class="im-search"><input type="text" placeholder="🔍 在市场中搜索插件" /></div>
-      <div class="plug-list" id="plug-list"></div>
+      <div class="pg-search"><input type="text" id="pg-search-input" placeholder="🔍 搜索已安装 / 市场插件" /><button class="pg-refresh" id="pg-refresh" title="刷新">⟳</button></div>
+      <div class="pg-list" id="pg-list"></div>
     </div>
   </aside>
   <!-- 左右分栏拖动条：拖动调整左侧栏宽度（宽度存 localStorage）-->
@@ -532,6 +595,11 @@
       <div class="connectors-view">
         <div class="conn-toolbar"><span class="ct">专家 · 技能 · 连接器</span><span class="cm">把运行中的 cmx 引擎接成智能体的工具</span><div class="sp" style="flex:1"></div><button class="back tab-conn-refresh">⟳ 刷新</button></div>
         <div class="connlist"></div>
+      </div>
+    </template>
+    <template id="tpl-plugins">
+      <div class="plugins-detail-view">
+        <div class="pg-detail"><div class="pg-empty">← 在左侧插件列表中选择一个插件查看详情</div></div>
       </div>
     </template>
   </main>
@@ -763,6 +831,24 @@ function renderToolInvoke(c){
   const name=c.name||"", input=c.input||{};
   if(name==="task" && input.prompt!=null) return `<div class="tchead">🤖 <b>子智能体</b> <span class="tcpath">${esc(input.label||"子任务")}</span></div><div class="tcsub">${esc(String(input.prompt))}</div>`;
   if(name==="bash" && input.cmd!=null) return `<div class="tchead">🔧 <b>bash</b></div><pre class="tterm">$ ${esc(input.cmd)}</pre>`;
+  if(name==="web_fetch" && input.url!=null) return `<div class="tchead">🌐 <b>web_fetch</b> <span class="tcpath">${esc(input.url)}</span></div>`;
+  if(name==="web_search" && input.query!=null) return `<div class="tchead">🔎 <b>web_search</b> <span class="tcpath">${esc(input.query)}</span></div>`;
+  if(name==="browser_read" && input.url!=null) return `<div class="tchead">🖥 <b>browser_read</b> <span class="tcpath">${esc(input.url)}</span></div>`;
+  if(name==="browser_screenshot" && input.url!=null) return `<div class="tchead">📷 <b>browser_screenshot</b> <span class="tcpath">${esc(input.url)}</span></div>`;
+  if(name==="browser_do" && input.url!=null) return `<div class="tchead">⌨️ <b>browser_do</b> <span class="tcpath">${esc(input.url)}</span> <span class="tcmeta">${(input.actions||[]).length} 步交互</span></div>`;
+  if(name==="computer_use" && input.url!=null) return `<div class="tchead">👁️ <b>computer_use</b> <span class="tcpath">${esc(input.url)}</span></div>`+(input.goal?`<div class="apreason">🎯 ${esc(String(input.goal))}</div>`:"");
+  // U11 引擎写侧调用头（写操作，随后会弹审批卡）
+  if(name==="flow_start_instance") return `<div class="tchead">⚙️ <b>flow 起实例</b> <span class="tcpath">${esc(input.definitionKey||"")}</span></div>`;
+  if(name==="flow_complete_task") return `<div class="tchead">⚙️ <b>flow 办理任务</b> <span class="tcpath">${esc(input.taskId||"")}</span></div>`;
+  if(name==="onto_put_object") return `<div class="tchead">🧩 <b>onto 写对象</b> <span class="tcpath">${esc(input.objectType||"")}</span></div>`;
+  if(name==="onto_execute_action") return `<div class="tchead">🧩 <b>onto 执行动作</b> <span class="tcpath">${esc(input.actionType||"")}</span>${input.dryRun?' <span class="tcmeta">试算</span>':''}</div>`;
+  if(name==="report_compute") return `<div class="tchead">📊 <b>report 计算</b> <span class="tcpath">${esc(input.reportCode||"")}</span></div>`;
+  if(name==="enterprise_context") return `<div class="tchead">🏛️ <b>企业上下文</b> <span class="tcmeta">拉取域模型${(input.scopes&&input.scopes.length)?"："+esc(input.scopes.join("/")):""}</span></div>`;
+  if(name==="business_chain") return `<div class="tchead">🔗 <b>业务联动</b> <span class="tcmeta">${(input.steps||[]).length} 步流水线</span></div>`
+    +((input.steps||[]).length?`<div class="cutrace">${(input.steps||[]).map(s=>`<span class="cuact">${esc(String(s.op||"?"))}</span>`).join("")}</div>`:"");
+  if(name==="plugin_list") return `<div class="tchead">🧩 <b>plugin_list</b> <span class="tcmeta">列出已装插件</span></div>`;
+  if(name==="plugin_marketplace") return `<div class="tchead">🛒 <b>plugin_marketplace</b> <span class="tcpath">${esc(input.url||"")}</span> <span class="tcmeta">浏览远程市场</span></div>`;
+  if(name==="plugin_install") return `<div class="tchead">🧩 <b>plugin_install</b> <span class="tcpath">${esc((input.manifest&&input.manifest.name)||input.name||"")}</span>${input.name&&!input.manifest?' <span class="tcmeta">来自市场</span>':''}</div>`;
   // fs_edit → 红绿 diff（old_string 删除 / new_string 新增）
   if(name==="fs_edit" && input.old_string!=null && input.new_string!=null)
     return `<div class="tchead">✏️ <b>fs_edit</b> <span class="tcpath">${esc(input.path||"")}</span></div>${renderDiff(input.old_string, input.new_string)}`;
@@ -803,6 +889,49 @@ function renderToolResult(ev){
     let b64=""; try{ b64=btoa(unescape(encodeURIComponent(o.svg))); }catch(e){}
     const saved=o.saved?` <span class="tcpath">已存 ${esc(String(o.saved).split("/").pop())}</span>`:"";
     return `<div class="tchead">📊 图表${saved}</div><div class="tchartimg"><img alt="chart" src="data:image/svg+xml;base64,${b64}"></div>`;
+  }
+  // U10 web_search：结果列表（标题/链接/摘要）
+  if(Array.isArray(o.results) && o.query!=null){
+    const items=o.results.map(x=>`<div class="wsr"><div class="wsr-t">${esc(x.title||x.url||"")}</div>`
+      +`<div class="wsr-u">${esc(x.url||"")}</div>`
+      +(x.snippet?`<div class="wsr-s">${esc(x.snippet)}</div>`:"")+`</div>`).join("");
+    return `<div class="tchead">🔎 搜索结果 <span class="tcmeta">${o.count??o.results.length} 条 · ${esc(String(o.query))}</span></div>`
+      +(items||`<div class="tcempty">（无结果）</div>`);
+  }
+  // U8 browser_screenshot：截图落工作区（不内联图片，避免 webview 资源协议限制，展示路径+尺寸）
+  if(o.bytes!=null && o.width!=null && o.path!=null){
+    const kb=(o.bytes/1024).toFixed(0);
+    return `<div class="tchead">📷 网页截图 <span class="tcmeta">${o.width}×${o.height} · ${kb} KB</span></div>`
+      +`<div class="wf-url">${esc(String(o.path))}</div>`;
+  }
+  // U8 computer_use：视觉回环轨迹 + 结论
+  if(o.computer_use===true){
+    const acts=(o.actions||[]).map(a=>`<span class="cuact">${esc(String(a))}</span>`).join("");
+    const badge=o.done?`<span class="apresolved ok">✓ 达成</span>`:`<span class="apresolved no">步数用尽</span>`;
+    return `<div class="tchead">👁️ computer-use <span class="tcmeta">${o.steps??0} 步</span></div>`
+      +(o.goal?`<div class="apreason">🎯 ${esc(String(o.goal))}</div>`:"")
+      +(acts?`<div class="cutrace">${acts}</div>`:"")
+      +(o.answer?`<div class="tcsub md">${renderMarkdown(String(o.answer))}</div>`:"")
+      +`<div style="margin-top:6px">${badge}</div>`;
+  }
+  // U8 browser_do：交互后结果文本（标题 + URL + 正文；步数）
+  if(o.interacted===true && o.text!=null){
+    const title=o.title?`<div class="wf-title">${esc(String(o.title))}</div>`:"";
+    return `<div class="tchead">⌨️ 浏览器交互 <span class="tcmeta">${o.steps??0} 步 · ${o.chars??""} 字符</span></div>`
+      +title+(o.url?`<div class="wf-url">${esc(String(o.url))}</div>`:"")+`<pre class="tcode">${esc(String(o.text))}</pre>`;
+  }
+  // U8 browser_read：无头渲染后的正文（同 web_fetch 版式，头标「渲染」）
+  if(o.rendered===true && o.text!=null){
+    const title=o.title?`<div class="wf-title">${esc(String(o.title))}</div>`:"";
+    return `<div class="tchead">🖥 渲染网页 <span class="tcmeta">${o.chars??""} 字符</span></div>`
+      +title+(o.url?`<div class="wf-url">${esc(String(o.url))}</div>`:"")+`<pre class="tcode">${esc(String(o.text))}</pre>`;
+  }
+  // U10 web_fetch：网页正文（标题 + URL + 正文文本）
+  if(o.text!=null && o.url!=null && o.status!=null){
+    const head=`<div class="tchead">🌐 网页 <span class="tcmeta">${o.chars??""} 字符 · HTTP ${o.status}</span></div>`;
+    const title=o.title?`<div class="wf-title">${esc(String(o.title))}</div>`:"";
+    const link=`<div class="wf-url">${esc(String(o.url))}</div>`;
+    return head+title+link+`<pre class="tcode">${esc(String(o.text))}</pre>`;
   }
   // data_describe：数据概览（行数 + 列统计）
   if(o.rows!=null && Array.isArray(o.columns)){
@@ -846,6 +975,56 @@ function renderToolResult(ev){
     if(err) h+=`<pre class="tterm tterr">${esc(err)}</pre>`;
     if(!out && !err) h+=`<div class="tcempty">（无输出）</div>`;
     return h;
+  }
+  // U15 插件：远程市场（有 url）/ plugin_list 清单（有 dir）/ http/command/wasm 结果 / 安装
+  if(o.service==="cmx-plugin" && Array.isArray(o.plugins) && o.url!==undefined){
+    const items=o.plugins.map(p=>`<div class="ecrow"><span class="ecl">${esc(String(p.kind||""))}</span><span class="ecc"><span class="cuact">${esc(String(p.name||""))}${p.version?(" <span style=\"color:var(--muted)\">v"+esc(String(p.version))+"</span>"):""}</span><span style="color:var(--muted);font-size:11.5px">${p.installable?"":"（无内嵌清单）"}${esc(String(p.description||""))}</span></span></div>`).join("");
+    return `<div class="tchead">🛒 插件市场 ${esc(String(o.market||""))} <span class="tcmeta">${o.count??0} 个可装</span></div>${items||'<div class="tcempty">（市场暂无可装插件）</div>'}<div class="tcempty">plugin_install 传 {name} 即可从市场安装</div>`;
+  }
+  if(o.service==="cmx-plugin" && Array.isArray(o.plugins)){
+    const items=o.plugins.map(p=>`<div class="ecrow"><span class="ecl">${esc(String(p.kind||""))}</span><span class="ecc"><span class="cuact">${esc(String(p.name||""))}</span><span style="color:var(--muted);font-size:11.5px">${esc(String(p.description||""))}</span></span></div>`).join("");
+    return `<div class="tchead">🧩 已装插件 <span class="tcmeta">${o.count??0} 个</span></div>${items||'<div class="tcempty">（暂无插件；plugin_install 可装）</div>'}`;
+  }
+  if(o.service==="cmx-plugin" && o.installed){
+    return `<div class="tchead">🧩 插件已安装 <span class="tcmeta">${esc(String(o.name||""))} · ${esc(String(o.kind||""))}</span></div><div class="tcempty">${esc(String(o.note||""))}</div>`;
+  }
+  if(o.service==="cmx-plugin" && o.plugin){
+    const meta=o.kind==="http"?("HTTP "+(o.status||"")):("exit "+(o.exit_code??"?"));
+    const body=o.kind==="http"?compact(o.body||{}):(String(o.stdout||"")+(o.stderr?"\n"+o.stderr:""));
+    return `<div class="tchead">🧩 ${esc(String(o.plugin))} <span class="tcmeta">${esc(meta)}</span></div><pre class="tcode">${esc(String(body))}</pre>`;
+  }
+  // U14 业务联动流水线：分步轨迹 + 是否全程完成
+  if(o.service==="cmx-chain" && Array.isArray(o.steps)){
+    const rows=o.steps.map(s=>`<div class="ecrow"><span class="ecl">${s.ok?"✅":"❌"} 步${s.step} ${esc(String(s.op||""))}</span><span class="ecc"><span class="cuact">${esc(compact(s.ok?(s.output||{}):{error:s.error}))}</span></span></div>`).join("");
+    const badge=o.completed?`<span class="apresolved ok">✓ 全程完成</span>`:`<span class="apresolved no">中途失败</span>`;
+    return `<div class="tchead">🔗 业务联动 <span class="tcmeta">${o.stepCount??0} 步</span></div>${rows}<div style="margin-top:6px">${badge}</div>`;
+  }
+  // U12 企业上下文：域模型分组摘要
+  if(o.service==="cmx-enterprise" && o.context){
+    const c=o.context, sec=(label,g,fmt)=>{ if(!g||!g.items) return "";
+      const chips=g.items.map(fmt).map(t=>`<span class="cuact">${esc(t)}</span>`).join("");
+      return `<div class="ecrow"><span class="ecl">${label} <b>${g.total}</b></span><span class="ecc">${chips}</span></div>`; };
+    return `<div class="tchead">🏛️ 企业域模型</div>`
+      +sec("对象",c.objectTypes,x=>(x.displayName||x.apiName||"")+"·"+(x.apiName||""))
+      +sec("关系",c.relations,x=>(x.apiName||"")+"("+(x.from||"?")+"→"+(x.to||"?")+")")
+      +sec("动作",c.actions,x=>(x.displayName||x.apiName||""))
+      +sec("流程",c.flows,x=>(x.name||x.key||"")+(x.startable?"✓":""))
+      +sec("报表",c.reports,x=>(x.name||x.code||""));
+  }
+  // U11 引擎写侧：flow 起实例 / 办任务 · onto 建对象 / 执行动作 · report 计算
+  if(o.service==="cmx-flow" && (o.started||o.completed)){
+    const act=o.started?"⚙️ 已发起流程实例":"⚙️ 已办理任务";
+    const id=o.instanceId||o.taskId||"";
+    return `<div class="tchead">${act} <span class="tcmeta">cmx-flow</span></div>`
+      +(id?`<div class="wf-url">${esc(String(id))}${o.status?" · "+esc(String(o.status)):""}</div>`:"");
+  }
+  if(o.service==="cmx-ontology" && (o.wrote||o.executed)){
+    const act=o.wrote?("🧩 已写对象 "+esc(String(o.objectType||""))):("🧩 已执行动作 "+esc(String(o.actionType||""))+(o.dryRun?"（试算）":""));
+    return `<div class="tchead">${act} <span class="tcmeta">cmx-ontology</span></div>`
+      +`<pre class="tcode">${esc(compact(o.data||{}))}</pre>`;
+  }
+  if(o.service==="cmx-report" && o.computed){
+    return `<div class="tchead">📊 已计算报表 ${esc(String(o.reportCode||""))} <span class="tcmeta">${o.cellCount??"?"} 格 · 错误 ${o.errorCount??0}</span></div>`;
   }
   // fs_read / repo_map 等：有 text/tree → 文本块；否则紧凑 JSON
   if(o.text!=null) return `<div class="tchead">✅ 读取 <span class="tcpath">${esc(o.path||"")}</span></div><pre class="tcode">${esc(String(o.text))}</pre>`;
@@ -1167,7 +1346,7 @@ function showPanel(name){
     document.getElementById("act-"+p).classList.toggle("active", p===name);
   });
   if(name==="im") renderIM();
-  if(name==="plugins") renderPlugins();
+  if(name==="plugins") loadPluginSidebar();
 }
 
 // 即时通讯：Telegram 式会话列表（占位数据）
@@ -1192,30 +1371,203 @@ function renderIM(){
 }
 
 // 插件管理：VSCode 式已装/市场列表（占位数据）
-const PLUG_INSTALLED = [
-  {pn:"cmx-flow 连接器",   pd:"流程引擎连接器 · 发起/查询审批", pic:"🔀", c:"#2a78d6", meta:"cmx · v1.0.2 · 已启用"},
-  {pn:"cmx-ontology 连接器",pd:"本体平台连接器 · 读对象类型/实例", pic:"◈", c:"#4a3aa7", meta:"cmx · v1.0.2 · 已启用"},
-  {pn:"cmx-report 连接器",  pd:"报表平台连接器 · 读报表定义", pic:"📊", c:"#eb6834", meta:"cmx · v1.0.2 · 已启用"},
+// 市场演示目录（后端 list_plugins 的 market 为空时兜底；条目形状对齐后端 MarketEntry 摘要，
+// 均带 homepage(HTML 信息页) + manifest(内嵌清单，供「安装」真实写入)）。
+const PLUG_MARKET_DEMO = [
+  {name:"cmx-rules", kind:"http", version:"1.0.0", author:"cmx", description:"决策表 / FEEL 规则评估连接器", icon:"⚖", homepage:"https://feel.cmx.dev/", installable:true,
+   manifest:{name:"cmx-rules", kind:"http", version:"1.0.0", description:"决策表 / FEEL 规则评估连接器", icon:"⚖", author:"cmx", homepage:"https://feel.cmx.dev/", base_url:"http://127.0.0.1:8094", method:"POST", path:"/api/rules/v1/evaluate", permissions:["net:fetch"]}},
+  {name:"doc-tools", kind:"command", version:"0.9.0", author:"社区", description:"Office / PDF 解析与生成（命令载体示例）", icon:"📄", homepage:"https://example.com/", installable:true,
+   manifest:{name:"doc-tools", kind:"command", version:"0.9.0", description:"Office / PDF 解析（命令载体示例）", icon:"📄", author:"社区", homepage:"https://example.com/", command:"echo", args:["doc {file}"], requires_approval:true, permissions:["exec"]}},
+  {name:"mcp-bridge", kind:"mcp", version:"1.2.0", author:"cmx", description:"接入任意 Model Context Protocol 服务", icon:"🔌", homepage:"https://modelcontextprotocol.io/", installable:true,
+   manifest:{name:"mcp-bridge", kind:"mcp", version:"1.2.0", description:"接入任意 MCP 服务", icon:"🔌", author:"cmx", homepage:"https://modelcontextprotocol.io/", command:"my-mcp-server", args:["--stdio"]}},
 ];
-const PLUG_MARKET = [
-  {pn:"cmx-rules 规则引擎",  pd:"决策表 / FEEL 规则评估连接器", pic:"⚖", c:"#1baf7a", meta:"cmx · ★ 4.9 · 12k 安装"},
-  {pn:"文档处理技能",       pd:"Office / PDF 解析与生成", pic:"📄", c:"#e87ba4", meta:"社区 · ★ 4.7 · 8k 安装"},
-  {pn:"语音输入",           pd:"系统听写 / Web Speech API", pic:"🎙", c:"#e34948", meta:"社区 · ★ 4.5 · 5k 安装"},
-  {pn:"MCP 外接",           pd:"接入任意 Model Context Protocol 服务", pic:"🔌", c:"#eda100", meta:"cmx · ★ 4.8 · 9k 安装"},
-];
-function renderPlugins(){
-  const box=document.getElementById("plug-list"); if(box.dataset.done) return; box.dataset.done="1";
-  box.innerHTML="";
-  const sec=(t)=>{ const s=el("plug-sec"); s.textContent=t; box.append(s); };
-  const row=(p,installed)=>{
-    const it=el("plug-item");
-    it.innerHTML=`<div class="pic" style="background:${p.c}">${esc(p.pic)}</div>
-      <div class="pm"><div class="pn">${esc(p.pn)}</div><div class="pd">${esc(p.pd)}</div><div class="pmeta">${esc(p.meta)}</div></div>
-      <div class="pbtn ${installed?'installed':''}">${installed?'已装':'安装'}</div>`;
-    box.append(it);
+// kind → 图标兜底 / 底色 / 中文名
+const KIND_ICON={http:"🌐",command:"⌘",wasm:"🧱",mcp:"🔌",connector:"🧩"};
+const KIND_COLOR={http:"#2a78d6",command:"#4a3aa7",wasm:"#1baf7a",mcp:"#eda100",connector:"#eb6834"};
+const KIND_LABEL={http:"HTTP 端点",command:"Shell 命令",wasm:"WebAssembly",mcp:"MCP 服务",connector:"连接器"};
+function plugIcon(p){ return p.icon || KIND_ICON[p.kind] || "🧩"; }
+function plugColor(p){ return KIND_COLOR[p.kind] || "#6b7280"; }
+function plugMeta(p,installed){
+  const parts=[p.author||"cmx", p.version?("v"+p.version):null, KIND_LABEL[p.kind]||p.kind, installed?"已启用":null].filter(Boolean);
+  return parts.join(" · ");
+}
+
+// 插件状态缓存（列表在侧栏 master，详情在主区 tab，两处 DOM 树不同 → 用模块级状态共享）
+let PLUGIN_STATE={installed:[], market:[]};
+
+// 侧栏插件列表（master，保持在原侧栏位置）：点活动栏 🧩 由 showPanel 触发。
+async function loadPluginSidebar(){
+  const list=document.getElementById("pg-list");
+  if(!list) return;
+  // 首次绑定搜索/刷新
+  const search=document.getElementById("pg-search-input");
+  if(search && !search.dataset.bound){ search.dataset.bound="1"; search.oninput=()=>filterPluginSidebar(search.value); }
+  const rf=document.getElementById("pg-refresh");
+  if(rf && !rf.dataset.bound){ rf.dataset.bound="1"; rf.onclick=()=>loadPluginSidebar(); }
+  list.innerHTML='<div class="pg-loading">正在加载插件…</div>';
+  const resp=await call({cmd:"list_plugins"});
+  const data=(resp&&resp.ok&&resp.data)||{};
+  const installed=data.installed||[];
+  let market=data.market||[];
+  if(!market.length) market=PLUG_MARKET_DEMO;   // 后端未配市场 URL → 演示目录兜底
+  PLUGIN_STATE={installed, market};
+  renderPluginSidebar(installed, market);
+}
+
+function renderPluginSidebar(installed, market){
+  const list=document.getElementById("pg-list");
+  list.innerHTML="";
+  const sec=(t)=>{ const s=el("pg-sec"); s.textContent=t; list.append(s); };
+  const row=(p, isInstalled)=>{
+    const it=el("plug-item pg-item");
+    it.dataset.act="pluginSelect"; it.dataset.pkey=p.name; it.dataset.pinstalled=isInstalled?"1":"0";
+    it.innerHTML=`<div class="pic" style="background:${plugColor(p)}">${esc(plugIcon(p))}</div>
+      <div class="pm"><div class="pn">${esc(p.name||"")}</div><div class="pd">${esc(p.description||"")}</div><div class="pmeta">${esc(plugMeta(p,isInstalled))}</div></div>
+      <div class="pbtn ${isInstalled?'installed':''}">${isInstalled?'已安装':'安装'}</div>`;
+    list.append(it);
   };
-  sec("已安装 ("+PLUG_INSTALLED.length+")"); PLUG_INSTALLED.forEach(p=>row(p,true));
-  sec("市场推荐"); PLUG_MARKET.forEach(p=>row(p,false));
+  sec("已安装 ("+installed.length+")");
+  if(installed.length) installed.forEach(p=>row(p,true));
+  else { const e=el("pg-hint"); e.textContent="（暂无已安装插件；从市场安装后重启生效）"; list.append(e); }
+  sec("市场 ("+market.length+")");
+  market.forEach(p=>row(p,false));
+}
+
+function filterPluginSidebar(q){
+  q=(q||"").trim().toLowerCase();
+  document.querySelectorAll("#pg-list .pg-item").forEach(it=>{
+    const hit=!q || it.textContent.toLowerCase().includes(q);
+    it.style.display=hit?"":"none";
+  });
+}
+
+// 点侧栏某插件 → 在右侧主内容区打开/复用同一「插件详情」tab（不每插件一个 tab）。
+function openPluginDetail(p, installed){
+  const t=openTab({id:"plugins", kind:"plugins", title:"插件", ico:"🧩"});
+  if(!t.view.dataset.built){
+    t.view.dataset.built="1";
+    t.view.className="tabview";
+    t.view.append(document.getElementById("tpl-plugins").content.cloneNode(true));
+  }
+  activateTab("plugins");
+  renderPluginDetail(t.view, p, installed);
+}
+
+// VSCode 式详情：头部 + 能力/权限 + 信息页（HTML 链接 iframe 内嵌 + 外开兜底）。已装/未装差异化。
+function renderPluginDetail(view, p, installed){
+  const d=view.querySelector(".pg-detail");
+  const badge=installed
+    ? `<span class="pg-badge installed">✓ 已安装 · 已启用</span>`
+    : `<span class="pg-badge market">☁ 未安装</span>`;
+  const actions=installed
+    ? `<button class="pg-actbtn" data-act="pluginUninstall" data-pkey="${esc(p.name)}">卸载</button>
+       <button class="pg-actbtn ghost" data-act="pluginToggle" data-pkey="${esc(p.name)}">禁用</button>`
+    : `<button class="pg-actbtn primary" data-act="pluginInstall" data-pkey="${esc(p.name)}">安装</button>`;
+  const openBtn=p.homepage?`<button class="pg-actbtn ghost" data-act="pluginOpenHomepage" data-url="${esc(p.homepage)}">⧉ 在浏览器打开</button>`:"";
+  // 能力/权限 chips + 载体特有
+  const chips=[];
+  chips.push(`<span class="pg-chip">${esc(KIND_LABEL[p.kind]||p.kind||"插件")}</span>`);
+  (p.permissions||[]).forEach(pm=>chips.push(`<span class="pg-chip perm">🔒 ${esc(pm)}</span>`));
+  if(p.requiresApproval) chips.push(`<span class="pg-chip warn">需审批</span>`);
+  const carrier=[];
+  const kv=(k,v)=>{ if(v!=null&&v!=="") carrier.push(`<div class="pg-kv"><span class="k">${esc(k)}</span><span class="v">${esc(String(v))}</span></div>`); };
+  if(p.kind==="http"){ kv("base_url",p.baseUrl); kv("method",p.method); kv("path",p.path); }
+  else if(p.kind==="command"){ kv("command",p.command); if((p.args||[]).length) kv("args",(p.args||[]).join(" ")); }
+  else if(p.kind==="wasm"){ kv("module",p.module); kv("invoke",p.invoke); kv("runtime",p.runtime); }
+  else if(p.kind==="mcp"){ kv("command",p.command); if((p.args||[]).length) kv("args",(p.args||[]).join(" ")); }
+  // 信息页
+  let info;
+  if(p.homepage){
+    info=`<div class="pg-frame-bar">信息页：<a class="pg-link" data-act="pluginOpenHomepage" data-url="${esc(p.homepage)}">${esc(p.homepage)}</a><span class="pg-frame-hint">（若下方空白说明该页禁止内嵌，请点链接在浏览器打开）</span></div>
+      <iframe class="pg-frame" src="${esc(p.homepage)}" referrerpolicy="no-referrer" sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe>`;
+  } else {
+    info=`<div class="pg-empty sm">该插件未提供信息页（cmx-plugin.json 的 homepage 字段）。</div>`;
+  }
+  d.innerHTML=`<div class="pg-detail-inner ${installed?'is-installed':'is-market'}">
+    <div class="pg-topbar"></div>
+    <div class="pg-head">
+      <div class="pg-ico" style="background:${plugColor(p)}">${esc(plugIcon(p))}</div>
+      <div class="pg-h-main">
+        <div class="pg-title">${esc(p.name||"")} ${badge}</div>
+        <div class="pg-sub">${esc(plugMeta(p,installed))}</div>
+        <div class="pg-desc">${esc(p.description||"")}</div>
+        <div class="pg-actions">${actions}${openBtn}</div>
+      </div>
+    </div>
+    <div class="pg-sec-h">能力与权限</div>
+    <div class="pg-chips">${chips.join("")}</div>
+    ${carrier.length?`<div class="pg-kvs">${carrier.join("")}</div>`:""}
+    <div class="pg-sec-h">信息</div>
+    ${info}
+  </div>`;
+}
+
+// —— 插件 master-detail 交互（列表在侧栏，详情在主区 tab）——
+function pluginSelect(el){
+  const key=el.dataset.pkey, installed=el.dataset.pinstalled==="1";
+  const pool=installed?PLUGIN_STATE.installed:PLUGIN_STATE.market;
+  const p=(pool||[]).find(x=>x.name===key); if(!p) return;
+  document.querySelectorAll("#pg-list .pg-item.sel").forEach(x=>x.classList.remove("sel"));
+  el.classList.add("sel");
+  openPluginDetail(p, installed);
+}
+function pluginOpenHomepage(el){
+  const url=el.dataset.url; if(!url) return;
+  try{ window.open(url, "_blank", "noopener"); }catch(e){ showToast("无法打开链接"); }
+}
+// 安装：从当前选中的市场插件取内嵌 manifest → 前门 install_plugin（点击即人工授权）→ 刷新。
+async function pluginInstall(el){
+  const key=el.dataset.pkey;
+  const p=(PLUGIN_STATE.market||[]).find(x=>x.name===key);
+  if(!p){ showToast("未找到该市场插件"); return; }
+  if(!p.manifest){ showToast("该市场条目未内嵌清单，无法安装"); return; }
+  el.disabled=true; el.textContent="安装中…";
+  const r=await call({cmd:"install_plugin", manifest:p.manifest});
+  if(r&&r.ok){
+    const note=(r.data&&r.data.note)||"已安装";
+    showToast("已安装「"+key+"」· "+note);
+    await loadPluginSidebar();
+    const np=(PLUGIN_STATE.installed||[]).find(x=>x.name===key);
+    reopenPluginDetail(np||p, !!np);   // 详情切到「已安装」态
+  } else {
+    el.disabled=false; el.textContent="安装";
+    showToast("安装失败："+((r&&r.error&&r.error.message)||"未知错误"));
+  }
+}
+// 卸载：两段式确认（首点变红「确认卸载」，3s 内再点才执行；两壳都稳，不依赖 window.confirm）。
+async function pluginUninstall(el){
+  const key=el.dataset.pkey;
+  if(el.dataset.armed!=="1"){
+    el.dataset.armed="1"; el.classList.add("danger"); const old=el.textContent; el.textContent="确认卸载？";
+    el._t=setTimeout(()=>{ el.dataset.armed="0"; el.classList.remove("danger"); el.textContent=old; }, 3000);
+    return;
+  }
+  clearTimeout(el._t); el.dataset.armed="0"; el.disabled=true; el.textContent="卸载中…";
+  const r=await call({cmd:"uninstall_plugin", name:key});
+  if(r&&r.ok){
+    const note=(r.data&&r.data.note)||"已卸载";
+    showToast("已卸载「"+key+"」· "+note);
+    await loadPluginSidebar();
+    const mp=(PLUGIN_STATE.market||[]).find(x=>x.name===key);
+    if(mp) reopenPluginDetail(mp, false); else resetPluginDetail();
+  } else {
+    el.disabled=false; el.textContent="卸载";
+    showToast("卸载失败："+((r&&r.error&&r.error.message)||"未知错误"));
+  }
+}
+function pluginToggle(el){
+  showToast("启停开关暂为占位（安装/卸载已是真实操作）");
+}
+// 详情复位/重开（安装/卸载后刷新详情面板 + 同步侧栏高亮）
+function resetPluginDetail(){
+  const t=findTab&&findTab("plugins"); if(t) t.view.querySelector(".pg-detail").innerHTML='<div class="pg-empty">← 在左侧插件列表中选择一个插件查看详情</div>';
+}
+function reopenPluginDetail(p, installed){
+  openPluginDetail(p, installed);
+  // 同步侧栏选中高亮到对应行
+  document.querySelectorAll("#pg-list .pg-item.sel").forEach(x=>x.classList.remove("sel"));
+  const row=document.querySelector('#pg-list .pg-item[data-pkey="'+(window.CSS&&CSS.escape?CSS.escape(p.name):p.name)+'"][data-pinstalled="'+(installed?"1":"0")+'"]');
+  if(row) row.classList.add("sel");
 }
 
 // 状态图标（替代 exit 码文字）：成功 ✓ / 失败 ✕
@@ -1291,6 +1643,11 @@ document.addEventListener("click", e=>{
   } else if(act === "toolShare"){ toolShare(el);
   } else if(act === "toolLike"){ toolLike(el);
   } else if(act === "toolDislike"){ toolDislike(el);
+  } else if(act === "pluginSelect"){ pluginSelect(el);
+  } else if(act === "pluginOpenHomepage"){ pluginOpenHomepage(el);
+  } else if(act === "pluginInstall"){ pluginInstall(el);
+  } else if(act === "pluginUninstall"){ pluginUninstall(el);
+  } else if(act === "pluginToggle"){ pluginToggle(el);
   } else if(act === "toggleVoice"){
     toggleVoice(el);
   } else if(act === "showPanel"){

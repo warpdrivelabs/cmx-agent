@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use crate::guard::SandboxMode;
 
@@ -153,9 +153,14 @@ pub trait Tool: Send + Sync {
 }
 
 /// 工具注册表（= dsh `ctx.tools`）。按名索引，供路由与"给模型的工具清单"。
+///
+/// **内部共享 + 可运行时增删**：`tools` 用 `Arc<RwLock<..>>`，故 `#[derive(Clone)]` 得到的是
+/// **同一张表的句柄**（非独立副本）。`Agent` 持有一份、`AgentApp` 经 `agent.tools().clone()` 再持一份，
+/// 二者指向同一表——插件安装/卸载经 [`ToolRegistry::register_dyn`]/[`ToolRegistry::unregister`]（`&self`）
+/// 即时改表，下一回合 `specs()`/`get()` 立刻可见（热注册，无需重启）。
 #[derive(Default, Clone)]
 pub struct ToolRegistry {
-    tools: HashMap<String, Arc<dyn Tool>>,
+    tools: Arc<RwLock<HashMap<String, Arc<dyn Tool>>>>,
 }
 
 impl ToolRegistry {
@@ -163,33 +168,50 @@ impl ToolRegistry {
         Self::default()
     }
 
-    /// 注册工具（重名覆盖）。
+    /// 注册工具（重名覆盖）。装配期链式用（`&mut self`）；内部亦锁写共享表。
     pub fn register(&mut self, tool: Arc<dyn Tool>) -> &mut Self {
         let name = tool.spec().name;
-        self.tools.insert(name, tool);
+        self.tools.write().expect("tools lock").insert(name, tool);
         self
     }
 
+    /// 运行时**热注册**（`&self`，经 `Arc<Agent>` 也能调）。返回是否覆盖了同名工具。
+    pub fn register_dyn(&self, tool: Arc<dyn Tool>) -> bool {
+        let name = tool.spec().name;
+        self.tools.write().expect("tools lock").insert(name, tool).is_some()
+    }
+
+    /// 运行时**热卸载**（`&self`）。返回是否移除了该名工具。
+    pub fn unregister(&self, name: &str) -> bool {
+        self.tools.write().expect("tools lock").remove(name).is_some()
+    }
+
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
-        self.tools.get(name).cloned()
+        self.tools.read().expect("tools lock").get(name).cloned()
     }
 
     pub fn contains(&self, name: &str) -> bool {
-        self.tools.contains_key(name)
+        self.tools.read().expect("tools lock").contains_key(name)
     }
 
     /// 给模型的工具清单（供其发现与选择）。
     pub fn specs(&self) -> Vec<ToolSpec> {
-        let mut v: Vec<ToolSpec> = self.tools.values().map(|t| t.spec()).collect();
+        let mut v: Vec<ToolSpec> = self
+            .tools
+            .read()
+            .expect("tools lock")
+            .values()
+            .map(|t| t.spec())
+            .collect();
         v.sort_by(|a, b| a.name.cmp(&b.name));
         v
     }
 
     pub fn len(&self) -> usize {
-        self.tools.len()
+        self.tools.read().expect("tools lock").len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.tools.is_empty()
+        self.tools.read().expect("tools lock").is_empty()
     }
 }

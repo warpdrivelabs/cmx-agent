@@ -1,0 +1,24 @@
+   Compiling cmx-agent-connectors v0.1.0 (/Users/nanomesh/Workspace/presentation/cmx-agent/crates/cmx-agent-connectors)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.90s
+     Running unittests src/lib.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/cmx_agent_connectors-d6bd447e31a78436)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+     Running tests/connector_tests.rs (/Users/nanomesh/.cargo-shared-target/debug/deps/connector_tests-9158c868ae2117a2)
+
+running 4 tests
+test live_probe_flow_online ... ok
+test live_flow_start_instance ... ok
+test live_flow_lists_real_definitions ... ok
+test live_report_lists_real_reports ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 2.39s
+
+   Doc-tests cmx_agent_connectors
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -32,6 +32,12 @@ pub enum AppRequest {
     DeleteSession { session_id: String },
     /// 列出连接器（描述 + live 健康）——侧栏「专家·技能·连接器」面板用。
     ListConnectors,
+    /// U15 列出插件（已装真实清单 + 市场）——插件管理 master-detail 视图用。
+    ListPlugins,
+    /// U15 安装插件（用户在详情面板点「安装」；内嵌 manifest 直接写入。点击即人工授权）。
+    InstallPlugin { manifest: serde_json::Value },
+    /// U15 卸载插件（用户在详情面板确认「卸载」；删 `<plugins>/<name>/`）。
+    UninstallPlugin { name: String },
     /// 登录（对接门户 /api/auth/login）。成功后前门持有当前用户。
     Login { username: String, password: String },
     /// 取当前登录用户（前端启动时填充用户菜单；未登录 data.user=null）。
@@ -143,6 +149,9 @@ async fn dispatch_inner(app: &AgentApp, req: AppRequest) -> Result<AppResponse, 
                 serde_json::json!({ "connectors": connectors }),
             ))
         }
+        AppRequest::ListPlugins => Ok(AppResponse::ok(app.list_plugins().await)),
+        AppRequest::InstallPlugin { manifest } => Ok(AppResponse::ok(app.install_plugin(&manifest)?)),
+        AppRequest::UninstallPlugin { name } => Ok(AppResponse::ok(app.uninstall_plugin(&name)?)),
         AppRequest::Login { username, password } => {
             let user = app.login(&username, &password).await?;
             Ok(AppResponse::ok(serde_json::json!({ "user": user })))

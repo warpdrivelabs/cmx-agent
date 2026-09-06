@@ -5,7 +5,10 @@ use std::sync::Arc;
 use cmx_agent_core::ToolRegistry;
 
 use crate::client::CmxServiceClient;
-use crate::connectors::{FlowConnector, OntoConnector, ReportConnector};
+use crate::connectors::{
+    EngineChain, EnterpriseContext, FlowCompleteTask, FlowConnector, FlowStartInstance,
+    OntoConnector, OntoExecuteAction, OntoPutObject, ReportCompute, ReportConnector,
+};
 use crate::health::{ConnectorStatus, probe};
 
 /// 三服务的 base_url 配置（缺省指向本机标准端口）。
@@ -111,6 +114,17 @@ impl ConnectorRegistry {
         &self.config
     }
 
+    /// 注入共享令牌槽到三连接器 client——登录后所有连接器读写自动带 `Authorization: Bearer`
+    /// （auth=on 的服务如 cmx-flow 必需；auth=off 的 cmx-ontology 无害忽略）。须在 `register_into` 前调用。
+    pub fn with_token(mut self, store: crate::client::TokenStore) -> Self {
+        self.clients = self
+            .clients
+            .into_iter()
+            .map(|c| c.with_token(store.clone()))
+            .collect();
+        self
+    }
+
     pub fn descriptors(&self) -> &[ConnectorDescriptor] {
         &self.descriptors
     }
@@ -127,6 +141,37 @@ impl ConnectorRegistry {
             .register(Arc::new(ReportConnector {
                 client: self.clients[2].clone(),
             }));
+        // U11 引擎写侧：flow 起实例 / 办任务（写操作，requires_approval=Always）。
+        registry
+            .register(Arc::new(FlowStartInstance {
+                client: self.clients[0].clone(),
+            }))
+            .register(Arc::new(FlowCompleteTask {
+                client: self.clients[0].clone(),
+            }));
+        // U11 续：onto 建对象 / 执行动作（clients[1]）+ report 计算（clients[2]）。
+        registry
+            .register(Arc::new(OntoPutObject {
+                client: self.clients[1].clone(),
+            }))
+            .register(Arc::new(OntoExecuteAction {
+                client: self.clients[1].clone(),
+            }))
+            .register(Arc::new(ReportCompute {
+                client: self.clients[2].clone(),
+            }));
+        // U12 本体上下文：一站式域模型（onto/flow/report 三 client）。
+        registry.register(Arc::new(EnterpriseContext {
+            onto: self.clients[1].clone(),
+            flow: self.clients[0].clone(),
+            report: self.clients[2].clone(),
+        }));
+        // U14 业务联动流水线：一次审批跑单据→凭证→流程→报表。
+        registry.register(Arc::new(EngineChain {
+            onto: self.clients[1].clone(),
+            flow: self.clients[0].clone(),
+            report: self.clients[2].clone(),
+        }));
     }
 
     /// 并发探测三连接器健康，返回卡片列表（描述 + live 状态）。

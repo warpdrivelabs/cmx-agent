@@ -35,6 +35,8 @@ pub struct DesktopAppBuilder {
     interactive_approval: bool,
     /// MCP 工具（U3）：外部 MCP server 的工具代理（由壳异步连接后传入）。
     mcp_tools: Vec<Arc<dyn cmx_agent_core::Tool>>,
+    /// U13 数据权限：Some(base_url) = 接 cmx-data-auth PDP 做权限接地（AuthGuard 换真 PEP）；None = allow_all 占位。
+    data_auth: Option<String>,
 }
 
 impl DesktopAppBuilder {
@@ -57,6 +59,7 @@ impl DesktopAppBuilder {
             auth: None,
             interactive_approval: false,
             mcp_tools: Vec::new(),
+            data_auth: None,
         }
     }
 
@@ -89,6 +92,21 @@ impl DesktopAppBuilder {
         self
     }
 
+    /// U13 启用数据权限接地：`base_url` 指 cmx-data-auth（如 http://127.0.0.1:8094）。
+    /// 启用后 AuthGuard 用真 PEP（PDP /decide 判定 + 缓存 + fail-closed）替代 allow_all 占位。
+    pub fn data_auth(mut self, base_url: impl Into<String>) -> Self {
+        self.data_auth = Some(base_url.into());
+        self
+    }
+
+    /// 便捷：`Some(非空)` 才启用数据权限，`None`/空串保持 allow_all（壳里读 env 直接传入）。
+    pub fn maybe_data_auth(self, base_url: Option<String>) -> Self {
+        match base_url {
+            Some(u) if !u.is_empty() => self.data_auth(u),
+            _ => self,
+        }
+    }
+
     pub fn sandbox(mut self, s: SandboxMode) -> Self {
         self.sandbox = s;
         self
@@ -112,9 +130,33 @@ impl DesktopAppBuilder {
     /// 装配。沙箱根 = workdir；挂全部内置工具 + 五层守卫（Auth/HighRisk/Approval）；
     /// 若启用连接器，把 flow/onto/report 三连接器工具也挂进注册表，并把 ConnectorRegistry 交给 app 供面板查询。
     pub fn build(self) -> AppResult<AgentApp> {
+        // U13 数据权限：启用则 AuthGuard 用真 PEP（PDP /decide 判定 + 缓存 + fail-closed）；否则 allow_all 占位。
+        let auth_guard = match &self.data_auth {
+            Some(base) => {
+                let pep = cmx_agent_connectors::DataAuthPep::new(
+                    base.clone(),
+                    self.subject.tenant.clone(),
+                    self.subject.user.clone(),
+                    true, // enforce=严格：缓存未命中/服务不可达即拒绝
+                );
+                // 预热写权限判定（build 非 async → 用当前 runtime 阻塞跑一次；无 runtime 则跳过预热，
+                // 首次工具调用时该 perm 未命中会被 fail-closed 拒绝，安全侧默认）。
+                let subject = self.subject.clone();
+                let pep2 = pep.clone();
+                if let Ok(h) = tokio::runtime::Handle::try_current() {
+                    tokio::task::block_in_place(|| {
+                        h.block_on(async {
+                            pep2.prewarm(&subject, cmx_agent_connectors::ENFORCED_PERMS).await;
+                        });
+                    });
+                }
+                AuthGuard::new(move |subj, perm| pep.cached_allow(subj, perm))
+            }
+            None => AuthGuard::allow_all(), // 未启用数据权限：显式放行占位
+        };
         let mut guards = GuardPipeline::new();
         guards
-            .add(Arc::new(AuthGuard::allow_all())) // M1 占位；M3 接 cmx-data-auth
+            .add(Arc::new(auth_guard))
             .add(Arc::new(HighRiskGuard))
             .add(Arc::new(ApprovalGuard));
 
@@ -138,8 +180,48 @@ impl DesktopAppBuilder {
         // U6 办公文档：读 Excel/PDF/Word/PPT + 写 Excel。
         registry.register(Arc::new(cmx_agent_office::DocReadTool));
         registry.register(Arc::new(cmx_agent_office::XlsxWriteTool));
+        // U10 联网研究：web_fetch 抓网页取正文 + web_search 网络搜索（SSRF 基线；端点/私网经 env 配置）。
+        registry.register(Arc::new(cmx_agent_net::WebFetchTool::from_env()));
+        registry.register(Arc::new(cmx_agent_net::WebSearchTool::from_env()));
+        // U8 浏览器：browser_read 无头 Chrome 渲染 JS 后取正文 + browser_screenshot 截图存工作区。
+        registry.register(Arc::new(cmx_agent_net::BrowserReadTool::from_env()));
+        registry.register(Arc::new(cmx_agent_net::BrowserScreenshotTool::from_env()));
+        // U8 交互：browser_do 经 CDP 点击/填表/等待后取结果文本（需登录/搜索/点按的动态站点）。
+        registry.register(Arc::new(cmx_agent_net::BrowserDoTool::from_env()));
+        // U8 computer-use（视觉回环）：视觉模型配置从当前模型配置派生（CMX_AGENT_VISION_MODEL 覆盖模型名；
+        // DeepSeek 默认用 vision-exp）。未配置模型则工具在调用时返回「未配置视觉模型」。
+        let vision = cmx_agent_model::ModelProviderConfig::resolve(Some(self.data_dir.as_path())).map(|c| {
+            let model = std::env::var("CMX_AGENT_VISION_MODEL").unwrap_or_else(|_| {
+                if c.base_url.contains("deepseek") {
+                    "deepseek-v4-flash-vision-exp".to_string()
+                } else {
+                    c.model.clone()
+                }
+            });
+            cmx_agent_net::VisionCfg { base_url: c.base_url, api_key: c.api_key, model }
+        });
+        let allow_private = std::env::var("CMX_AGENT_NET_ALLOW_PRIVATE").is_ok();
+        registry.register(Arc::new(cmx_agent_net::ComputerUseTool::new(allow_private, vision)));
+        // U15 插件面：扫 <data_dir>/plugins/*/cmx-plugin.json，把 http/command/wasm 插件包装成工具 +
+        // plugin_list/install/marketplace。保留清单摘要供前门 list_plugins（master-detail 视图）消费。
+        let plugins_dir = self.data_dir.join("plugins");
+        let (plugin_tools, plugin_manifests) = cmx_agent_plugin::load_plugins(&plugins_dir);
+        for t in plugin_tools {
+            registry.register(t);
+        }
+        registry.register(Arc::new(cmx_agent_plugin::PluginListTool::new(
+            &plugin_manifests,
+            &plugins_dir,
+        )));
+        registry.register(Arc::new(cmx_agent_plugin::PluginInstallTool::new(plugins_dir.clone())));
+        registry.register(Arc::new(cmx_agent_plugin::PluginMarketplaceTool::default()));
+        let plugin_summaries = cmx_agent_plugin::plugin_summaries(&plugin_manifests);
+        let plugin_market = std::env::var("CMX_AGENT_PLUGIN_MARKET").ok().filter(|s| !s.is_empty());
+        // 共享令牌槽：登录后 app 写入 access_token，连接器读出带 Bearer（auth=on 服务如 cmx-flow 必需）。
+        let token_store: cmx_agent_connectors::TokenStore =
+            Arc::new(std::sync::RwLock::new(None));
         let connectors = self.connectors.map(|cfg| {
-            let cr = ConnectorRegistry::new(cfg);
+            let cr = ConnectorRegistry::new(cfg).with_token(token_store.clone());
             cr.register_into(&mut registry);
             Arc::new(cr)
         });
@@ -171,7 +253,11 @@ impl DesktopAppBuilder {
         sub_handle.attach(&agent); // 注入弱引用，task 工具据此跑子回合
 
         let store = FileSessionStore::new(self.data_dir)?;
-        let mut app = AgentApp::new(agent, Arc::new(store));
+        let mut app = AgentApp::new(agent, Arc::new(store))
+            .with_token_store(token_store)
+            .with_plugins(plugin_summaries)
+            .with_plugins_dir(plugins_dir)
+            .with_plugin_market(plugin_market);
         if let Some(a) = interactive {
             app = app.with_approver(a);
         }
@@ -198,8 +284,11 @@ pub fn default_office_system_prompt() -> String {
      可用能力：\n\
      - 文件：fs_read 读文件、fs_write 写/建文件、fs_edit 精确改、apply_patch 打补丁、glob 找文件、grep 搜内容、repo_map 看目录结构。\n\
      - 执行：bash 跑命令、run_tests 跑测试、git 版本控制（都在工作区内）。\n\
+     - 联网：web_search 搜索、web_fetch 抓网页取正文（查资料、读在线文档；优先用它们而不是 bash+curl）；\
+     动态/JS 页面(SPA)用 browser_read 无头渲染后取正文、browser_screenshot 网页截图；\
+     需点按/填表/搜索的交互页用 browser_do；无稳定选择器、必须看画面操作的用 computer_use(视觉回环)。\n\
      - 计划：update_plan 登记多步任务清单（复杂任务先列计划再逐步执行）。\n\
-     - 企业引擎（如可用）：flow 流程、onto 本体、report 报表等连接器工具。\n\
+     - 企业引擎（如可用）：flow 流程、onto 本体、report 报表等连接器工具。**做企业读写前先用 enterprise_context 拉域模型接地**（知道有哪些对象/动作/流程再动手，别猜 key）。\n\
      \n\
      工作原则：\n\
      1. 能用工具就用工具，别只是描述；动手完成用户的实际诉求。\n\

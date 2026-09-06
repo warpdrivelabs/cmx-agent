@@ -131,14 +131,22 @@ fn build_app() -> AgentApp {
     let model = cmx_agent_app::select_model(Some(&data_dir));
 
     // U3：从 <data_dir>/mcp.json 连接外部 MCP server（sync main → 在 net_rt 上跑异步连接）。
+    // U15：plugins 目录里 kind:"mcp" 的插件清单也一并连上（统一插件面入口）。
     let mcp_path = data_dir.join("mcp.json");
-    let mcp_tools = net_rt().block_on(async move { cmx_agent_mcp::load_and_connect(&mcp_path).await });
+    let plugins_path = data_dir.join("plugins");
+    let mcp_tools = net_rt().block_on(async move {
+        let mut t = cmx_agent_mcp::load_and_connect(&mcp_path).await;
+        t.extend(cmx_agent_plugin::connect_mcp_plugins(&plugins_path).await);
+        t
+    });
 
     DesktopAppBuilder::new(workdir, data_dir, model)
         .connectors(cmx_agent_app::ConnectorConfig::default())
         .auth(AuthConfig::default()) // 登录门：对接门户 :8080 /api/auth
         .interactive_approval() // X4：bash 等需审批工具挂起等前端点按
         .mcp_tools(mcp_tools)   // U3：外部 MCP 工具
+        // U13：opt-in 数据权限接地——env CMX_AGENT_DATAAUTH_URL 指向 cmx-data-auth 即启用真 PEP。
+        .maybe_data_auth(std::env::var("CMX_AGENT_DATAAUTH_URL").ok())
         .build()
         .expect("build agent app")
 }

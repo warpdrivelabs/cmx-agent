@@ -1,0 +1,33 @@
+# cmx-agent 单元/集成测试汇总
+总计: 186 passed, 0 failed, 3 ignored
+crate 数: 25   测试二进制(非空): 25
+
+crate                       pass  fail  ign
+---------------------------------------------
+bridge_tests                   3     0    0
+cmx_agent_app                  5     0    0
+cmx_agent_connectors          10     0    0
+cmx_agent_im                   1     0    0
+cmx_agent_mcp                  2     0    0
+cmx_agent_model               12     0    0
+cmx_agent_net                 13     0    1
+cmx_agent_office               5     0    0
+cmx_agent_plugin               3     0    0
+cmx_agent_tools               49     0    0
+connector_integration_tests     3     0    0
+connector_tests               10     0    2
+demo_model_tests               5     0    0
+desktop_fs_tests               2     0    0
+guard_tests                   11     0    0
+invariant_tests                5     0    0
+loop_tests                     7     0    0
+lsp_integration                3     0    0
+mcp_integration                2     0    0
+net_integration                1     0    0
+parallel_tests                 1     0    0
+plugin_tests                   6     0    0
+protocol_tests                 7     0    0
+store_tests                   12     0    0
+tool_tests                     8     0    0
+---------------------------------------------
+TOTAL                        186     0    3

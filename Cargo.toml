@@ -18,6 +18,9 @@ members = [
     "crates/cmx-agent-mcp",
     "crates/cmx-agent-lsp",
     "crates/cmx-agent-office",
+    "crates/cmx-agent-net",
+    "crates/cmx-agent-im",
+    "crates/cmx-agent-plugin",
     "crates/cmx-agent-app",
     "crates/cmx-agent-cli",
     "crates/cmx-agent-web",
@@ -37,6 +40,9 @@ cmx-agent-model = { path = "crates/cmx-agent-model", version = "0.1.0" }
 cmx-agent-mcp = { path = "crates/cmx-agent-mcp", version = "0.1.0" }
 cmx-agent-lsp = { path = "crates/cmx-agent-lsp", version = "0.1.0" }
 cmx-agent-office = { path = "crates/cmx-agent-office", version = "0.1.0" }
+cmx-agent-net = { path = "crates/cmx-agent-net", version = "0.1.0" }
+cmx-agent-im = { path = "crates/cmx-agent-im", version = "0.1.0" }
+cmx-agent-plugin = { path = "crates/cmx-agent-plugin", version = "0.1.0" }
 cmx-agent-app = { path = "crates/cmx-agent-app", version = "0.1.0" }
 
 # —— 外部 crate（版本照抄 cmx-container 根，复用离线缓存）——

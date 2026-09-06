@@ -4,10 +4,14 @@
 //! `X-Tenant`/`X-User` 头（适配 auth=off 的 e2e 实例，本机实测可用）；若配了 API Key 也一并带上
 //! （auth=apikey 实例）。8s 超时，rustls（免系统 openssl）。
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
 use serde_json::Value;
+
+/// 共享令牌槽：登录后由前门写入 access_token，连接器调用时读出挂 `Authorization: Bearer`。
+/// `Arc<RwLock<..>>` 让「认证前门」与「所有连接器 client」共享同一份活令牌（登录即生效、登出即清）。
+pub type TokenStore = Arc<RwLock<Option<String>>>;
 
 /// 全局复用一个 reqwest Client（连接池复用；OnceLock 惰性初始化）。
 fn client() -> &'static reqwest::Client {
@@ -30,6 +34,8 @@ pub struct CmxServiceClient {
     pub user: String,
     /// 可选 API Key（auth=apikey 实例才需要）。
     pub api_key: Option<String>,
+    /// 可选共享令牌槽（auth=on 实例：带门户登录的 `Authorization: Bearer`；None/空则不带，回退 X-Tenant）。
+    token: Option<TokenStore>,
 }
 
 /// 客户端错误（转 [`cmx_agent_core::ToolError`] 回灌，不致命）。
@@ -52,6 +58,7 @@ impl CmxServiceClient {
             tenant: "default".into(),
             user: "admin".into(),
             api_key: None,
+            token: None,
         }
     }
 
@@ -66,6 +73,20 @@ impl CmxServiceClient {
         self
     }
 
+    /// 注入共享令牌槽——之后 `get_data`/`post_write` 若槽中有令牌即带 `Authorization: Bearer`。
+    pub fn with_token(mut self, store: TokenStore) -> Self {
+        self.token = Some(store);
+        self
+    }
+
+    /// 读当前活令牌（槽为空 / 未登录 → None）。
+    fn bearer(&self) -> Option<String> {
+        self.token
+            .as_ref()
+            .and_then(|t| t.read().ok().and_then(|g| g.clone()))
+            .filter(|s| !s.is_empty())
+    }
+
     /// GET 一个返回 `{code,msg,data}` 信封的端点，成功取 `data`。
     pub async fn get_data(&self, path: &str) -> Result<Value, ClientError> {
         let url = format!("{}{}", self.base_url, path);
@@ -76,6 +97,40 @@ impl CmxServiceClient {
             .header("Accept", "application/json");
         if let Some(k) = &self.api_key {
             req = req.header("X-API-Key", k);
+        }
+        if let Some(tok) = self.bearer() {
+            req = req.header("Authorization", format!("Bearer {tok}"));
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| ClientError::Transport(e.to_string()))?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(ClientError::Http(status.as_u16()));
+        }
+        let body: Value = resp
+            .json()
+            .await
+            .map_err(|e| ClientError::Decode(e.to_string()))?;
+        unwrap_envelope(body)
+    }
+
+    /// POST 一个返回 `{code,msg,data}` 信封的**写端点**，成功取 `data`。带身份头（X-Tenant/X-User/X-API-Key）——
+    /// 区别于 `post_data`（认证登录用，不带身份头）。引擎写侧工具用这个。
+    pub async fn post_write(&self, path: &str, body: &Value) -> Result<Value, ClientError> {
+        let url = format!("{}{}", self.base_url, path);
+        let mut req = client()
+            .post(&url)
+            .header("X-Tenant", &self.tenant)
+            .header("X-User", &self.user)
+            .header("Accept", "application/json")
+            .json(body);
+        if let Some(k) = &self.api_key {
+            req = req.header("X-API-Key", k);
+        }
+        if let Some(tok) = self.bearer() {
+            req = req.header("Authorization", format!("Bearer {tok}"));
         }
         let resp = req
             .send()

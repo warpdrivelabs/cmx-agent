@@ -20,6 +20,7 @@ tauri-build = { version = "2", features = [] }
 cmx-agent-app = { path = "../../cmx-agent-app" }
 cmx-agent-core = { path = "../../cmx-agent-core" }
 cmx-agent-mcp = { path = "../../cmx-agent-mcp" }
+cmx-agent-plugin = { path = "../../cmx-agent-plugin" }
 tauri = { version = "2", features = [] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }

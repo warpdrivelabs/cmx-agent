@@ -1,0 +1,10 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.07s
+     Running `/Users/nanomesh/.cargo-shared-target/debug/cmx-agent-web --no-open`
+[2m2026-09-06T13:46:38.688439Z[0m [32m INFO[0m cmx-agent 模型：OpenAI 兼容 provider · model=deepseek-v4-flash · base=https://api.deepseek.com
+[2m2026-09-06T13:46:38.694903Z[0m [32m INFO[0m cmx-agent 桌面界面已就绪：http://127.0.0.1:50102/
+
+  cmx 企业桌面智能体 · Web 壳
+  ▶ http://127.0.0.1:50102/
+
+  (--no-open：仅起服务，未开窗。用浏览器访问上面地址即可。)
+

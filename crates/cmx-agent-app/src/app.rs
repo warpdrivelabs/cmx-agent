@@ -39,6 +39,15 @@ pub struct AgentApp {
     approver: Option<Arc<crate::approval::InteractiveApprover>>,
     /// 当前登录用户（登录后置入；登出清空）。跨命令共享，故用 Mutex。
     current_user: Arc<Mutex<Option<LoggedInUser>>>,
+    /// 共享令牌槽：登录成功写入 access_token，连接器调用时读出带 Bearer（登出清空）。
+    /// 与 ConnectorRegistry 的 client 共享同一 Arc，故登录即对所有连接器生效。
+    token_store: Option<cmx_agent_connectors::TokenStore>,
+    /// U15 已装插件摘要（加载时快照；plugins_dir 未设时的兜底）。
+    plugins: Vec<serde_json::Value>,
+    /// U15 plugins 目录（设了则 list_plugins 实时扫描、install/uninstall 落到此）。
+    plugins_dir: Option<std::path::PathBuf>,
+    /// U15 远程市场 URL（env CMX_AGENT_PLUGIN_MARKET；list_plugins 有则拉取市场目录）。
+    plugin_market: Option<String>,
 }
 
 impl AgentApp {
@@ -51,6 +60,10 @@ impl AgentApp {
             auth: None,
             approver: None,
             current_user: Arc::new(Mutex::new(None)),
+            token_store: None,
+            plugins: Vec::new(),
+            plugins_dir: None,
+            plugin_market: None,
         }
     }
 
@@ -68,6 +81,30 @@ impl AgentApp {
     /// 注入认证提供者（由 DesktopAppBuilder 调用）。
     pub fn with_auth(mut self, auth: Arc<AuthProvider>) -> Self {
         self.auth = auth.into();
+        self
+    }
+
+    /// 注入共享令牌槽（由 DesktopAppBuilder 调用，与连接器 client 共享）。登录写、登出清。
+    pub fn with_token_store(mut self, store: cmx_agent_connectors::TokenStore) -> Self {
+        self.token_store = Some(store);
+        self
+    }
+
+    /// 注入已装插件摘要（U15；由 DesktopAppBuilder 从 plugins 目录清单派生）。
+    pub fn with_plugins(mut self, plugins: Vec<serde_json::Value>) -> Self {
+        self.plugins = plugins;
+        self
+    }
+
+    /// 注入 plugins 目录（U15；设了则 list_plugins 实时扫描、install/uninstall 落到此）。
+    pub fn with_plugins_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
+        self.plugins_dir = Some(dir.into());
+        self
+    }
+
+    /// 注入远程市场 URL（U15；None/空 = 无市场，list_plugins 返回空市场）。
+    pub fn with_plugin_market(mut self, url: Option<String>) -> Self {
+        self.plugin_market = url.filter(|s| !s.is_empty());
         self
     }
 
@@ -112,6 +149,12 @@ impl AgentApp {
             .await
             .map_err(|e| AppError::Auth(friendly_auth_error(e, auth.base_url())))?;
         let public = user.public_json();
+        // 把 access_token 写入共享令牌槽 → 之后连接器读写自动带 Bearer（auth=on 服务如 cmx-flow 必需）。
+        if let Some(ts) = &self.token_store {
+            if let Ok(mut g) = ts.write() {
+                *g = Some(user.access_token.clone());
+            }
+        }
         *self.current_user.lock().expect("current_user lock") = Some(user);
         Ok(public)
     }
@@ -136,6 +179,12 @@ impl AgentApp {
     /// 登出：清当前用户（本地态；令牌失效由服务端会话过期兜底）。
     pub fn logout(&self) {
         *self.current_user.lock().expect("current_user lock") = None;
+        // 清共享令牌槽 → 连接器回落到未认证（X-Tenant）态。
+        if let Some(ts) = &self.token_store {
+            if let Ok(mut g) = ts.write() {
+                *g = None;
+            }
+        }
     }
 
     /// 列出连接器卡片（描述 + live 健康）。未启用连接器时返回空表。
@@ -144,6 +193,73 @@ impl AgentApp {
             Some(cr) => cr.probe_all().await,
             None => vec![],
         }
+    }
+
+    /// U15：列出插件（前门 list_plugins → master-detail 视图）。
+    /// `installed` = plugins_dir 实时扫描（反映安装/卸载，无需重启）；无 dir 时用构建时快照。
+    /// `market` = 配了 URL 则拉远程目录，否则空（前端可回退演示目录）。
+    pub async fn list_plugins(&self) -> serde_json::Value {
+        let installed = match &self.plugins_dir {
+            Some(dir) => cmx_agent_plugin::scan_plugin_summaries(dir),
+            None => self.plugins.clone(),
+        };
+        let (market, market_error) = match &self.plugin_market {
+            Some(url) => match cmx_agent_plugin::fetch_market_catalog(url).await {
+                Ok(items) => (items, None),
+                Err(e) => (Vec::new(), Some(e)),
+            },
+            None => (Vec::new(), None),
+        };
+        serde_json::json!({
+            "installed": installed,
+            "market": market,
+            "marketUrl": self.plugin_market,
+            "marketError": market_error,
+        })
+    }
+
+    /// U15：安装插件（前门 install_plugin）。用户在详情面板点「安装」直接触发（点击即人工授权）。
+    /// 写入 plugins 目录 + **热注册**同步载体工具（http/command/wasm 立即可用，无需重启；mcp 仍需重启）。
+    pub fn install_plugin(&self, manifest: &serde_json::Value) -> AppResult<serde_json::Value> {
+        let dir = self
+            .plugins_dir
+            .as_ref()
+            .ok_or_else(|| AppError::BadRequest("未配置 plugins 目录".into()))?;
+        let mut info = cmx_agent_plugin::install_manifest(dir, manifest).map_err(AppError::BadRequest)?;
+        // 热注册：构建同步载体工具挂进共享注册表（经 Arc<Agent> 的 &self 方法，下一回合即可见）。
+        let hot = match cmx_agent_plugin::tool_for_installed(dir, manifest) {
+            Some(tool) => {
+                self.agent.tools().register_dyn(tool);
+                true
+            }
+            None => false,
+        };
+        if let Some(o) = info.as_object_mut() {
+            o.insert("hotLoaded".into(), serde_json::json!(hot));
+            o.insert(
+                "note".into(),
+                serde_json::json!(if hot { "已热加载，立即可用（无需重启）" } else { "mcp/未知载体：重启后生效" }),
+            );
+        }
+        Ok(info)
+    }
+
+    /// U15：卸载插件（前门 uninstall_plugin）。删 `<plugins>/<name>/` + **热卸载**该工具（立即从注册表移除）。
+    pub fn uninstall_plugin(&self, name: &str) -> AppResult<serde_json::Value> {
+        let dir = self
+            .plugins_dir
+            .as_ref()
+            .ok_or_else(|| AppError::BadRequest("未配置 plugins 目录".into()))?;
+        let mut info = cmx_agent_plugin::uninstall_plugin(dir, name).map_err(AppError::BadRequest)?;
+        let hot = self.agent.tools().unregister(name); // 工具名 = 清单 name
+        if let Some(o) = info.as_object_mut() {
+            o.insert("hotUnloaded".into(), serde_json::json!(hot));
+            o.insert(
+                "note".into(),
+                serde_json::json!(if hot { "已热卸载（立即移除）" } else { "重启后生效" }),
+            );
+        }
+        Ok(info)
     }
 
     /// 新建会话并落元数据。返回其 id。
