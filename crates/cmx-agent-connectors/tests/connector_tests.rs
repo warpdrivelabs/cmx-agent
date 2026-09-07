@@ -473,6 +473,8 @@ httpd=socketserver.TCPServer(("127.0.0.1",0),H); print(httpd.server_address[1]);
         onto: CmxServiceClient::new(base.clone()),
         flow: CmxServiceClient::new(base.clone()),
         report: CmxServiceClient::new(base),
+        pep: None,
+        identity: None,
     };
     let roots = vec![std::path::PathBuf::from("/tmp")];
     let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
@@ -490,4 +492,179 @@ httpd=socketserver.TCPServer(("127.0.0.1",0),H); print(httpd.server_address[1]);
     assert_eq!(r.output["steps"][0]["output"]["id"], "OBJ-7");
     // 关键：步2 收到的 businessKey = 步1 的 id（引用穿线成功）
     assert_eq!(r.output["steps"][1]["output"]["gotBusinessKey"], "OBJ-7");
+}
+
+// ───────────────────── LIVE 写侧集成（需真服务 + 门户，默认 #[ignore]）─────────────────────
+
+#[tokio::test]
+#[ignore = "需要 live cmx-ontology :8097 + 门户 :8080"]
+async fn live_onto_put_object() {
+    use cmx_agent_connectors::{AuthConfig, AuthProvider, CmxServiceClient, OntoPutObject, TokenStore};
+    use std::sync::{Arc, RwLock};
+    let auth = AuthProvider::new(AuthConfig::default());
+    let user = auth.login("admin", "Admin@12345").await.expect("门户登录");
+    let store: TokenStore = Arc::new(RwLock::new(Some(user.access_token)));
+    let client = CmxServiceClient::new("http://127.0.0.1:8097")
+        .with_identity("default", "admin")
+        .with_token(store);
+    // 幂等 seed 一个对象类型 Widget（saved:true 即使已存在）
+    let _ = client
+        .post_write(
+            "/api/onto/v1/object-types",
+            &serde_json::json!({
+                "apiName":"Widget","displayName":"小部件","primaryKey":"id",
+                "properties":[{"apiName":"id","displayName":"ID","dataType":"string"},
+                              {"apiName":"name","displayName":"名称","dataType":"string"}]
+            }),
+        )
+        .await;
+    let put = OntoPutObject { client };
+    let roots = dummy_ctx_roots();
+    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+    let r = put
+        .invoke(
+            serde_json::json!({"objectType":"Widget","properties":{"id":"w-live-1","name":"活体测试"}}),
+            &ctx,
+        )
+        .await
+        .unwrap();
+    assert!(r.ok, "live onto put failed: {:?}", r.output);
+    assert_eq!(r.output["service"], "cmx-ontology");
+    assert_eq!(r.output["objectType"], "Widget");
+}
+
+#[tokio::test]
+#[ignore = "需要 live cmx-report :8092 + 门户 :8080 + 种子报表 STAT_01_D"]
+async fn live_report_compute() {
+    use cmx_agent_connectors::{AuthConfig, AuthProvider, CmxServiceClient, ReportCompute, TokenStore};
+    use std::sync::{Arc, RwLock};
+    let auth = AuthProvider::new(AuthConfig::default());
+    let user = auth.login("admin", "Admin@12345").await.expect("门户登录");
+    let store: TokenStore = Arc::new(RwLock::new(Some(user.access_token)));
+    let comp = ReportCompute {
+        client: CmxServiceClient::new("http://127.0.0.1:8092")
+            .with_identity("default", "admin")
+            .with_token(store),
+    };
+    let roots = dummy_ctx_roots();
+    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+    let r = comp
+        .invoke(
+            serde_json::json!({"reportCode":"STAT_01_D","orgCode":"0000","periodCode":"2026-07"}),
+            &ctx,
+        )
+        .await
+        .unwrap();
+    assert!(r.ok, "live report compute failed: {:?}", r.output);
+    assert_eq!(r.output["service"], "cmx-report");
+    // 真实算表返回 data.computed（算了几格）
+    assert!(r.output["data"]["computed"].is_number(), "应返回计算格数: {:?}", r.output);
+}
+
+#[tokio::test]
+#[ignore = "需要 live cmx-data-auth :8098"]
+async fn live_dataauth_decide_permits_admin() {
+    use cmx_agent_connectors::DataAuthPep;
+    use cmx_agent_core::Subject;
+    // 超管角色 → PDP 全放行（note「超管角色 → 全放行」）
+    let mut subj = Subject::new("admin");
+    subj.roles = vec!["admin".into()];
+    let pep = DataAuthPep::new("http://127.0.0.1:8098", "default", "admin", true);
+    // decide 打真 PDP /api/dataauth/v1/decide → effect=permit → true
+    assert!(pep.decide(&subj, "flow:write").await, "admin 应被 PDP 放行 flow:write");
+    // 写缓存后同步查也放行
+    assert!(pep.cached_allow(&subj, "flow:write"));
+}
+
+#[tokio::test]
+#[ignore = "需要 live cmx-ontology :8097 + 门户 :8080"]
+async fn live_onto_execute_action() {
+    use cmx_agent_connectors::{AuthConfig, AuthProvider, CmxServiceClient, OntoExecuteAction, TokenStore};
+    use std::sync::{Arc, RwLock};
+    let auth = AuthProvider::new(AuthConfig::default());
+    let user = auth.login("admin", "Admin@12345").await.expect("门户登录");
+    let store: TokenStore = Arc::new(RwLock::new(Some(user.access_token)));
+    let client = CmxServiceClient::new("http://127.0.0.1:8097")
+        .with_identity("default", "admin")
+        .with_token(store);
+    // 幂等 seed：Widget 类型 + 对象 w1 + 带 modifyObject logic 的 renameWidget 动作。
+    let _ = client.post_write("/api/onto/v1/object-types", &serde_json::json!({
+        "apiName":"Widget","displayName":"小部件","primaryKey":"id",
+        "properties":[{"apiName":"id","displayName":"ID","dataType":"string"},{"apiName":"name","displayName":"名称","dataType":"string"}]
+    })).await;
+    let _ = client.post_write("/api/onto/v1/objects/Widget", &serde_json::json!({"properties":{"id":"w1","name":"orig"}})).await;
+    let _ = client.post_write("/api/onto/v1/action-types", &serde_json::json!({
+        "apiName":"renameWidget","displayName":"改名",
+        "parameters":[{"name":"id","required":true},{"name":"name","required":true}],
+        "logic":[{"op":"modifyObject","objectType":"Widget","pk":"$id","set":{"name":"$name"}}]
+    })).await;
+    let exec = OntoExecuteAction { client };
+    let roots = dummy_ctx_roots();
+    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+    // dryRun：应解析出 1 条编辑、不落库。
+    let r = exec.invoke(serde_json::json!({"actionType":"renameWidget","params":{"id":"w1","name":"renamed"},"dryRun":true}), &ctx).await.unwrap();
+    assert!(r.ok, "live onto execute failed: {:?}", r.output);
+    assert_eq!(r.output["service"], "cmx-ontology");
+    assert_eq!(r.output["dryRun"], true);
+    assert_eq!(r.output["data"]["applied"], 1, "应解析出 1 条编辑: {:?}", r.output);
+}
+
+#[tokio::test]
+#[ignore = "需要 live cmx-onto/flow/report + 门户 + seed(Widget/s5_voucher/STAT_01_D)"]
+async fn live_business_chain_end_to_end() {
+    use cmx_agent_connectors::{AuthConfig, AuthProvider, CmxServiceClient, EngineChain, TokenStore};
+    use std::sync::{Arc, RwLock};
+    let auth = AuthProvider::new(AuthConfig::default());
+    let user = auth.login("admin", "Admin@12345").await.expect("门户登录");
+    let store: TokenStore = Arc::new(RwLock::new(Some(user.access_token)));
+    let mk = |port| CmxServiceClient::new(format!("http://127.0.0.1:{port}")).with_identity("default","admin").with_token(store.clone());
+    let onto = mk(8097);
+    // seed Widget 类型（幂等）
+    let _ = onto.post_write("/api/onto/v1/object-types", &serde_json::json!({
+        "apiName":"Widget","displayName":"小部件","primaryKey":"id",
+        "properties":[{"apiName":"id","displayName":"ID","dataType":"string"},{"apiName":"name","displayName":"名称","dataType":"string"}]
+    })).await;
+    let chain = EngineChain { onto, flow: mk(8091), report: mk(8092), pep: None, identity: None };
+    let roots = dummy_ctx_roots();
+    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+    // 整链：① 建对象 → ② 起流程(businessKey 引用①的 id) → ③ 算报表。验 $N 穿线 + 各步 ok。
+    let r = chain.invoke(serde_json::json!({"steps":[
+        {"op":"put_object","input":{"objectType":"Widget","properties":{"id":"chain-obj-1","name":"链测"}}},
+        {"op":"start_instance","input":{"definitionKey":"s5_voucher","businessKey":"$1.id","variables":{"amount":1}}},
+        {"op":"compute_report","input":{"reportCode":"STAT_01_D","orgCode":"0000","periodCode":"2026-07"}}
+    ]}), &ctx).await.unwrap();
+    assert!(r.ok, "chain failed: {:?}", r.output);
+    let steps = r.output["steps"].as_array().expect("steps");
+    assert_eq!(steps.len(), 3, "应 3 步: {:?}", r.output);
+    for s in steps {
+        assert_eq!(s["ok"], true, "步骤失败: {:?}", s);
+    }
+}
+
+#[tokio::test]
+#[ignore = "需要 live cmx-data-auth :8098 + cmx-onto :8097 + 门户"]
+async fn live_business_chain_per_op_pep_denies_viewer() {
+    use cmx_agent_connectors::{AuthConfig, AuthProvider, CmxServiceClient, DataAuthPep, EngineChain, TokenStore};
+    use cmx_agent_core::Subject;
+    use std::sync::{Arc, RwLock};
+    let auth = AuthProvider::new(AuthConfig::default());
+    let user = auth.login("admin", "Admin@12345").await.expect("门户登录");
+    let store: TokenStore = Arc::new(RwLock::new(Some(user.access_token)));
+    let mk = |port| CmxServiceClient::new(format!("http://127.0.0.1:{port}")).with_identity("default","admin").with_token(store.clone());
+    // 授权主体设为 viewer（无写权限）→ 链内第一步 put_object(onto:write) 应被 PDP 拒。
+    let mut viewer = Subject::new("viewer-bob");
+    viewer.roles = vec!["viewer".into()];
+    let identity = Arc::new(RwLock::new(viewer));
+    let pep = Arc::new(DataAuthPep::new("http://127.0.0.1:8098", "default", "viewer-bob", true));
+    let chain = EngineChain { onto: mk(8097), flow: mk(8091), report: mk(8092),
+        pep: Some(pep), identity: Some(identity) };
+    let roots = dummy_ctx_roots();
+    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+    let r = chain.invoke(serde_json::json!({"steps":[
+        {"op":"put_object","input":{"objectType":"Widget","properties":{"id":"deny-1","name":"x"}}}
+    ]}), &ctx).await.unwrap();
+    // 链因逐步 PEP 在第 1 步停：该步 ok=false 且原因含权限不足。
+    let step0 = &r.output["steps"][0];
+    assert_eq!(step0["ok"], false, "viewer 的写步应被拒: {:?}", r.output);
+    assert!(step0["error"].as_str().unwrap_or("").contains("权限不足"), "应是权限不足: {:?}", step0);
 }

@@ -41,3 +41,23 @@ pub async fn connect_mcp_plugins(dir: &Path) -> Vec<Arc<dyn Tool>> {
     }
     tools
 }
+
+/// 连接**一份** mcp 清单（安装/启用时热连），返回其代理工具。非 mcp/缺 command → Err。
+/// 供 app 在安装 mcp 插件时异步热注册（无需重启）。
+pub async fn connect_mcp_manifest(manifest: &serde_json::Value) -> Result<Vec<Arc<dyn Tool>>, String> {
+    let m: crate::PluginManifest =
+        serde_json::from_value(manifest.clone()).map_err(|e| format!("清单非法 {e}"))?;
+    if m.kind != "mcp" {
+        return Err(format!("非 mcp 载体（kind={}）", m.kind));
+    }
+    let command = m.command.clone().ok_or("mcp 清单缺 command")?;
+    let cfg = McpServerConfig {
+        label: m.name.clone(),
+        command,
+        args: m.args.clone(),
+        env: m.env.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+    };
+    cmx_agent_mcp::connect_server(&cfg)
+        .await
+        .map_err(|e| format!("连接 mcp server 失败：{e}"))
+}

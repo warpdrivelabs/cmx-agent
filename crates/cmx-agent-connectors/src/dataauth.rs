@@ -37,7 +37,7 @@ pub struct DataAuthPep {
 }
 
 impl DataAuthPep {
-    /// `base_url` 指 cmx-data-auth（如 http://127.0.0.1:8094）。
+    /// `base_url` 指 cmx-data-auth（如 http://127.0.0.1:8098）；判定打 `POST {base}/api/dataauth/v1/decide`。
     pub fn new(base_url: impl Into<String>, tenant: impl Into<String>, user: impl Into<String>, enforce: bool) -> Self {
         let client = CmxServiceClient::new(base_url).with_identity(tenant, user);
         Self {
@@ -54,7 +54,7 @@ impl DataAuthPep {
             "subject": { "userId": subject.user, "roles": subject.roles, "orgs": [] },
             "resource": { "kind": kind, "action": action }
         });
-        let allowed = match self.client.post_write("/decide", &body).await {
+        let allowed = match self.client.post_write("/api/dataauth/v1/decide", &body).await {
             Ok(d) => {
                 let eff = d.get("effect").and_then(|e| e.as_str()).unwrap_or("");
                 eff.eq_ignore_ascii_case("permit") || eff.eq_ignore_ascii_case("allow")
@@ -75,8 +75,13 @@ impl DataAuthPep {
         }
     }
 
-    /// 同步查缓存（供 AuthGuard 闭包）。未命中：enforce 下拒绝、否则放行。
+    /// 同步查缓存（供 AuthGuard 闭包）。**只对写/敏感权限（[`ENFORCED_PERMS`]）接地**；
+    /// 其余（读类 `*:read`/`net:*` 等）默认放行——不预热、不阻断（数据权限门只管写侧）。
+    /// 被接地的权限未命中缓存时：enforce 下拒绝、否则放行（fail-closed/open）。
     pub fn cached_allow(&self, subject: &Subject, perm: &str) -> bool {
+        if !ENFORCED_PERMS.contains(&perm) {
+            return true; // 读类/非敏感：默认放行
+        }
         match self
             .cache
             .lock()
@@ -103,6 +108,17 @@ mod tests {
         assert_eq!(perm_to_resource("exec"), ("exec".into(), "read".into())); // 无冒号退化
         assert_eq!(perm_to_resource("net:fetch"), ("net".into(), "read".into()));
     }
+
+    #[test]
+    fn reads_default_allow_under_enforce() {
+
+        // 读类/非敏感权限即使 enforce 也默认放行（不阻断读）。
+        let subj = Subject::new("bob");
+        let strict = DataAuthPep::new("http://127.0.0.1:9", "default", "bob", true);
+        assert!(strict.cached_allow(&subj, "flow:read"), "读应默认放行");
+        assert!(strict.cached_allow(&subj, "net:fetch"), "net 应默认放行");
+        assert!(!strict.cached_allow(&subj, "flow:write"), "写未命中严格应拒绝");
+        }
 
     #[test]
     fn fail_closed_vs_open_on_cache_miss() {

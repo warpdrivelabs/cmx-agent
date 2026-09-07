@@ -257,3 +257,72 @@ fn install_rejects_bad_name_and_unknown_kind() {
     assert!(uninstall_plugin(&dir, "nope").is_ok());
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn disable_enable_marker_roundtrip() {
+    use cmx_agent_plugin::{is_plugin_disabled, read_plugin_manifest, set_plugin_disabled};
+    let dir = tmp("toggle");
+    let mf = serde_json::json!({"name":"t1","kind":"command","command":"echo","args":["x"]});
+    install_manifest(&dir, &mf).unwrap();
+    let pdir = dir.join("t1");
+    // 装后默认启用（scan 带 enabled:true）
+    assert!(!is_plugin_disabled(&pdir));
+    assert_eq!(scan_plugin_summaries(&dir)[0]["enabled"], true);
+    // 禁用 → 标记在、scan enabled:false、load_plugins 不产工具
+    set_plugin_disabled(&dir, "t1", true).unwrap();
+    assert!(is_plugin_disabled(&pdir));
+    assert_eq!(scan_plugin_summaries(&dir)[0]["enabled"], false);
+    let (tools, mans) = load_plugins(&dir);
+    assert_eq!(mans.len(), 1, "禁用插件仍登记进清单");
+    assert_eq!(tools.len(), 0, "禁用插件不构建工具");
+    // 读回清单仍可（用于启用时重建）
+    assert_eq!(read_plugin_manifest(&dir, "t1").unwrap()["name"], "t1");
+    // 启用 → 标记删、工具回来
+    set_plugin_disabled(&dir, "t1", false).unwrap();
+    assert!(!is_plugin_disabled(&pdir));
+    assert_eq!(load_plugins(&dir).0.len(), 1);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+const MCP_MOCK: &str = r#"
+import sys, json
+def send(o): sys.stdout.write(json.dumps(o)+"\n"); sys.stdout.flush()
+for line in sys.stdin:
+    line=line.strip()
+    if not line: continue
+    msg=json.loads(line); mid=msg.get("id"); method=msg.get("method")
+    if method=="initialize":
+        send({"jsonrpc":"2.0","id":mid,"result":{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"mock","version":"1"}}})
+    elif method=="notifications/initialized": pass
+    elif method=="tools/list":
+        send({"jsonrpc":"2.0","id":mid,"result":{"tools":[{"name":"echo","description":"回声","inputSchema":{"type":"object"}}]}})
+    elif method=="tools/call":
+        send({"jsonrpc":"2.0","id":mid,"result":{"content":[{"type":"text","text":"ok"}],"isError":False}})
+    else:
+        send({"jsonrpc":"2.0","id":mid,"error":{"code":-32601,"message":"?"}})
+"#;
+
+#[tokio::test]
+async fn connect_mcp_manifest_via_mock() {
+    use cmx_agent_plugin::connect_mcp_manifest;
+    use std::process::{Command, Stdio};
+    if Command::new("python3").arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s|!s.success()).unwrap_or(true) { return; }
+    // 一份 mcp 清单（command=python3 跑 mock server）→ 单清单热连返回代理工具。
+    let mf = json!({"name":"mock","kind":"mcp","command":"python3","args":["-c", MCP_MOCK]});
+    let tools = connect_mcp_manifest(&mf).await.expect("连 mock mcp");
+    let names: Vec<String> = tools.iter().map(|t| t.spec().name).collect();
+    assert!(names.iter().any(|n| n=="mcp_mock_echo"), "应代理出 echo 工具: {names:?}");
+    // 非 mcp → Err
+    assert!(connect_mcp_manifest(&json!({"name":"x","kind":"command","command":"echo"})).await.is_err());
+}
+
+#[test]
+fn mcp_tools_record_read_roundtrip() {
+    use cmx_agent_plugin::{read_mcp_tools, record_mcp_tools};
+    let dir = tmp("mcprec");
+    std::fs::create_dir_all(dir.join("srv")).unwrap();
+    assert!(read_mcp_tools(&dir, "srv").is_empty());
+    record_mcp_tools(&dir, "srv", &["mcp_srv_a".into(), "mcp_srv_b".into()]);
+    assert_eq!(read_mcp_tools(&dir, "srv"), vec!["mcp_srv_a".to_string(), "mcp_srv_b".to_string()]);
+    std::fs::remove_dir_all(&dir).ok();
+}

@@ -28,7 +28,7 @@ use serde_json::{Value, json};
 pub use command::CommandPluginTool;
 pub use http::HttpPluginTool;
 pub use market::{PluginMarketplaceTool, fetch_market_catalog};
-pub use mcp::connect_mcp_plugins;
+pub use mcp::{connect_mcp_manifest, connect_mcp_plugins};
 pub use wasm::WasmPluginTool;
 
 /// 一份插件清单（cmx-plugin.json）。`kind` 决定载体。
@@ -187,9 +187,64 @@ pub fn uninstall_plugin(dir: &Path, name: &str) -> Result<Value, String> {
     }))
 }
 
-/// 实时扫 plugins 目录 → 清单摘要（前门 list_plugins 用；反映安装/卸载后的当前状态，无需重启）。
+/// 实时扫 plugins 目录 → 清单摘要（前门 list_plugins 用；反映安装/卸载/启停后的当前状态，无需重启）。
+/// 每条摘要带 `enabled`（无 `.disabled` 标记文件即启用）。
 pub fn scan_plugin_summaries(dir: &Path) -> Vec<Value> {
-    read_manifests(dir).iter().map(|(_, m)| m.summary_json()).collect()
+    read_manifests(dir)
+        .iter()
+        .map(|(pdir, m)| {
+            let mut s = m.summary_json();
+            if let Some(o) = s.as_object_mut() {
+                o.insert("enabled".into(), json!(!is_plugin_disabled(pdir)));
+            }
+            s
+        })
+        .collect()
+}
+
+/// 插件是否被禁用（目录内有 `.disabled` 标记文件）。
+pub fn is_plugin_disabled(plugin_dir: &Path) -> bool {
+    plugin_dir.join(".disabled").exists()
+}
+
+/// 设置插件启停：`disabled=true` 写 `.disabled` 标记、`false` 删之（名称净化，限本目录）。
+pub fn set_plugin_disabled(plugins_dir: &Path, name: &str, disabled: bool) -> Result<(), String> {
+    let safe = sanitize_plugin_name(name).ok_or("name 非法")?;
+    let pdir = plugins_dir.join(&safe);
+    if !pdir.exists() {
+        return Err(format!("插件 {name} 未安装"));
+    }
+    let marker = pdir.join(".disabled");
+    if disabled {
+        std::fs::write(&marker, b"disabled").map_err(|e| format!("写禁用标记失败 {e}"))?;
+    } else if marker.exists() {
+        std::fs::remove_file(&marker).map_err(|e| format!("删禁用标记失败 {e}"))?;
+    }
+    Ok(())
+}
+
+/// 读一个已装插件的清单原文（供启用时重建工具热注册）。名称净化。
+pub fn read_plugin_manifest(plugins_dir: &Path, name: &str) -> Option<Value> {
+    let safe = sanitize_plugin_name(name)?;
+    let txt = std::fs::read_to_string(plugins_dir.join(&safe).join("cmx-plugin.json")).ok()?;
+    serde_json::from_str(&txt).ok()
+}
+
+/// 记录 mcp 插件热连出的代理工具名（`<dir>/<name>/.mcp-tools.json`），供卸载/禁用时逐个热卸载。
+pub fn record_mcp_tools(plugins_dir: &Path, name: &str, tool_names: &[String]) {
+    if let Some(safe) = sanitize_plugin_name(name) {
+        let path = plugins_dir.join(&safe).join(".mcp-tools.json");
+        let _ = std::fs::write(&path, serde_json::to_string(tool_names).unwrap_or_default());
+    }
+}
+
+/// 读回 mcp 插件的代理工具名（无则空）。
+pub fn read_mcp_tools(plugins_dir: &Path, name: &str) -> Vec<String> {
+    let Some(safe) = sanitize_plugin_name(name) else { return Vec::new() };
+    std::fs::read_to_string(plugins_dir.join(&safe).join(".mcp-tools.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
 }
 
 /// 从一份（刚安装的）清单构造其**同步载体工具**（http/command/wasm），供热注册。
@@ -265,8 +320,11 @@ pub fn load_plugins(dir: &Path) -> (Vec<Arc<dyn Tool>>, Vec<PluginManifest>) {
     let mut tools = Vec::new();
     let mut manifests = Vec::new();
     for (pdir, m) in read_manifests(dir) {
-        if let Some(t) = tool_from_manifest(&m, Some(&pdir)) {
-            tools.push(t);
+        // 禁用的插件：登记进清单（列表可见）但不构建工具（启动不加载）。
+        if !is_plugin_disabled(&pdir) {
+            if let Some(t) = tool_from_manifest(&m, Some(&pdir)) {
+                tools.push(t);
+            }
         }
         manifests.push(m);
     }

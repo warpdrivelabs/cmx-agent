@@ -62,6 +62,9 @@ pub struct ConnectorRegistry {
     descriptors: Vec<ConnectorDescriptor>,
     clients: Vec<CmxServiceClient>,
     config: ConnectorConfig,
+    /// U13 链内逐步 PEP（可选）：设了则 EngineChain 每步向 PDP 判权。
+    pep: Option<std::sync::Arc<crate::dataauth::DataAuthPep>>,
+    identity: Option<std::sync::Arc<std::sync::RwLock<cmx_agent_core::Subject>>>,
 }
 
 impl ConnectorRegistry {
@@ -107,11 +110,25 @@ impl ConnectorRegistry {
             descriptors,
             clients,
             config,
+            pep: None,
+            identity: None,
         }
     }
 
     pub fn config(&self) -> &ConnectorConfig {
         &self.config
+    }
+
+    /// U13：注入链内逐步 PEP + 共享授权主体（与 AuthGuard 同一份）。设了则 EngineChain 每步向 PDP 判权。
+    /// 须在 `register_into` 前调用。
+    pub fn with_data_auth(
+        mut self,
+        pep: std::sync::Arc<crate::dataauth::DataAuthPep>,
+        identity: std::sync::Arc<std::sync::RwLock<cmx_agent_core::Subject>>,
+    ) -> Self {
+        self.pep = Some(pep);
+        self.identity = Some(identity);
+        self
     }
 
     /// 注入共享令牌槽到三连接器 client——登录后所有连接器读写自动带 `Authorization: Bearer`
@@ -171,6 +188,8 @@ impl ConnectorRegistry {
             onto: self.clients[1].clone(),
             flow: self.clients[0].clone(),
             report: self.clients[2].clone(),
+            pep: self.pep.clone(),
+            identity: self.identity.clone(),
         }));
     }
 

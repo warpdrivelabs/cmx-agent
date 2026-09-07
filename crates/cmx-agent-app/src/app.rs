@@ -48,6 +48,14 @@ pub struct AgentApp {
     plugins_dir: Option<std::path::PathBuf>,
     /// U15 远程市场 URL（env CMX_AGENT_PLUGIN_MARKET；list_plugins 有则拉取市场目录）。
     plugin_market: Option<String>,
+    /// U13 数据权限 PEP（启用数据权限时 Some）：登录后按真实用户重热 PDP 判定。
+    data_auth_pep: Option<Arc<cmx_agent_connectors::DataAuthPep>>,
+    /// U13 共享授权主体：与 AuthGuard 闭包共享同一 Arc；登录写真实用户(userId+roles)、登出复位。
+    auth_identity: Option<Arc<std::sync::RwLock<cmx_agent_core::Subject>>>,
+    /// B2 可热换模型槽（与 Agent 共享）：模型选择器切换模型即时生效。
+    model_slot: Option<crate::ModelSlot>,
+    /// B2 模型配置目录（含 model.json）：切换模型后持久化。
+    model_config_dir: Option<std::path::PathBuf>,
 }
 
 impl AgentApp {
@@ -64,6 +72,10 @@ impl AgentApp {
             plugins: Vec::new(),
             plugins_dir: None,
             plugin_market: None,
+            data_auth_pep: None,
+            auth_identity: None,
+            model_slot: None,
+            model_config_dir: None,
         }
     }
 
@@ -105,6 +117,25 @@ impl AgentApp {
     /// 注入远程市场 URL（U15；None/空 = 无市场，list_plugins 返回空市场）。
     pub fn with_plugin_market(mut self, url: Option<String>) -> Self {
         self.plugin_market = url.filter(|s| !s.is_empty());
+        self
+    }
+
+    /// U13：注入数据权限 PEP + 共享授权主体（由 DesktopAppBuilder 在启用数据权限时调用）。
+    /// 之后 `login` 会把主体换成真实登录用户(userId+roles)并重热 PDP；`logout` 复位为无角色（fail-closed）。
+    pub fn with_data_auth_identity(
+        mut self,
+        pep: Arc<cmx_agent_connectors::DataAuthPep>,
+        identity: Arc<std::sync::RwLock<cmx_agent_core::Subject>>,
+    ) -> Self {
+        self.data_auth_pep = Some(pep);
+        self.auth_identity = Some(identity);
+        self
+    }
+
+    /// B2：注入可热换模型槽 + 配置目录（由 DesktopAppBuilder 调用）。模型选择器据此列出/切换模型。
+    pub fn with_model(mut self, slot: crate::ModelSlot, config_dir: impl Into<std::path::PathBuf>) -> Self {
+        self.model_slot = Some(slot);
+        self.model_config_dir = Some(config_dir.into());
         self
     }
 
@@ -155,6 +186,18 @@ impl AgentApp {
                 *g = Some(user.access_token.clone());
             }
         }
+        // U13：把授权主体换成真实登录用户(userId+roles)并重热 PDP → 数据权限门按此人判定。
+        if let (Some(pep), Some(identity)) = (&self.data_auth_pep, &self.auth_identity) {
+            let subj = {
+                let mut s = cmx_agent_core::Subject::new(user.user_id.clone());
+                s.roles = user.roles.clone();
+                s
+            };
+            if let Ok(mut g) = identity.write() {
+                *g = subj.clone();
+            }
+            pep.prewarm(&subj, cmx_agent_connectors::ENFORCED_PERMS).await;
+        }
         *self.current_user.lock().expect("current_user lock") = Some(user);
         Ok(public)
     }
@@ -185,6 +228,12 @@ impl AgentApp {
                 *g = None;
             }
         }
+        // U13：授权主体复位为无角色匿名 → 数据权限门 fail-closed（登出后写操作被 PDP 拒）。
+        if let Some(identity) = &self.auth_identity {
+            if let Ok(mut g) = identity.write() {
+                *g = cmx_agent_core::Subject::new("anon");
+            }
+        }
     }
 
     /// 列出连接器卡片（描述 + live 健康）。未启用连接器时返回空表。
@@ -193,6 +242,61 @@ impl AgentApp {
             Some(cr) => cr.probe_all().await,
             None => vec![],
         }
+    }
+
+    /// B2：列出可选模型（前门 list_models → 模型选择器）。
+    /// `current` = 当前生效模型（真实 provider 的 model，或 demo）；`candidates` = 同 provider 候选 + demo。
+    pub fn list_models(&self) -> serde_json::Value {
+        let cfg = cmx_agent_model::ModelProviderConfig::resolve(self.model_config_dir.as_deref());
+        let (current, provider, base_url) = match &cfg {
+            Some(c) => (c.model.clone(), provider_label(&c.base_url), c.base_url.clone()),
+            None => ("demo".to_string(), "离线演示".to_string(), String::new()),
+        };
+        let mut candidates: Vec<serde_json::Value> = Vec::new();
+        if let Some(c) = &cfg {
+            for m in c.candidate_models() {
+                candidates.push(serde_json::json!({ "model": m, "label": m }));
+            }
+            // 保证当前模型在列表里（provider 未识别或自定义模型名时）
+            if !candidates.iter().any(|x| x["model"] == current) {
+                candidates.insert(0, serde_json::json!({ "model": current, "label": current }));
+            }
+        }
+        candidates.push(serde_json::json!({ "model": "demo", "label": "离线演示（DemoModel）" }));
+        serde_json::json!({
+            "service": "cmx-model",
+            "current": current,
+            "provider": provider,
+            "baseUrl": base_url,
+            "configurable": cfg.is_some(),
+            "candidates": candidates,
+        })
+    }
+
+    /// B2：切换模型（前门 set_model）。`model=="demo"` → 换 DemoModel（仅本进程，不持久化）；
+    /// 否则在当前 provider 上换模型名 → 热换 + 持久化 model.json（下次启动沿用）。
+    pub fn set_model(&self, model: &str) -> AppResult<serde_json::Value> {
+        let slot = self
+            .model_slot
+            .as_ref()
+            .ok_or_else(|| AppError::BadRequest("未启用模型槽".into()))?;
+        if model.eq_ignore_ascii_case("demo") {
+            slot.swap(std::sync::Arc::new(crate::DemoModel));
+            return Ok(serde_json::json!({ "service": "cmx-model", "current": "demo", "persisted": false,
+                "note": "已切到离线演示模型（本次会话；重启按 model.json）" }));
+        }
+        let mut cfg = cmx_agent_model::ModelProviderConfig::resolve(self.model_config_dir.as_deref())
+            .ok_or_else(|| AppError::BadRequest("未配置真实模型（无 model.json/env），只能用 demo".into()))?;
+        cfg.model = model.to_string();
+        slot.swap(std::sync::Arc::new(cmx_agent_model::OpenAiCompatModel::new(cfg.clone())));
+        // 持久化到 model.json（切换后重启沿用）。
+        let mut persisted = false;
+        if let Some(dir) = &self.model_config_dir {
+            persisted = cfg.save(dir).is_ok();
+        }
+        let note = if persisted { "已切换并持久化，立即生效" } else { "已切换（本次会话；持久化失败）" };
+        Ok(serde_json::json!({ "service": "cmx-model", "current": model, "provider": provider_label(&cfg.base_url),
+            "persisted": persisted, "note": note }))
     }
 
     /// U15：列出插件（前门 list_plugins → master-detail 视图）。
@@ -219,39 +323,70 @@ impl AgentApp {
     }
 
     /// U15：安装插件（前门 install_plugin）。用户在详情面板点「安装」直接触发（点击即人工授权）。
-    /// 写入 plugins 目录 + **热注册**同步载体工具（http/command/wasm 立即可用，无需重启；mcp 仍需重启）。
-    pub fn install_plugin(&self, manifest: &serde_json::Value) -> AppResult<serde_json::Value> {
+    /// 写入 plugins 目录 + **热注册**：http/command/wasm 建同步工具；**mcp 异步连上 server 代理其工具**——
+    /// 均立即可用、无需重启。
+    pub async fn install_plugin(&self, manifest: &serde_json::Value) -> AppResult<serde_json::Value> {
         let dir = self
             .plugins_dir
             .as_ref()
-            .ok_or_else(|| AppError::BadRequest("未配置 plugins 目录".into()))?;
-        let mut info = cmx_agent_plugin::install_manifest(dir, manifest).map_err(AppError::BadRequest)?;
-        // 热注册：构建同步载体工具挂进共享注册表（经 Arc<Agent> 的 &self 方法，下一回合即可见）。
-        let hot = match cmx_agent_plugin::tool_for_installed(dir, manifest) {
-            Some(tool) => {
-                self.agent.tools().register_dyn(tool);
-                true
+            .ok_or_else(|| AppError::BadRequest("未配置 plugins 目录".into()))?
+            .clone();
+        let mut info = cmx_agent_plugin::install_manifest(&dir, manifest).map_err(AppError::BadRequest)?;
+        let kind = manifest.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+        let name = manifest.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let hot = if kind == "mcp" {
+            // mcp：异步连上 server，代理其工具热注册；记录工具名供卸载。
+            match cmx_agent_plugin::connect_mcp_manifest(manifest).await {
+                Ok(tools) => {
+                    let names: Vec<String> = tools.iter().map(|t| t.spec().name).collect();
+                    for t in tools {
+                        self.agent.tools().register_dyn(t);
+                    }
+                    cmx_agent_plugin::record_mcp_tools(&dir, name, &names);
+                    !names.is_empty()
+                }
+                Err(e) => {
+                    tracing::warn!("mcp 插件 {name} 热连失败：{e}");
+                    false
+                }
             }
-            None => false,
+        } else {
+            match cmx_agent_plugin::tool_for_installed(&dir, manifest) {
+                Some(tool) => {
+                    self.agent.tools().register_dyn(tool);
+                    true
+                }
+                None => false,
+            }
         };
         if let Some(o) = info.as_object_mut() {
             o.insert("hotLoaded".into(), serde_json::json!(hot));
             o.insert(
                 "note".into(),
-                serde_json::json!(if hot { "已热加载，立即可用（无需重启）" } else { "mcp/未知载体：重启后生效" }),
+                serde_json::json!(if hot { "已热加载，立即可用（无需重启）" } else { "未知载体或连接失败：重启后再试" }),
             );
         }
         Ok(info)
     }
 
-    /// U15：卸载插件（前门 uninstall_plugin）。删 `<plugins>/<name>/` + **热卸载**该工具（立即从注册表移除）。
+    /// U15：卸载插件（前门 uninstall_plugin）。删 `<plugins>/<name>/` + **热卸载**其工具（mcp 卸其全部代理工具）。
     pub fn uninstall_plugin(&self, name: &str) -> AppResult<serde_json::Value> {
         let dir = self
             .plugins_dir
             .as_ref()
             .ok_or_else(|| AppError::BadRequest("未配置 plugins 目录".into()))?;
+        // 删目录前先读 mcp 代理工具名。
+        let mcp_tools = cmx_agent_plugin::read_mcp_tools(dir, name);
         let mut info = cmx_agent_plugin::uninstall_plugin(dir, name).map_err(AppError::BadRequest)?;
-        let hot = self.agent.tools().unregister(name); // 工具名 = 清单 name
+        let hot = if !mcp_tools.is_empty() {
+            let mut any = false;
+            for tn in &mcp_tools {
+                any |= self.agent.tools().unregister(tn);
+            }
+            any
+        } else {
+            self.agent.tools().unregister(name) // 工具名 = 清单 name
+        };
         if let Some(o) = info.as_object_mut() {
             o.insert("hotUnloaded".into(), serde_json::json!(hot));
             o.insert(
@@ -260,6 +395,41 @@ impl AgentApp {
             );
         }
         Ok(info)
+    }
+
+    /// U15：启用/禁用插件（前门 toggle_plugin）。禁用=写 `.disabled` 标记 + 热卸载工具（保留清单文件）；
+    /// 启用=删标记 + 重建工具热注册。http/command/wasm 即时生效；mcp 需重启（异步连接）。
+    pub fn toggle_plugin(&self, name: &str, enabled: bool) -> AppResult<serde_json::Value> {
+        let dir = self
+            .plugins_dir
+            .as_ref()
+            .ok_or_else(|| AppError::BadRequest("未配置 plugins 目录".into()))?;
+        cmx_agent_plugin::set_plugin_disabled(dir, name, !enabled).map_err(AppError::BadRequest)?;
+        let hot = if enabled {
+            // 启用：读回清单重建工具热注册（mcp/未知→None，需重启）。
+            match cmx_agent_plugin::read_plugin_manifest(dir, name)
+                .and_then(|mf| cmx_agent_plugin::tool_for_installed(dir, &mf))
+            {
+                Some(tool) => {
+                    self.agent.tools().register_dyn(tool);
+                    true
+                }
+                None => false,
+            }
+        } else {
+            // 禁用：从注册表热卸载。
+            self.agent.tools().unregister(name)
+        };
+        let note = if !hot {
+            "mcp/未知载体：重启后生效"
+        } else if enabled {
+            "已启用，立即可用"
+        } else {
+            "已禁用，立即移除"
+        };
+        Ok(serde_json::json!({
+            "service": "cmx-plugin", "name": name, "enabled": enabled, "hot": hot, "note": note,
+        }))
     }
 
     /// 新建会话并落元数据。返回其 id。
@@ -399,6 +569,22 @@ impl AgentApp {
 
     pub fn agent(&self) -> &Agent {
         &self.agent
+    }
+}
+
+/// B2：按 base_url 推断 provider 展示名（模型选择器用）。
+fn provider_label(base_url: &str) -> String {
+    let b = base_url.to_ascii_lowercase();
+    if b.contains("deepseek") {
+        "DeepSeek".into()
+    } else if b.contains("openai") {
+        "OpenAI".into()
+    } else if b.contains("dashscope") || b.contains("qwen") || b.contains("aliyun") {
+        "通义千问".into()
+    } else if b.is_empty() {
+        "离线演示".into()
+    } else {
+        "OpenAI 兼容".into()
     }
 }
 

@@ -38,6 +38,12 @@ pub enum AppRequest {
     InstallPlugin { manifest: serde_json::Value },
     /// U15 卸载插件（用户在详情面板确认「卸载」；删 `<plugins>/<name>/`）。
     UninstallPlugin { name: String },
+    /// U15 启用/禁用插件（详情面板 toggle；禁用保留清单文件，仅从注册表热卸载）。
+    TogglePlugin { name: String, enabled: bool },
+    /// B2 列出可选模型（模型选择器：当前 + 同 provider 候选 + demo）。
+    ListModels,
+    /// B2 切换模型（热换 + 持久化 model.json；`model=="demo"` 换离线演示）。
+    SetModel { model: String },
     /// 登录（对接门户 /api/auth/login）。成功后前门持有当前用户。
     Login { username: String, password: String },
     /// 取当前登录用户（前端启动时填充用户菜单；未登录 data.user=null）。
@@ -150,8 +156,13 @@ async fn dispatch_inner(app: &AgentApp, req: AppRequest) -> Result<AppResponse, 
             ))
         }
         AppRequest::ListPlugins => Ok(AppResponse::ok(app.list_plugins().await)),
-        AppRequest::InstallPlugin { manifest } => Ok(AppResponse::ok(app.install_plugin(&manifest)?)),
+        AppRequest::InstallPlugin { manifest } => Ok(AppResponse::ok(app.install_plugin(&manifest).await?)),
         AppRequest::UninstallPlugin { name } => Ok(AppResponse::ok(app.uninstall_plugin(&name)?)),
+        AppRequest::TogglePlugin { name, enabled } => {
+            Ok(AppResponse::ok(app.toggle_plugin(&name, enabled)?))
+        }
+        AppRequest::ListModels => Ok(AppResponse::ok(app.list_models())),
+        AppRequest::SetModel { model } => Ok(AppResponse::ok(app.set_model(&model)?)),
         AppRequest::Login { username, password } => {
             let user = app.login(&username, &password).await?;
             Ok(AppResponse::ok(serde_json::json!({ "user": user })))

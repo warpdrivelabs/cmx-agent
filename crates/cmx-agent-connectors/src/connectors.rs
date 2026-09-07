@@ -8,6 +8,16 @@ use serde_json::{Value, json};
 
 use crate::client::CmxServiceClient;
 
+/// business_chain 各 op → 所需写权限（供链内逐步 PEP）。
+fn op_perm(op: &str) -> Option<&'static str> {
+    match op {
+        "put_object" | "execute_action" => Some("onto:write"),
+        "start_instance" | "complete_task" => Some("flow:write"),
+        "compute_report" => Some("report:write"),
+        _ => None,
+    }
+}
+
 /// flow 连接器：列流程定义。端点 `POST /api/flow/v1/definitions/list`（活体契约：POST + 信封 data.definitions；
 /// auth=on 实例需登录后带 Bearer——由共享令牌槽自动附加）。
 pub struct FlowConnector {
@@ -598,10 +608,30 @@ pub struct EngineChain {
     pub onto: CmxServiceClient,
     pub flow: CmxServiceClient,
     pub report: CmxServiceClient,
+    /// U13 链内逐步 PEP（可选）：设了则每步 op 先按 [`op_perm`] 向 PDP 判权，deny 则停链。
+    pub pep: Option<std::sync::Arc<crate::dataauth::DataAuthPep>>,
+    /// 共享授权主体（与 AuthGuard 同一份；登录后为真实用户）。
+    pub identity: Option<std::sync::Arc<std::sync::RwLock<cmx_agent_core::Subject>>>,
 }
 
 impl EngineChain {
+    /// 链内逐步 PEP：判定本步 op 的写权限。未启用 PEP → 放行（靠工具级一次审批兜底）。
+    async fn authorize_op(&self, op: &str) -> Result<(), String> {
+        let (Some(pep), Some(id)) = (&self.pep, &self.identity) else {
+            return Ok(()); // 未接数据权限：不逐步判，沿用一次人审
+        };
+        let Some(perm) = op_perm(op) else { return Ok(()) };
+        let subj = id.read().map_err(|_| "授权主体锁毒化".to_string())?.clone();
+        if pep.decide(&subj, perm).await {
+            Ok(())
+        } else {
+            Err(format!("op '{op}' 权限不足（{perm}），链在此步中止"))
+        }
+    }
+
     async fn run_op(&self, op: &str, input: &Value) -> Result<Value, String> {
+        // U13：先逐步判权（deny 即停链），再执行本步。
+        self.authorize_op(op).await?;
         let s = |k: &str| input.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
         match op {
             "put_object" => {

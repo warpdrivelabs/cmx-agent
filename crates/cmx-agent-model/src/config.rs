@@ -108,6 +108,37 @@ impl ModelProviderConfig {
         let content = std::fs::read_to_string(&path).ok()?;
         Self::from_json_str(&content)
     }
+
+    /// 序列化为 model.json 内容（含敏感 api_key；调用方负责文件 mode 600、勿入 git）。
+    pub fn to_json_string(&self) -> String {
+        serde_json::json!({
+            "base_url": self.base_url,
+            "api_key": self.api_key,
+            "model": self.model,
+            "temperature": self.temperature,
+            "timeout_ms": self.timeout_ms,
+        })
+        .to_string()
+    }
+
+    /// 写入 `<dir>/model.json`（覆盖）。模型选择器切换模型后持久化用。
+    pub fn save(&self, dir: &std::path::Path) -> std::io::Result<()> {
+        std::fs::write(dir.join("model.json"), self.to_json_string())
+    }
+
+    /// 按 base_url 推断 provider 的候选模型名（模型选择器下拉用；未知 provider 返回空）。
+    pub fn candidate_models(&self) -> Vec<&'static str> {
+        let b = self.base_url.to_ascii_lowercase();
+        if b.contains("deepseek") {
+            vec!["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-r1", "deepseek-chat"]
+        } else if b.contains("openai") {
+            vec!["gpt-4o", "gpt-4o-mini", "o1", "o1-mini"]
+        } else if b.contains("dashscope") || b.contains("qwen") || b.contains("aliyun") {
+            vec!["qwen-max", "qwen-plus", "qwen-turbo"]
+        } else {
+            vec![]
+        }
+    }
 }
 
 #[cfg(test)]

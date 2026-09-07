@@ -160,6 +160,15 @@
   .cmxmenu .mi:hover{background:var(--hover);color:var(--ink)}
   .cmxmenu .mi-i{width:16px;text-align:center;font-size:14px}
   .cmxmenu .mi-sep{height:1px;background:var(--border);margin:5px 8px}
+  /* 模型选择弹层（锚在 composer 模型按钮上方；left/bottom 由 JS 定位） */
+  .modelmenu{left:auto;bottom:auto;min-width:240px;max-height:60vh;overflow:auto}
+  .modelmenu .mm-head{font-size:11.5px;color:var(--muted);padding:4px 11px 6px;font-weight:600}
+  .modelmenu .mm-head .mm-b{color:var(--border2);font-weight:400}
+  .modelmenu .mm-item{cursor:pointer}
+  .modelmenu .mm-item.on{color:var(--aqua)}
+  .modelmenu .mm-ck{width:14px;text-align:center;color:var(--aqua)}
+  .modelmenu .mm-note{font-size:11px;color:var(--muted);padding:6px 11px}
+  .model .mdot{color:var(--aqua)} .model .mlabel{font-weight:600}
 
   /* ── 主区 ── */
   main{flex:1;display:flex;flex-direction:column;min-width:0;position:relative}
@@ -395,7 +404,9 @@
   .pg-desc{color:var(--ink2);font-size:13.5px;margin-top:8px;line-height:1.5}
   .pg-badge{font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;border:1px solid}
   .pg-badge.installed{color:var(--aqua);border-color:var(--aqua);background:var(--accent-soft)}
+  .pg-badge.disabled{color:var(--muted);border-color:var(--muted)}
   .pg-badge.market{color:var(--muted);border-color:var(--border2)}
+  .pg-item.pg-off .pic{filter:grayscale(1);opacity:.55} .pg-item.pg-off .pn{color:var(--muted)}
   .pg-actions{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
   .pg-actbtn{font-size:12.5px;padding:6px 14px;border-radius:8px;border:1px solid var(--border2);background:var(--surface);color:var(--ink);cursor:pointer}
   .pg-actbtn:hover{background:var(--hover)}
@@ -504,9 +515,10 @@
     <div class="mi-sep"></div>
     <div class="mi" data-act="menuAbout"><span class="mi-i">ⓘ</span> 关于 cmx 智能体</div>
   </div>
+  <!-- 模型选择弹层（点 composer 的 ◎ 模型按钮弹出；锚在按钮上方，点外部关闭）。 -->
+  <div class="cmxmenu modelmenu" id="modelmenu"></div>
   <!-- 用户菜单（点活动栏底部用户头像弹出）：用户信息 + 常用功能 -->
-  <div class="cmxmenu usermenu" id="usermenu">
-    <div class="um-head">
+  <div class="cmxmenu usermenu" id="usermenu">    <div class="um-head">
       <div class="um-av" id="um-av">🐷</div>
       <div class="um-info"><div class="um-name" id="um-name">未登录</div><div class="um-mail" id="um-mail">点此登录 cmx 门户</div></div>
     </div>
@@ -544,7 +556,7 @@
           <button class="tool-ic" title="引用文件（占位）"><span>@</span></button>
           <button class="tool-ic" title="调用技能（占位）"><span>/</span></button>
           <div class="sp"></div>
-          <button class="model" title="模型选择（占位）">◎ Auto ▾</button>
+          <button class="model" data-act="openModelMenu" title="模型选择"><span class="mdot">◎</span> <span class="mlabel">Auto</span> ▾</button>
           <button class="tool-ic voice" data-act="toggleVoice" title="语音输入（占位）"><span>🎙</span></button>
           <button class="send" id="homesend" data-act="startFromHome" title="发送 ⏎"><span>↑</span></button>
         </div>
@@ -581,7 +593,7 @@
               <button class="tool-ic" title="引用文件（占位）"><span>@</span></button>
               <button class="tool-ic" title="调用技能（占位）"><span>/</span></button>
               <div class="sp"></div>
-              <button class="model" title="模型选择（占位）">◎ Auto ▾</button>
+              <button class="model" data-act="openModelMenu" title="模型选择"><span class="mdot">◎</span> <span class="mlabel">Auto</span> ▾</button>
               <button class="tool-ic voice" data-act="toggleVoice" title="语音输入（占位）"><span>🎙</span></button>
               <button class="send tab-send" title="发送 ⏎"><span>↑</span></button>
             </div>
@@ -1250,11 +1262,23 @@ async function startFromHome(){
 }
 // 文本域自动增高（随内容 26→200px）
 function autoGrow(el){ el.style.height="auto"; el.style.height=Math.min(el.scrollHeight,200)+"px"; }
-// 语音输入（占位）
+// 语音输入（Web Speech API：Chrome / WKWebView 支持；把语音转文本填入当前输入框）
 function toggleVoice(btn){
   if(!btn) return;
-  const on=btn.classList.toggle("recording");
-  if(on){ setTimeout(()=>{ btn.classList.remove("recording"); alert("语音输入为占位功能。\n真实实现将接入语音识别（Web Speech API 或系统听写），把语音转成文本填入输入框。"); }, 900); }
+  if(window._rec){ try{ window._rec.stop(); }catch(e){} window._rec=null; btn.classList.remove("recording"); return; }
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if(!SR){ showToast("此环境不支持语音识别（需 Web Speech API）"); return; }
+  const input = document.querySelector(".tabview.active .inp2") || document.getElementById("inp");
+  if(!input){ return; }
+  const base = input.value;
+  const rec = new SR(); window._rec=rec;
+  rec.lang="zh-CN"; rec.interimResults=true; rec.continuous=false;
+  rec.onresult=(e)=>{ let t=""; for(let i=0;i<e.results.length;i++) t+=e.results[i][0].transcript;
+    input.value=(base?base+" ":"")+t; input.dispatchEvent(new Event("input")); };
+  rec.onerror=(e)=>{ btn.classList.remove("recording"); window._rec=null; showToast("语音识别出错："+((e&&e.error)||"")); };
+  rec.onend=()=>{ btn.classList.remove("recording"); window._rec=null; };
+  try{ rec.start(); btn.classList.add("recording"); showToast("🎙 正在聆听…（再点停止）"); }
+  catch(err){ btn.classList.remove("recording"); window._rec=null; showToast("无法启动麦克风"); }
 }
 document.getElementById("inp").addEventListener("keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();startFromHome();} });
 document.getElementById("inp").addEventListener("input",e=>autoGrow(e.target));
@@ -1388,7 +1412,8 @@ const KIND_LABEL={http:"HTTP 端点",command:"Shell 命令",wasm:"WebAssembly",m
 function plugIcon(p){ return p.icon || KIND_ICON[p.kind] || "🧩"; }
 function plugColor(p){ return KIND_COLOR[p.kind] || "#6b7280"; }
 function plugMeta(p,installed){
-  const parts=[p.author||"cmx", p.version?("v"+p.version):null, KIND_LABEL[p.kind]||p.kind, installed?"已启用":null].filter(Boolean);
+  const state = installed ? (p.enabled===false ? "已禁用" : "已启用") : null;
+  const parts=[p.author||"cmx", p.version?("v"+p.version):null, KIND_LABEL[p.kind]||p.kind, state].filter(Boolean);
   return parts.join(" · ");
 }
 
@@ -1419,11 +1444,12 @@ function renderPluginSidebar(installed, market){
   list.innerHTML="";
   const sec=(t)=>{ const s=el("pg-sec"); s.textContent=t; list.append(s); };
   const row=(p, isInstalled)=>{
-    const it=el("plug-item pg-item");
+    const off = isInstalled && p.enabled===false;
+    const it=el("plug-item pg-item"+(off?" pg-off":""));
     it.dataset.act="pluginSelect"; it.dataset.pkey=p.name; it.dataset.pinstalled=isInstalled?"1":"0";
     it.innerHTML=`<div class="pic" style="background:${plugColor(p)}">${esc(plugIcon(p))}</div>
       <div class="pm"><div class="pn">${esc(p.name||"")}</div><div class="pd">${esc(p.description||"")}</div><div class="pmeta">${esc(plugMeta(p,isInstalled))}</div></div>
-      <div class="pbtn ${isInstalled?'installed':''}">${isInstalled?'已安装':'安装'}</div>`;
+      <div class="pbtn ${isInstalled?'installed':''}">${isInstalled?(off?'已禁用':'已安装'):'安装'}</div>`;
     list.append(it);
   };
   sec("已安装 ("+installed.length+")");
@@ -1456,12 +1482,14 @@ function openPluginDetail(p, installed){
 // VSCode 式详情：头部 + 能力/权限 + 信息页（HTML 链接 iframe 内嵌 + 外开兜底）。已装/未装差异化。
 function renderPluginDetail(view, p, installed){
   const d=view.querySelector(".pg-detail");
+  const enabled = p.enabled!==false;   // 已装默认启用；后端 enabled:false 表示禁用
   const badge=installed
-    ? `<span class="pg-badge installed">✓ 已安装 · 已启用</span>`
+    ? (enabled ? `<span class="pg-badge installed">✓ 已安装 · 已启用</span>`
+               : `<span class="pg-badge disabled">⊘ 已安装 · 已禁用</span>`)
     : `<span class="pg-badge market">☁ 未安装</span>`;
   const actions=installed
     ? `<button class="pg-actbtn" data-act="pluginUninstall" data-pkey="${esc(p.name)}">卸载</button>
-       <button class="pg-actbtn ghost" data-act="pluginToggle" data-pkey="${esc(p.name)}">禁用</button>`
+       <button class="pg-actbtn ghost" data-act="pluginToggle" data-pkey="${esc(p.name)}" data-enabled="${enabled?'1':'0'}">${enabled?'禁用':'启用'}</button>`
     : `<button class="pg-actbtn primary" data-act="pluginInstall" data-pkey="${esc(p.name)}">安装</button>`;
   const openBtn=p.homepage?`<button class="pg-actbtn ghost" data-act="pluginOpenHomepage" data-url="${esc(p.homepage)}">⧉ 在浏览器打开</button>`:"";
   // 能力/权限 chips + 载体特有
@@ -1555,8 +1583,20 @@ async function pluginUninstall(el){
     showToast("卸载失败："+((r&&r.error&&r.error.message)||"未知错误"));
   }
 }
-function pluginToggle(el){
-  showToast("启停开关暂为占位（安装/卸载已是真实操作）");
+async function pluginToggle(el){
+  const key=el.dataset.pkey, enable = el.dataset.enabled!=="1";  // 当前启用→点击=禁用
+  el.disabled=true; el.textContent=enable?"启用中…":"禁用中…";
+  const r=await call({cmd:"toggle_plugin", name:key, enabled:enable});
+  if(r&&r.ok){
+    const note=(r.data&&r.data.note)||(enable?"已启用":"已禁用");
+    showToast((enable?"已启用「":"已禁用「")+key+"」· "+note);
+    await loadPluginSidebar();
+    const np=(PLUGIN_STATE.installed||[]).find(x=>x.name===key);
+    if(np) reopenPluginDetail(np, true);
+  } else {
+    el.disabled=false; el.textContent=enable?"启用":"禁用";
+    showToast("操作失败："+((r&&r.error&&r.error.message)||"未知错误"));
+  }
 }
 // 详情复位/重开（安装/卸载后刷新详情面板 + 同步侧栏高亮）
 function resetPluginDetail(){
@@ -1568,6 +1608,43 @@ function reopenPluginDetail(p, installed){
   document.querySelectorAll("#pg-list .pg-item.sel").forEach(x=>x.classList.remove("sel"));
   const row=document.querySelector('#pg-list .pg-item[data-pkey="'+(window.CSS&&CSS.escape?CSS.escape(p.name):p.name)+'"][data-pinstalled="'+(installed?"1":"0")+'"]');
   if(row) row.classList.add("sel");
+}
+
+// —— 模型选择器（composer 的 ◎ 模型按钮）——
+function setModelLabel(name){
+  const short = name==="demo" ? "Demo" : name.replace(/^deepseek-/,"").replace(/^gpt-/,"gpt-");
+  document.querySelectorAll(".model .mlabel").forEach(s=>s.textContent=short);
+}
+async function refreshModelLabel(){
+  try{ const r=await call({cmd:"list_models"}); if(r&&r.ok) setModelLabel(r.data.current); }catch(e){}
+}
+async function openModelMenu(el){
+  const menu=document.getElementById("modelmenu");
+  if(menu.classList.contains("on")){ menu.classList.remove("on"); return; }
+  closeMenu();
+  const r=await call({cmd:"list_models"});
+  if(!r||!r.ok){ showToast("取模型列表失败"); return; }
+  const d=r.data; const cur=d.current;
+  const head=`<div class="mm-head">${esc(d.provider||"模型")}${d.baseUrl?` · <span class="mm-b">${esc(d.baseUrl.replace(/^https?:\/\//,""))}</span>`:""}</div>`;
+  const items=(d.candidates||[]).map(c=>{
+    const on=c.model===cur;
+    return `<div class="mi mm-item${on?' on':''}" data-act="setModelChoice" data-model="${esc(c.model)}"><span class="mm-ck">${on?'✓':''}</span> ${esc(c.label||c.model)}</div>`;
+  }).join("");
+  menu.innerHTML=head+items+(d.configurable?"":`<div class="mm-note">未配置真实模型（model.json/env），仅 demo 可用</div>`);
+  // 锚到按钮上方
+  const rect=el.getBoundingClientRect();
+  menu.style.left=Math.max(8,rect.left)+"px";
+  menu.style.bottom=(window.innerHeight-rect.top+6)+"px";
+  menu.style.top="auto";
+  menu.classList.add("on");
+}
+async function setModelChoice(el){
+  const model=el.dataset.model;
+  document.getElementById("modelmenu").classList.remove("on");
+  setModelLabel(model);
+  const r=await call({cmd:"set_model", model});
+  if(r&&r.ok){ showToast("已切换模型 · "+((r.data&&r.data.note)||model)); }
+  else { showToast("切换失败："+((r&&r.error&&r.error.message)||"未知")); refreshModelLabel(); }
 }
 
 // 状态图标（替代 exit 码文字）：成功 ✓ / 失败 ✕
@@ -1633,7 +1710,7 @@ const ACTIONS = { newTask, openConnectors, startFromHome, toggleSidebar, toggleT
   toggleTabOverflow, tabCtxClose, tabCtxCloseOthers, tabCtxCloseRight, tabCtxCloseAll };
 document.addEventListener("click", e=>{
   const el = e.target.closest("[data-act]");
-  if(!el){ closeMenu(); closeTabCtx(); document.getElementById("tab-dropdown").classList.remove("on"); return; }
+  if(!el){ closeMenu(); closeTabCtx(); document.getElementById("modelmenu").classList.remove("on"); document.getElementById("tab-dropdown").classList.remove("on"); return; }
   const act = el.dataset.act;
   if(act === "runConnectorTool"){
     runConnectorTool(el.dataset.tool, el.dataset.online === "1");
@@ -1648,6 +1725,8 @@ document.addEventListener("click", e=>{
   } else if(act === "pluginInstall"){ pluginInstall(el);
   } else if(act === "pluginUninstall"){ pluginUninstall(el);
   } else if(act === "pluginToggle"){ pluginToggle(el);
+  } else if(act === "openModelMenu"){ openModelMenu(el);
+  } else if(act === "setModelChoice"){ setModelChoice(el);
   } else if(act === "toggleVoice"){
     toggleVoice(el);
   } else if(act === "showPanel"){
@@ -1682,7 +1761,7 @@ applyTheme((()=>{ try{ return localStorage.getItem("cmx-theme")||"dark"; }catch(
 })();
 
 // 启动：初始化 tab 条（空态显示首页）、更新按钮（默认隐藏）、当前用户，聚焦输入框
-(async()=>{ renderUpdateBtn(); refreshUser(); await refreshTasks(); renderTabs(); document.getElementById("inp").focus(); })();
+(async()=>{ renderUpdateBtn(); refreshUser(); refreshModelLabel(); await refreshTasks(); renderTabs(); document.getElementById("inp").focus(); })();
 
 // 登录后主窗口被显示时刷新用户信息：原生壳监听 Tauri "logged-in" 事件；并兜底监听窗口 focus。
 if(window.__TAURI__ && window.__TAURI__.event){ window.__TAURI__.event.listen("logged-in", ()=>refreshUser()); }

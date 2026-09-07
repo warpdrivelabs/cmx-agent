@@ -131,6 +131,10 @@ impl DesktopAppBuilder {
     /// 若启用连接器，把 flow/onto/report 三连接器工具也挂进注册表，并把 ConnectorRegistry 交给 app 供面板查询。
     pub fn build(self) -> AppResult<AgentApp> {
         // U13 数据权限：启用则 AuthGuard 用真 PEP（PDP /decide 判定 + 缓存 + fail-closed）；否则 allow_all 占位。
+        // 授权按**当前登录用户**（共享 identity 单元，登录后由 app 更新 + 重热）——非静态 desktop 主体。
+        let identity: Arc<std::sync::RwLock<Subject>> =
+            Arc::new(std::sync::RwLock::new(self.subject.clone()));
+        let mut data_auth_wire: Option<(Arc<cmx_agent_connectors::DataAuthPep>, Arc<std::sync::RwLock<Subject>>)> = None;
         let auth_guard = match &self.data_auth {
             Some(base) => {
                 let pep = cmx_agent_connectors::DataAuthPep::new(
@@ -139,8 +143,7 @@ impl DesktopAppBuilder {
                     self.subject.user.clone(),
                     true, // enforce=严格：缓存未命中/服务不可达即拒绝
                 );
-                // 预热写权限判定（build 非 async → 用当前 runtime 阻塞跑一次；无 runtime 则跳过预热，
-                // 首次工具调用时该 perm 未命中会被 fail-closed 拒绝，安全侧默认）。
+                // 初始预热（desktop 主体；登录后 app 会以真实用户重热覆盖）。build 非 async → 阻塞跑一次。
                 let subject = self.subject.clone();
                 let pep2 = pep.clone();
                 if let Ok(h) = tokio::runtime::Handle::try_current() {
@@ -150,7 +153,15 @@ impl DesktopAppBuilder {
                         });
                     });
                 }
-                AuthGuard::new(move |subj, perm| pep.cached_allow(subj, perm))
+                let pep_arc = Arc::new(pep);
+                let pep_guard = pep_arc.clone();
+                let id_guard = identity.clone();
+                data_auth_wire = Some((pep_arc, identity.clone()));
+                // 守卫按共享 identity 判权（忽略静态 ctx.subject）→ 登录后即以真实用户角色接地。
+                AuthGuard::new(move |_ctx_subj, perm| {
+                    let subj = id_guard.read().expect("auth identity");
+                    pep_guard.cached_allow(&subj, perm)
+                })
             }
             None => AuthGuard::allow_all(), // 未启用数据权限：显式放行占位
         };
@@ -221,7 +232,11 @@ impl DesktopAppBuilder {
         let token_store: cmx_agent_connectors::TokenStore =
             Arc::new(std::sync::RwLock::new(None));
         let connectors = self.connectors.map(|cfg| {
-            let cr = ConnectorRegistry::new(cfg).with_token(token_store.clone());
+            let mut cr = ConnectorRegistry::new(cfg).with_token(token_store.clone());
+            // U13：启用数据权限时，把 PEP + 共享主体也给连接器 → business_chain 链内逐步判权。
+            if let Some((pep, identity)) = &data_auth_wire {
+                cr = cr.with_data_auth(pep.clone(), identity.clone());
+            }
             cr.register_into(&mut registry);
             Arc::new(cr)
         });
@@ -241,8 +256,12 @@ impl DesktopAppBuilder {
             None => self.approver,
         };
 
+        // B2 模型选择器：把选定模型包进可热换的 ModelSlot（Agent 持 wrapper，app 经句柄换实现）。
+        let model_slot = crate::ModelSlot::new(self.model);
+        let model_config_dir = self.data_dir.clone();
+
         let agent = Agent::builder()
-            .model(self.model)
+            .model(Arc::new(model_slot.clone()))
             .tools(registry)
             .guards(guards)
             .approver(approver)
@@ -257,7 +276,8 @@ impl DesktopAppBuilder {
             .with_token_store(token_store)
             .with_plugins(plugin_summaries)
             .with_plugins_dir(plugins_dir)
-            .with_plugin_market(plugin_market);
+            .with_plugin_market(plugin_market)
+            .with_model(model_slot, model_config_dir);
         if let Some(a) = interactive {
             app = app.with_approver(a);
         }
@@ -269,6 +289,10 @@ impl DesktopAppBuilder {
         }
         if let Some(auth_cfg) = self.auth {
             app = app.with_auth(Arc::new(AuthProvider::new(auth_cfg)));
+        }
+        // U13：把 PEP + 共享 identity 交给 app——登录后按真实用户角色重热 PDP 判定（授权门接地）。
+        if let Some((pep, identity)) = data_auth_wire {
+            app = app.with_data_auth_identity(pep, identity);
         }
         Ok(app)
     }
