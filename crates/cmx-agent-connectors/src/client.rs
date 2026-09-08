@@ -2,7 +2,7 @@
 //!
 //! 解 cmx 统一 `{code,msg,data}` 信封：`code==0` 取 `data`，否则错误。**双认证兜底**：默认带
 //! `X-Tenant`/`X-User` 头（适配 auth=off 的 e2e 实例，本机实测可用）；若配了 API Key 也一并带上
-//! （auth=apikey 实例）。8s 超时，rustls（免系统 openssl）。
+//! （auth=apikey 实例）。30s 超时（门户冷启动/首请求慢时不误杀），rustls（免系统 openssl）。
 
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
@@ -18,7 +18,7 @@ fn client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
-            .timeout(Duration::from_secs(8))
+            .timeout(Duration::from_secs(30))
             .user_agent("cmx-agent-connectors/0.1")
             .build()
             .expect("build reqwest client")
