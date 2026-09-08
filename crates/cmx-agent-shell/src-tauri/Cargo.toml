@@ -19,12 +19,16 @@ tauri-build = { version = "2", features = [] }
 # 复用已建、已测的核（path 直引，不经 .workspace）。壳不含业务逻辑。
 cmx-agent-app = { path = "../../cmx-agent-app" }
 cmx-agent-core = { path = "../../cmx-agent-core" }
+cmx-agent-im = { path = "../../cmx-agent-im" }
 cmx-agent-mcp = { path = "../../cmx-agent-mcp" }
 cmx-agent-plugin = { path = "../../cmx-agent-plugin" }
 tauri = { version = "2", features = [] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 directories = "5"
+# 日志：tracing（核已用）+ subscriber 把 IM 桥/Stream 的 info/warn 打到 stderr（联调抓 chat_id 必需）。
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

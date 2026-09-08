@@ -147,6 +147,18 @@ impl Agent {
         self.run_turn_observed(session, user_input, None).await
     }
 
+    /// 以指定主体（谁在驱动本回合）跑一个回合——IM 绑定场景：飞书消息按**绑定用户**的身份过守卫
+    /// （GuardCtx.subject 用传入值），与桌面登录用户（policy.subject）互不干扰、并发无竞态。
+    /// `subject=None` 等价 [`Self::run_turn`]（回落 policy.subject）。
+    pub async fn run_turn_as(
+        &self,
+        session: &mut Session,
+        user_input: &str,
+        subject: &crate::guard::Subject,
+    ) -> AgentResult<TurnOutcome> {
+        self.run_turn_observed_as(session, user_input, None, Some(subject)).await
+    }
+
     /// 流式回合：同 [`Self::run_turn`]，但模型文字增量经 `observer` 实时回调（打字机效果）。
     /// deltas 不进日志；最终完整文本仍以 `ModelMessage` 事件落库。
     pub async fn run_turn_observed(
@@ -154,6 +166,18 @@ impl Agent {
         session: &mut Session,
         user_input: &str,
         observer: Option<&dyn crate::model::TurnObserver>,
+    ) -> AgentResult<TurnOutcome> {
+        self.run_turn_observed_as(session, user_input, observer, None).await
+    }
+
+    /// [`Self::run_turn_observed`] 的主体注入版：`turn_subject=Some` 时守卫按该主体判定
+    /// （IM 绑定：绑定用户身份跑回合）；`None` 回落 `policy.subject`。
+    pub async fn run_turn_observed_as(
+        &self,
+        session: &mut Session,
+        user_input: &str,
+        observer: Option<&dyn crate::model::TurnObserver>,
+        turn_subject: Option<&crate::guard::Subject>,
     ) -> AgentResult<TurnOutcome> {
         let turn = session.next_turn_no();
         session.log.append(EventKind::TurnStarted {
@@ -204,7 +228,7 @@ impl Agent {
             // ②–⑥ 处理工具调用：一步内的多个调用**并发执行**（真并行 fan-out）。
             // 前置(路由/守卫/审批)与结果回灌仍按序（借用 &mut session + 保持日志有序），
             // 只有工具体 invoke() 并发——子智能体/网络 I/O 型调用总耗时≈最慢者而非累加。
-            self.handle_tool_calls(session, &resp.tool_calls).await;
+            self.handle_tool_calls_as(session, &resp.tool_calls, turn_subject).await;
         };
 
         session.log.append(EventKind::TurnEnded {
@@ -229,7 +253,15 @@ impl Agent {
     ///
     /// 说明：`&mut Session` 无法被多个并发 future 共享，故只把「纯执行」并发化，
     /// 而把所有会话写(事件落库/审批)留在串行段——这是 Rust 借用规则下并发与不变量的正确切分。
-    async fn handle_tool_calls(&self, session: &mut Session, calls: &[ToolCall]) {
+    ///
+    /// 守卫按 `subject` 判定：`turn_subject=Some`（IM 绑定：绑定用户身份过守卫，与桌面登录主体
+    /// policy.subject 并发无竞态）；`None` 回落本批策略快照的 subject。
+    async fn handle_tool_calls_as(
+        &self,
+        session: &mut Session,
+        calls: &[ToolCall],
+        turn_subject: Option<&crate::guard::Subject>,
+    ) {
         /// 通过前置、待并发执行的工具调用。
         struct Pending<'c> {
             call: &'c ToolCall,
@@ -239,6 +271,7 @@ impl Agent {
 
         // 本批工具调用的策略快照（两旋钮运行时可切；一批内取一致值）。
         let policy = self.policy();
+        let subject = turn_subject.unwrap_or(&policy.subject);
         // —— ①–④ 前置(串行)：落库调用、路由、pre 守卫、审批 ——
         let mut pending: Vec<Pending<'_>> = Vec::new();
         for call in calls {
@@ -264,7 +297,7 @@ impl Agent {
                     call,
                     spec: &spec,
                     sandbox: policy.sandbox,
-                    subject: &policy.subject,
+                    subject,
                     result: None,
                 };
                 self.guards.run(&gctx)
@@ -351,7 +384,7 @@ impl Agent {
                     call: p.call,
                     spec: &p.spec,
                     sandbox: policy.sandbox,
-                    subject: &policy.subject,
+                    subject,
                     result: Some(&result),
                 };
                 self.guards.run(&gctx)

@@ -57,8 +57,9 @@ async fn bridge_runs_turn_and_replies() {
         chat_id: "555".into(),
         text: "在吗".into(),
         update_id: 1,
+        sender: String::new(),
     }]);
-    let bridge = ImBridge::new(app, prov.clone(), allow(&["555"]));
+    let bridge = ImBridge::new(app, prov.clone(), "test", allow(&["555"]));
 
     let n = bridge.tick().await.unwrap();
     assert_eq!(n, 1);
@@ -75,8 +76,9 @@ async fn bridge_blocks_unauthorized() {
         chat_id: "999".into(),
         text: "hi".into(),
         update_id: 1,
+        sender: String::new(),
     }]);
-    let bridge = ImBridge::new(app, prov.clone(), allow(&["555"]));
+    let bridge = ImBridge::new(app, prov.clone(), "test", allow(&["555"]));
 
     bridge.tick().await.unwrap();
     let sent = prov.sent.lock().unwrap();
@@ -92,19 +94,21 @@ async fn same_chat_reuses_session() {
         chat_id: "42".into(),
         text: "第一句".into(),
         update_id: 1,
+        sender: String::new(),
     }]);
-    let bridge = ImBridge::new(app.clone(), prov.clone(), allow(&["42"]));
+    let bridge = ImBridge::new(app.clone(), prov.clone(), "test", allow(&["42"]));
     bridge.tick().await.unwrap();
     // 第二条
     *prov.inbound.lock().unwrap() = vec![InboundMsg {
         chat_id: "42".into(),
         text: "第二句".into(),
         update_id: 2,
+        sender: String::new(),
     }];
     bridge.tick().await.unwrap();
 
     // 会话 im-42 应存在且含两轮
-    let evs = app.get_events("im-42").unwrap();
+    let evs = app.get_events("im-test-42").unwrap();
     let turns = evs
         .iter()
         .filter(|e| matches!(e.kind, cmx_agent_core::event::EventKind::UserMessage { .. }))

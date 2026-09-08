@@ -11,11 +11,15 @@ unsafe_code = "forbid"
 [dependencies]
 cmx-agent-app.workspace = true
 cmx-agent-core.workspace = true
+cmx-agent-connectors.workspace = true
 serde_json.workspace = true
 async-trait.workspace = true
 tokio = { workspace = true }
 tracing.workspace = true
 # IM HTTP provider（Telegram/自建网关）：版本/特性对齐 cmx-agent-model，复用离线缓存
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# 飞书 Stream（长连接）：websocket 客户端，rustls 免系统 TLS 依赖。拉取失败见计划「风险与退路」。
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 
 [dev-dependencies]

@@ -37,8 +37,16 @@ async fn main() -> anyhow::Result<()> {
     demo(args).await
 }
 
-/// im 模式：`cmx-agent im [data_dir]`——把 IM（Telegram 参考）桥接到真实模型 agent，长轮询遥控。
-/// 需 env：`CMX_AGENT_IM_TOKEN`（bot token）+ `CMX_AGENT_IM_ALLOW`（逗号分隔的 chat_id 白名单，安全必需）。
+/// im 模式：`cmx-agent im [data_dir]`——把 IM 桥接到真实模型 agent，长轮询/长连接遥控。
+///
+/// 配置经 `CMX_AGENT_IM_*` env（解析见 `cmx_agent_im::ImConfig`）：
+/// - `CMX_AGENT_IM_KIND`：provider 类型，默认 `telegram`；可选 `feishu`。
+/// - `CMX_AGENT_IM_ALLOW`：逗号分隔的 chat_id 白名单（安全必需）。
+///   - 联调抓 chat_id：设 `CMX_AGENT_IM_ALLOW=__probe__`，发条消息，日志会打 `IM 未授权 chat_id=…`。
+/// - `CMX_AGENT_IM_NO_ALLOW=1`：显式放开白名单（仅测试/纯内网，生产勿用）。
+/// - 各 provider 凭证 env：
+///   - Telegram：`CMX_AGENT_IM_TOKEN`（+ 可选 `CMX_AGENT_IM_BASE`）。
+///   - 飞书：`CMX_AGENT_IM_FEISHU_APP_ID` + `CMX_AGENT_IM_FEISHU_APP_SECRET`（+ 可选 `_BASE`）。
 async fn im_mode(data_dir: Option<String>) -> anyhow::Result<()> {
     let data_dir = data_dir.unwrap_or_else(|| {
         std::env::temp_dir()
@@ -57,20 +65,14 @@ async fn im_mode(data_dir: Option<String>) -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!(e.to_string()))?,
     );
 
-    let provider = cmx_agent_im::TelegramProvider::from_env()
-        .ok_or_else(|| anyhow::anyhow!("缺 CMX_AGENT_IM_TOKEN（Telegram bot token）"))?;
-    let allow: std::collections::HashSet<String> = std::env::var("CMX_AGENT_IM_ALLOW")
-        .unwrap_or_default()
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-    if allow.is_empty() {
-        anyhow::bail!(
-            "IM 遥控需白名单：设 CMX_AGENT_IM_ALLOW=逗号分隔的 chat_id（避免任何人驱动你的 agent）"
-        );
-    }
-    let bridge = cmx_agent_im::ImBridge::new(app, Arc::new(provider), Some(allow));
+    // IM 配置收口：provider 类型 + 白名单 + 凭证，统一由 ImConfig 解析。
+    let im_cfg = cmx_agent_im::ImConfig::from_env().map_err(|e| anyhow::anyhow!(e))?;
+    let provider = im_cfg.build_provider().map_err(|e| anyhow::anyhow!(e))?;
+    let allow = im_cfg.allow;
+    tracing::info!("cmx-agent IM provider = {:?}", im_cfg.kind);
+    // 飞书 Stream：启动常驻后台 task；Telegram 长轮询：trait 默认 no-op。
+    provider.start().await.map_err(|e| anyhow::anyhow!(e))?;
+    let bridge = cmx_agent_im::ImBridge::new(app, provider, im_cfg.kind.label(), allow);
     bridge.run().await;
     Ok(())
 }

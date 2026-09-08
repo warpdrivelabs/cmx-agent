@@ -63,6 +63,12 @@ pub enum AppRequest {
         #[serde(default)]
         session_id: String,
     },
+    /// IM 绑定：为当前登录用户生成一次性验证码（前端引导用户把码发到 IM 机器人完成绑定）。
+    ImBindGenCode,
+    /// IM 绑定：列出当前登录用户已绑定的 IM 身份（provider/open_id/created_at）。
+    ImListBindings,
+    /// IM 绑定：解绑一个 IM 身份。
+    ImUnbind { provider: String, open_id: String },
 }
 
 /// 前门响应（`ok=false` 时 `error` 有值；成功时 `data` 按命令而异）。统一信封，便于前端一致处理。
@@ -200,6 +206,11 @@ async fn dispatch_inner(app: &AgentApp, req: AppRequest) -> Result<AppResponse, 
             Ok(AppResponse::ok(
                 serde_json::json!({ "resolved": hit, "call_id": call_id, "approved": approved, "all": all }),
             ))
+        }
+        AppRequest::ImBindGenCode => Ok(AppResponse::ok(app.im_bind_gen_code().await?)),
+        AppRequest::ImListBindings => Ok(AppResponse::ok(app.im_list_bindings().await?)),
+        AppRequest::ImUnbind { provider, open_id } => {
+            Ok(AppResponse::ok(app.im_unbind(&provider, &open_id).await?))
         }
     }
 }

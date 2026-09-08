@@ -16,6 +16,46 @@ use std::sync::OnceLock;
 use cmx_agent_app::{AgentApp, AuthConfig, DesktopAppBuilder, dispatch_json};
 use tauri::{Emitter, Manager, State};
 
+/// IM 遥控装配（U16）：读 `CMX_AGENT_IM_*` env，配了就启动 `ImBridge` 后台 task，与桌面 UI 共用同一
+/// `AgentApp`。IM 消息跑同一回合循环 → 事件经 SessionEventBus → `session_event` Tauri 事件实时推前端，
+/// 回复经 ImBridge 回发 IM。未配 / 装配失败 → 仅打日志，不阻断桌面 UI（IM 是可选遥控通道）。
+fn start_im_if_configured(rt: &'static tokio::runtime::Runtime, app: Arc<AgentApp>) {
+    let im_cfg = match cmx_agent_im::ImConfig::from_env() {
+        Ok(c) => c,
+        Err(e) => {
+            // 常见原因：未配白名单（CMX_AGENT_IM_ALLOW）。视为「未启用 IM」，静默不打扰纯本地用户。
+            eprintln!("[im] 未启用 IM 遥控（{e}）");
+            return;
+        }
+    };
+    let provider = match im_cfg.build_provider() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("[im] IM provider 装配失败，IM 遥控不可用：{e}");
+            return;
+        }
+    };
+    let kind_label = im_cfg.kind.label();
+    let allow = im_cfg.allow;
+    // 用户绑定：门户可达即启用（按发送者 open_id 鉴权 + 以绑定用户身份跑回合）。
+    // 绑定模式下白名单 allow 退化为会话级二次过滤；未配白名单则全放行（门=已绑定身份）。
+    let portal_base = std::env::var("CMX_AGENT_PORTAL_BASE")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "http://127.0.0.1:8080".into());
+    let bindings = cmx_agent_im::PortalBindingResolver::new(portal_base.clone());
+    eprintln!("[im] 启动 IM 遥控（provider={kind_label}，绑定模式，portal={portal_base}）");
+    rt.spawn(async move {
+        // 飞书 Stream：起常驻后台 task；Telegram 长轮询：trait 默认 no-op。
+        if let Err(e) = provider.start().await {
+            eprintln!("[im] provider.start 失败：{e}");
+            return;
+        }
+        let bridge =
+            cmx_agent_im::ImBridge::new(app, provider, kind_label, allow).with_bindings(std::sync::Arc::new(bindings));
+        bridge.run().await;
+    });
+}
 /// 应用状态：一个共享的 AgentApp（认证态用内部 Mutex，可跨命令共享）。
 struct AppState {
     app: Arc<AgentApp>,
@@ -186,7 +226,7 @@ fn build_app() -> AgentApp {
         t
     });
 
-    DesktopAppBuilder::new(workdir, data_dir, model)
+    let mut app = DesktopAppBuilder::new(workdir, data_dir.clone(), model)
         .connectors(cmx_agent_app::ConnectorConfig::default())
         .auth(AuthConfig::default()) // 登录门：对接门户 :8080 /api/auth
         .interactive_approval() // X4：shell 等需审批工具挂起等前端点按
@@ -194,7 +234,17 @@ fn build_app() -> AgentApp {
         // U13：opt-in 数据权限接地——env CMX_AGENT_DATAAUTH_URL 指向 cmx-data-auth 即启用真 PEP。
         .maybe_data_auth(std::env::var("CMX_AGENT_DATAAUTH_URL").ok())
         .build()
-        .expect("build agent app")
+        .expect("build agent app");
+
+    // IM 绑定面板（设置 → IM 绑定）：gen_code/list/unbind 三命令（经 dispatch_json）。
+    // 门户基址与登录门同源（AuthConfig::default().base_url），CMX_AGENT_PORTAL_BASE 可覆盖。
+    let portal_base = std::env::var("CMX_AGENT_PORTAL_BASE")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| AuthConfig::default().base_url);
+    app = app.with_im_binding(cmx_agent_app::ImBindingClient::new(portal_base));
+
+    app
 }
 
 /// 流式会话命令（办公助手对话）：在 net_rt 上跑一个回合，回合内每个事件经 Tauri 事件 `channel`
@@ -241,6 +291,14 @@ async fn send_stream(
 }
 
 fn main() {
+    // 初始化 tracing：默认 info，RUST_LOG 可调。IM 桥/Stream 的连接、未授权 chat_id 等都靠它打到 stderr。
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .with_target(false)
+        .init();
+
     let app = build_app();
 
     // 自检模式：`--selftest` 跑一次 list_connectors；`--selftest-login <user> <pass>` 跑一次登录。
@@ -271,9 +329,36 @@ fn main() {
     let _ = net_rt();
     eprintln!("[main] net_rt ready; launching login window (main hidden until login)");
 
+    let app = Arc::new(app);
+
+    // U16：IM 遥控（飞书/微信/钉钉…）。按 env 装配——配了 CMX_AGENT_IM_KIND 等就启动 ImBridge
+    // 后台 task（与 CLI `im` 模式同一套装配），与桌面 UI 共用同一个 AgentApp：IM 消息跑同一回合循环，
+    // 事件经 SessionEventBus → session_event Tauri 事件实时推前端，回复经 ImBridge 回发 IM。
+    // 未配 IM env → 跳过，桌面壳照常纯本地用。错误只打日志不阻断 UI（IM 是可选遥控通道）。
+    start_im_if_configured(net_rt(), Arc::clone(&app));
+
     tauri::Builder::default()
-        .manage(AppState { app: Arc::new(app) })
+        .manage(AppState { app })
         .invoke_handler(tauri::generate_handler![agent, login, logout_to_login, guard_login, send_stream, platform])
+        // U16：会话事件总线 → 前端实时通道。常驻 task 订阅 AgentApp 的 event_bus，把任意来源
+        //（本地 / IM 桥 / 后续 webhook）的会话事件 emit 成全局 `session_event` Tauri 事件。
+        // 前端 `index.html` 监听它，按 session_id 分流渲染——实现「飞书发消息实时显示到对话界面」，
+        // 且 IM 无关：微信/钉钉接入后走同一条路，零额外改动。
+        .setup(|app| {
+            let app_state = app.state::<AppState>();
+            let app_ref = app_state.app.clone();
+            let handle = app.handle().clone();
+            // 在专用 net_rt 上常驻消费 broadcast receiver → emit。net_rt 已预热（见上），驱动可用。
+            net_rt().spawn(async move {
+                let mut rx = app_ref.event_bus().subscribe();
+                while let Ok(env) = rx.recv().await {
+                    eprintln!("[bus] emit session_event session={} kind={}", env.session_id, serde_json::to_string(&env.event.kind).unwrap_or_default());
+                    let _ = handle.emit("session_event", env);
+                }
+                eprintln!("[main] session_event 转发 task 结束（总线已关闭）");
+            });
+            Ok(())
+        })
         // 登录门守卫：未登录时关闭登录窗 = 退出应用（否则只剩隐藏的主窗，界面像卡死）。
         .on_window_event(|window, event| {
             if window.label() == "login" {
