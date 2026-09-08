@@ -16,7 +16,11 @@ use async_trait::async_trait;
 use cmx_agent_app::AgentApp;
 
 mod telegram;
+mod feishu;
+mod config;
 pub use telegram::TelegramProvider;
+pub use feishu::FeishuProvider;
+pub use config::{ImConfig, ImKind, parse_allow};
 
 /// 一条入站 IM 消息。
 #[derive(Debug, Clone)]
@@ -34,12 +38,19 @@ pub trait ImProvider: Send + Sync {
     async fn poll(&self, offset: i64) -> Result<(Vec<InboundMsg>, i64), String>;
     /// 发一条消息给某会话。
     async fn send(&self, chat_id: &str, text: &str) -> Result<(), String>;
+    /// 启动 provider 的常驻接收链（如飞书 Stream 长连接后台 task）。
+    /// 长轮询型 provider（Telegram）无需启动，默认 no-op。
+    async fn start(&self) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// IM 桥：每个 IM 会话映射到一个稳定的 agent 会话，鉴权 → 跑回合 → 分段回复。
 pub struct ImBridge {
     app: Arc<AgentApp>,
     provider: Arc<dyn ImProvider>,
+    /// provider 类型标签，用于会话命名前缀 `im-<kind>-<chat>`（多 provider 不撞名）。
+    kind: String,
     /// None=开放（仅测试/内网）；Some=chat_id 白名单。
     allow: Option<HashSet<String>>,
     offset: AtomicI64,
@@ -47,10 +58,17 @@ pub struct ImBridge {
 }
 
 impl ImBridge {
-    pub fn new(app: Arc<AgentApp>, provider: Arc<dyn ImProvider>, allow: Option<HashSet<String>>) -> Self {
+    /// `kind` = provider 标签（如 `"feishu"`/`"telegram"`），用于会话命名前缀。
+    pub fn new(
+        app: Arc<AgentApp>,
+        provider: Arc<dyn ImProvider>,
+        kind: impl Into<String>,
+        allow: Option<HashSet<String>>,
+    ) -> Self {
         Self {
             app,
             provider,
+            kind: kind.into(),
             allow,
             offset: AtomicI64::new(0),
             sessions: Mutex::new(HashMap::new()),
@@ -61,13 +79,14 @@ impl ImBridge {
         self.allow.as_ref().map(|s| s.contains(chat)).unwrap_or(true)
     }
 
-    /// 每个 IM 会话 → 一个稳定 agent 会话 id（`im-<净化chat_id>`），跨消息续上下文。
+    /// 每个 IM 会话 → 一个稳定 agent 会话 id（`im-<kind>-<净化chat_id>`），跨消息续上下文。
+    /// kind 前缀让多 provider（飞书/微信/钉钉）的会话互不撞名。
     fn session_for(&self, chat: &str) -> String {
         let clean: String = chat
             .chars()
             .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
             .collect();
-        let sid = format!("im-{clean}");
+        let sid = format!("im-{}-{clean}", self.kind);
         self.sessions
             .lock()
             .expect("sessions lock")
@@ -85,6 +104,7 @@ impl ImBridge {
         for m in msgs {
             n += 1;
             if !self.allowed(&m.chat_id) {
+                tracing::info!("IM 未授权 chat_id={}（不在白名单）", m.chat_id);
                 let _ = self
                     .provider
                     .send(&m.chat_id, "⛔ 未授权：你的会话不在允许列表内。")
@@ -104,13 +124,20 @@ impl ImBridge {
         Ok(n)
     }
 
-    /// 长轮询主循环（出错退避重试）。
+    /// 长轮询/收件主循环（出错退避重试；无消息时节流，避免空转）。
     pub async fn run(&self) {
-        tracing::info!("cmx-agent IM 桥启动，开始长轮询…");
+        tracing::info!("cmx-agent IM 桥启动，开始轮询…");
         loop {
-            if let Err(e) = self.tick().await {
-                tracing::warn!("im tick 出错：{e}");
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            match self.tick().await {
+                Ok(0) => {
+                    // 无消息：短歇，避免空转吃 CPU（长轮询 provider 自带阻塞；Stream provider 靠此节流）。
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+                Ok(_) => { /* 有消息，立即进入下一轮 */ }
+                Err(e) => {
+                    tracing::warn!("im tick 出错：{e}");
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                }
             }
         }
     }

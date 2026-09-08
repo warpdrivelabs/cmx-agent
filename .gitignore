@@ -11,4 +11,3 @@
 /.env.*
 *.jsonback
 *.bak
-/test-reports/

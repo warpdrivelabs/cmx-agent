@@ -56,6 +56,8 @@ pub struct AgentApp {
     model_slot: Option<crate::ModelSlot>,
     /// B2 模型配置目录（含 model.json）：切换模型后持久化。
     model_config_dir: Option<std::path::PathBuf>,
+    /// U16 会话事件总线：任意来源（本地 / IM 桥）追加事件时广播给订阅者（`/api/subscribe` SSE）。
+    event_bus: Arc<crate::bus::SessionEventBus>,
 }
 
 impl AgentApp {
@@ -76,6 +78,7 @@ impl AgentApp {
             auth_identity: None,
             model_slot: None,
             model_config_dir: None,
+            event_bus: Arc::new(crate::bus::SessionEventBus::new()),
         }
     }
 
@@ -492,6 +495,11 @@ impl AgentApp {
         // 流式：加载完历史后挂 sink（历史用 push_restored 不触发 sink，故只流式本回合新事件）。
         // 同一个 sink 既是事件 EventSink（全量事件）又是 TurnObserver（文字增量）。
         let before = session.log.len();
+        // U16：始终挂事件总线 sink——任何来源（本地 / IM 桥）的本回合事件都广播给 `/api/subscribe` 订阅者。
+        session.log.add_sink(Arc::new(crate::bus::BusSink::new(
+            session_id.to_string(),
+            self.event_bus.sender(),
+        )));
         let outcome = match &sink {
             Some(s) => {
                 session.log.add_sink(s.clone());
@@ -569,6 +577,11 @@ impl AgentApp {
 
     pub fn agent(&self) -> &Agent {
         &self.agent
+    }
+
+    /// U16：会话事件总线引用（壳的 `/api/subscribe` SSE 订阅它，实现 IM 事件实时推前端）。
+    pub fn event_bus(&self) -> &Arc<crate::bus::SessionEventBus> {
+        &self.event_bus
     }
 }
 
