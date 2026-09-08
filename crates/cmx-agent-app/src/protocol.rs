@@ -47,6 +47,22 @@ pub enum AppRequest {
     /// 运行时切换两旋钮（沙箱能力 × 审批许可；其余 Policy 项不动）。
     /// `sandbox`: `read-only|workspace-write|danger-full-access`；`approval`: `never|on-request|unless-trusted`。
     SetPolicy { sandbox: String, approval: String },
+    /// B2 读取当前完整模型配置（api_key 脱敏），供配置面板填充表单。
+    GetModelConfig,
+    /// B2 保存完整模型配置并热换（配置面板「保存」调用）。
+    SetModelConfig {
+        base_url: String,
+        model: String,
+        #[serde(default)]
+        temperature: Option<f32>,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
+        /// "keep" 保留现有 key；"set" 使用 api_key_value。
+        #[serde(default = "default_keep")]
+        api_key_action: String,
+        #[serde(default)]
+        api_key_value: Option<String>,
+    },
     /// 登录（对接门户 /api/auth/login）。成功后前门持有当前用户。
     Login { username: String, password: String },
     /// 取当前登录用户（前端启动时填充用户菜单；未登录 data.user=null）。
@@ -69,6 +85,10 @@ pub enum AppRequest {
     ImListBindings,
     /// IM 绑定：解绑一个 IM 身份。
     ImUnbind { provider: String, open_id: String },
+}
+
+fn default_keep() -> String {
+    "keep".to_string()
 }
 
 /// 前门响应（`ok=false` 时 `error` 有值；成功时 `data` 按命令而异）。统一信封，便于前端一致处理。
@@ -189,6 +209,18 @@ async fn dispatch_inner(app: &AgentApp, req: AppRequest) -> Result<AppResponse, 
             let a: cmx_agent_core::ApprovalPolicy = parse_enum("approval", &approval)
                 .map_err(AppError::BadRequest)?;
             Ok(AppResponse::ok(app.set_policy(s, a)?))
+        }
+        AppRequest::GetModelConfig => Ok(AppResponse::ok(app.get_model_config())),
+        AppRequest::SetModelConfig { base_url, model, temperature, timeout_ms, api_key_action, api_key_value } => {
+            let mut payload = serde_json::json!({
+                "base_url": base_url,
+                "model": model,
+                "api_key_action": api_key_action,
+            });
+            if let Some(t) = temperature { payload["temperature"] = serde_json::json!(t); }
+            if let Some(ms) = timeout_ms { payload["timeout_ms"] = serde_json::json!(ms); }
+            if let Some(k) = api_key_value { payload["api_key_value"] = serde_json::json!(k); }
+            Ok(AppResponse::ok(app.set_model_config(payload)?))
         }
         AppRequest::Login { username, password } => {
             let user = app.login(&username, &password).await?;

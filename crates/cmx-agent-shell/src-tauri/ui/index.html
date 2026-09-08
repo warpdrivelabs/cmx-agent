@@ -193,6 +193,29 @@
   .modelmenu .mm-note{font-size:11px;color:var(--muted);padding:6px 11px}
   .model .mdot{color:var(--aqua)} .model .mlabel{font-weight:600}
 
+  /* ── 模型配置面板 ── */
+  .mcfg-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:200;display:flex;align-items:center;justify-content:center}
+  .mcfg-overlay.hidden{display:none}
+  .mcfg-box{background:var(--panel);border:1px solid var(--border2);border-radius:14px;padding:22px 24px 18px;width:min(480px,92vw);box-shadow:0 16px 48px rgba(0,0,0,.5)}
+  .mcfg-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;font-weight:700;font-size:15px}
+  .mcfg-head button{background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;padding:2px 6px;border-radius:5px}
+  .mcfg-head button:hover{background:var(--hover);color:var(--ink)}
+  .mcfg-row{display:flex;flex-direction:column;gap:4px;margin-bottom:13px}
+  .mcfg-row label{font-size:11.5px;color:var(--muted);font-weight:600}
+  .mcfg-row input[type=text],.mcfg-row input[type=number],.mcfg-row select{background:var(--bg);border:1px solid var(--border2);border-radius:8px;padding:7px 10px;color:var(--ink);font-size:13px;width:100%;box-sizing:border-box}
+  .mcfg-row input[type=text]:focus,.mcfg-row input[type=number]:focus,.mcfg-row select:focus{outline:none;border-color:var(--aqua)}
+  .mcfg-key-wrap{display:flex;gap:6px;align-items:center}
+  .mcfg-key-wrap input{flex:1}
+  .mcfg-key-wrap button{background:var(--bg);border:1px solid var(--border2);border-radius:8px;padding:6px 10px;color:var(--muted);cursor:pointer;font-size:15px;flex:0 0 auto}
+  .mcfg-key-wrap button:hover{color:var(--aqua);border-color:var(--aqua)}
+  .mcfg-temp-row{display:flex;align-items:center;gap:10px}
+  .mcfg-temp-row input[type=range]{flex:1;accent-color:var(--aqua)}
+  .mcfg-temp-val{min-width:36px;text-align:right;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .mcfg-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;padding-top:14px;border-top:1px solid var(--border)}
+  .mcfg-actions button{padding:7px 18px;border-radius:8px;font-size:13px;cursor:pointer;border:1px solid var(--border2);background:var(--bg);color:var(--ink)}
+  .mcfg-actions .mcfg-save{background:var(--aqua);border-color:var(--aqua);color:#000;font-weight:600}
+  .mcfg-actions .mcfg-save:hover{opacity:.88}
+
   /* ── 主区 ── */
   main{flex:1;display:flex;flex-direction:column;min-width:0;position:relative}
   /* ── 顶部多 tab 条 ── */
@@ -558,6 +581,53 @@
   </div>
   <!-- 模型选择弹层（点 composer 的 ◎ 模型按钮弹出；锚在按钮上方，点外部关闭）。 -->
   <div class="cmxmenu modelmenu" id="modelmenu"></div>
+  <!-- 模型配置面板（Modal）：可视化配置 base_url / api_key / model / temperature / timeout_ms -->
+  <div class="mcfg-overlay hidden" id="mcfg-overlay" onclick="if(event.target===this)closeModelConfig()">
+    <div class="mcfg-box">
+      <div class="mcfg-head">⚙ 模型配置 <button onclick="closeModelConfig()">✕</button></div>
+      <div class="mcfg-row">
+        <label>预设 Provider</label>
+        <select id="mcfg-preset" onchange="mcfgApplyPreset(this.value)">
+          <option value="">自定义</option>
+          <option value="mlamp">MLamp（llmgw-bz.mlamp.cn/v1）</option>
+          <option value="deepseek">DeepSeek（api.deepseek.com/v1）</option>
+          <option value="openai">OpenAI（api.openai.com/v1）</option>
+        </select>
+      </div>
+      <div class="mcfg-row">
+        <label>Base URL</label>
+        <input id="mcfg-base-url" type="text" placeholder="https://api.xxx.com/v1" oninput="mcfgRefreshCandidates()">
+      </div>
+      <div class="mcfg-row">
+        <label>API Key</label>
+        <div class="mcfg-key-wrap">
+          <input id="mcfg-api-key" type="password" placeholder="（脱敏；点 🔓 解锁编辑）" readonly>
+          <button id="mcfg-key-lock-btn" onclick="mcfgToggleKeyLock()" title="解锁/锁定 API Key">🔒</button>
+        </div>
+      </div>
+      <div class="mcfg-row">
+        <label>模型</label>
+        <input id="mcfg-model" type="text" list="mcfg-model-list" placeholder="如 mlamp/deepseek-v4-flash">
+        <datalist id="mcfg-model-list"></datalist>
+      </div>
+      <div class="mcfg-row">
+        <label>Temperature</label>
+        <div class="mcfg-temp-row">
+          <input id="mcfg-temp" type="range" min="0" max="1" step="0.01" value="0.2"
+            oninput="document.getElementById('mcfg-temp-val').textContent=parseFloat(this.value).toFixed(2)">
+          <span class="mcfg-temp-val" id="mcfg-temp-val">0.20</span>
+        </div>
+      </div>
+      <div class="mcfg-row">
+        <label>超时 (ms)</label>
+        <input id="mcfg-timeout" type="number" min="5000" max="300000" step="1000" value="60000">
+      </div>
+      <div class="mcfg-actions">
+        <button onclick="closeModelConfig()">取消</button>
+        <button class="mcfg-save" onclick="saveModelConfig()">保存</button>
+      </div>
+    </div>
+  </div>
   <!-- 用户菜单（点活动栏底部用户头像弹出）：用户信息 + 常用功能 -->
   <div class="cmxmenu usermenu" id="usermenu">    <div class="um-head">
       <div class="um-av" id="um-av">🐷</div>
@@ -1880,7 +1950,8 @@ async function openModelMenu(el){
     const on=c.model===cur;
     return `<div class="mi mm-item${on?' on':''}" data-act="setModelChoice" data-model="${esc(c.model)}"><span class="mm-ck">${on?'✓':''}</span> ${esc(c.label||c.model)}</div>`;
   }).join("");
-  menu.innerHTML=head+items+(d.configurable?"":`<div class="mm-note">未配置真实模型（model.json/env），仅 demo 可用</div>`);
+  menu.innerHTML=head+items+(d.configurable?"":`<div class="mm-note">未配置真实模型（model.json/env），仅 demo 可用</div>`)
+    +`<div class="mi mm-item" style="margin-top:4px;border-top:1px solid var(--border);padding-top:6px" data-act="openModelConfig">⚙ 配置模型…</div>`;
   // 锚到按钮上方
   const rect=el.getBoundingClientRect();
   menu.style.left=Math.max(8,rect.left)+"px";
@@ -1895,6 +1966,100 @@ async function setModelChoice(el){
   const r=await call({cmd:"set_model", model});
   if(r&&r.ok){ showToast("已切换模型 · "+((r.data&&r.data.note)||model)); }
   else { showToast("切换失败："+((r&&r.error&&r.error.message)||"未知")); refreshModelLabel(); }
+}
+
+// —— 模型配置面板 ——
+const MCFG_PRESETS = {
+  mlamp:    "https://llmgw-bz.mlamp.cn/v1",
+  deepseek: "https://api.deepseek.com/v1",
+  openai:   "https://api.openai.com/v1",
+};
+const MCFG_CANDIDATES = {
+  mlamp:    ["mlamp/deepseek-v4-flash","mlamp/qwen3-coder-next-fp8","mlamp/deepseek-v4-pro","mlamp/glm-5.2","mlamp/kimi-k3","mlamp/qwen3.8-27b","mlamp/minimax-h3"],
+  deepseek: ["deepseek-v4-flash","deepseek-v4-pro","deepseek-r1","deepseek-chat"],
+  openai:   ["gpt-4o","gpt-4o-mini","o1","o1-mini"],
+};
+let _mcfgKeyUnlocked = false;
+
+async function openModelConfig(){
+  closeMenu();
+  _mcfgKeyUnlocked = false;
+  const keyInput = document.getElementById("mcfg-api-key");
+  const lockBtn  = document.getElementById("mcfg-key-lock-btn");
+  keyInput.readOnly = true; keyInput.type = "password";
+  lockBtn.textContent = "🔒";
+  const r = await call({cmd:"get_model_config"});
+  if(!r||!r.ok){ showToast("读取配置失败"); return; }
+  const d = r.data;
+  document.getElementById("mcfg-base-url").value  = d.base_url    || "";
+  keyInput.value                                   = d.api_key_masked || "";
+  document.getElementById("mcfg-model").value      = d.model       || "";
+  const temp = typeof d.temperature === "number" ? d.temperature : 0.2;
+  document.getElementById("mcfg-temp").value       = temp;
+  document.getElementById("mcfg-temp-val").textContent = temp.toFixed(2);
+  document.getElementById("mcfg-timeout").value    = d.timeout_ms  || 60000;
+  mcfgSetPreset(d.base_url || "");
+  mcfgUpdateCandidates(d.candidates || []);
+  document.getElementById("mcfg-overlay").classList.remove("hidden");
+}
+function closeModelConfig(){
+  document.getElementById("mcfg-overlay").classList.add("hidden");
+}
+function mcfgToggleKeyLock(){
+  const input = document.getElementById("mcfg-api-key");
+  const btn   = document.getElementById("mcfg-key-lock-btn");
+  if(_mcfgKeyUnlocked){
+    input.readOnly = true; input.type = "password";
+    btn.textContent = "🔒"; _mcfgKeyUnlocked = false;
+    input.value = ""; // 锁回后清空，防止明文残留
+  } else {
+    input.readOnly = false; input.type = "text"; input.value = "";
+    btn.textContent = "🔓"; _mcfgKeyUnlocked = true;
+    input.focus();
+  }
+}
+function mcfgApplyPreset(key){
+  if(!key) return;
+  document.getElementById("mcfg-base-url").value = MCFG_PRESETS[key] || "";
+  mcfgUpdateCandidates(MCFG_CANDIDATES[key] || []);
+}
+function mcfgSetPreset(url){
+  const sel = document.getElementById("mcfg-preset");
+  const match = Object.entries(MCFG_PRESETS).find(([,v])=>url.includes(v.replace(/^https?:\/\//,"").split("/")[0]));
+  sel.value = match ? match[0] : "";
+}
+function mcfgRefreshCandidates(){
+  const url = document.getElementById("mcfg-base-url").value.toLowerCase();
+  const key = Object.keys(MCFG_CANDIDATES).find(k=>url.includes(k));
+  mcfgUpdateCandidates(key ? MCFG_CANDIDATES[key] : []);
+}
+function mcfgUpdateCandidates(list){
+  const dl = document.getElementById("mcfg-model-list");
+  dl.innerHTML = list.map(m=>`<option value="${esc(m)}">`).join("");
+}
+async function saveModelConfig(){
+  const baseUrl  = document.getElementById("mcfg-base-url").value.trim();
+  const model    = document.getElementById("mcfg-model").value.trim();
+  const temp     = parseFloat(document.getElementById("mcfg-temp").value);
+  const timeout  = parseInt(document.getElementById("mcfg-timeout").value, 10);
+  if(!baseUrl){ showToast("Base URL 不能为空"); return; }
+  if(!model){   showToast("模型名不能为空");   return; }
+  const payload = {cmd:"set_model_config", base_url:baseUrl, model, temperature:temp, timeout_ms:timeout};
+  if(_mcfgKeyUnlocked){
+    const key = document.getElementById("mcfg-api-key").value.trim();
+    payload.api_key_action = "set";
+    payload.api_key_value  = key;
+  } else {
+    payload.api_key_action = "keep";
+  }
+  const r = await call(payload);
+  if(r&&r.ok){
+    showToast("已保存 · "+((r.data&&r.data.note)||model));
+    refreshModelLabel();
+    closeModelConfig();
+  } else {
+    showToast("保存失败："+((r&&r.error&&r.error.message)||"未知"));
+  }
 }
 
 // 状态图标（替代 exit 码文字）：成功 ✓ / 失败 ✕
@@ -1977,6 +2142,7 @@ document.addEventListener("click", e=>{
   } else if(act === "pluginToggle"){ pluginToggle(el);
   } else if(act === "openModelMenu"){ openModelMenu(el);
   } else if(act === "setModelChoice"){ setModelChoice(el);
+  } else if(act === "openModelConfig"){ closeMenu(); openModelConfig();
   } else if(act === "toggleVoice"){
     toggleVoice(el);
   } else if(act === "showPanel"){

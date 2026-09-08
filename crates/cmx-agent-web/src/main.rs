@@ -87,6 +87,7 @@ async fn build_app(workdir: &std::path::Path, data_dir: &std::path::Path) -> Age
         .interactive_approval() // X4：shell 等需审批工具挂起等前端点按
         .mcp_tools(mcp_tools) // U3：外部 MCP 工具
         .maybe_data_auth(std::env::var("CMX_AGENT_DATAAUTH_URL").ok())
+        .user_config_base(data_dir.join("users")) // per-user 模型配置：<data_dir>/users/<username>/model.json
         .build()
         .expect("build agent app")
 }

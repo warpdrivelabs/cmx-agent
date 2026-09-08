@@ -343,11 +343,11 @@ fn main() {
         //（本地 / IM 桥 / 后续 webhook）的会话事件 emit 成全局 `session_event` Tauri 事件。
         // 前端 `index.html` 监听它，按 session_id 分流渲染——实现「飞书发消息实时显示到对话界面」，
         // 且 IM 无关：微信/钉钉接入后走同一条路，零额外改动。
+        // 同时设置 cmx 图标（Linux 任务栏/标题栏；bundle.icon 仅打包时生效）。
         .setup(|app| {
             let app_state = app.state::<AppState>();
             let app_ref = app_state.app.clone();
             let handle = app.handle().clone();
-            // 在专用 net_rt 上常驻消费 broadcast receiver → emit。net_rt 已预热（见上），驱动可用。
             net_rt().spawn(async move {
                 let mut rx = app_ref.event_bus().subscribe();
                 while let Ok(env) = rx.recv().await {
@@ -356,6 +356,10 @@ fn main() {
                 }
                 eprintln!("[main] session_event 转发 task 结束（总线已关闭）");
             });
+            let img = tauri::include_image!("icons/icon.png");
+            for (_, win) in app.webview_windows() {
+                let _ = win.set_icon(img.clone());
+            }
             Ok(())
         })
         // 登录门守卫：未登录时关闭登录窗 = 退出应用（否则只剩隐藏的主窗，界面像卡死）。
