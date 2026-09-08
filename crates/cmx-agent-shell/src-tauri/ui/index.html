@@ -1,6 +1,9 @@
 <!DOCTYPE html>
-<!-- cmx-agent Web 桌面壳前端。两栏布局（对齐 WorkBuddy）：左侧栏(品牌/新建/导航/会话列表/用户) + 主区(首页引导 ↔ 会话)。
-     所有后端交互经 POST /api → dispatch_json（= Tauri invoke 的 HTTP 版）。占位区标注「占位」，真实区接后端。 -->
+<!-- cmx-agent 桌面前端（双壳单份真源）。两栏布局（对齐 WorkBuddy）：左侧栏(品牌/新建/导航/会话列表/用户) + 主区(首页引导 ↔ 会话)。
+     ★ 本文件是唯一真源：Web 壳（本 crate，include_str! 内嵌）与 Tauri 壳（cmx-agent-shell/src-tauri/ui/）共用同一份。
+     后端交互走双桥：有 window.__TAURI__ 时 invoke("agent")，否则 POST /api——两者同达 dispatch_json。
+     桌面形态内容（自绘窗口三键 win-ctrls / 8 向缩放热区）默认 display:none，由 initPlatformChrome 探测非 macOS 且在 Tauri 壳内才启用，浏览器中无害。
+     改动后跑仓根 ./sync-ui.sh 发布到 Tauri 壳；勿直接改 src-tauri/ui/ 下的副本（生成物）。 -->
 <html lang="zh">
 <head>
 <meta charset="utf-8" />
@@ -77,13 +80,13 @@
   .tb-btn:hover{background:var(--hover);color:var(--ink);border-color:var(--border)}
   .tb-btn .ico{font-size:14px;line-height:1}
   .tb-update{color:var(--aqua)} .tb-update:hover{border-color:var(--aqua)}
-  /* Windows/Linux 窗口控件（最小化/最大化/关闭）：默认隐藏，platform.js 探测非 macOS 后 display:flex */
+  /* Windows/Linux 窗口控件（最小化/最大化/关闭）：默认隐藏，initPlatformChrome 探测非 macOS 后 display:flex */
   .win-ctrls{display:flex;align-items:center;-webkit-app-region:no-drag;margin-left:4px}
   .win-btn{display:flex;align-items:center;justify-content:center;width:44px;height:32px;color:var(--ink2);border-radius:0}
   .win-btn:hover{background:var(--hover);color:var(--ink)}
   .win-btn.win-close:hover{background:#e34948;color:#fff}
   .win-btn .ico{font-size:12px;line-height:1}
-  /* 无系统边框缩放热区：仅 Windows/Linux 显示（platform.js 控制），macOS 用系统边框缩放 */
+  /* 无系统边框缩放热区：仅 Windows/Linux 显示（initPlatformChrome 控制），macOS 用系统边框缩放 */
   .resize-handle{position:fixed;z-index:9999;display:none}
   body.no-native-decor .resize-handle{display:block}
   .rh-t{top:0;left:10px;right:10px;height:6px;cursor:n-resize}
@@ -475,7 +478,7 @@
   <!-- ═════ 原生标题条 ═════
        macOS：与系统交通灯同一行（Overlay，titleBarStyle 由 tauri.conf.json 配），左留 82px 交通灯位。
        Windows/Linux：系统装饰关闭（tauri.windows.conf.json / tauri.linux.conf.json 的 decorations:false），
-       无交通灯可借，标题条改左对齐 + 右侧补最小化/最大化/关闭按钮（win-ctrls，platform.js 按平台显隐）。
+       无交通灯可借，标题条改左对齐 + 右侧补最小化/最大化/关闭按钮（win-ctrls，initPlatformChrome 按平台显隐）。
        data-tauri-drag-region：Tauri 原生拖动；按钮不带该属性故可点。 -->
   <div class="titlebar" data-tauri-drag-region>
     <span class="tb-title" data-tauri-drag-region>cmx 企业桌面智能体</span>
@@ -485,14 +488,14 @@
       <button class="tb-btn" data-act="toggleTheme" title="浅色/深色主题"><span class="ico" id="tb-theme-ico">☀</span></button>
       <button class="tb-btn tb-update" id="tb-update-btn" data-act="applyUpdate" title="安装更新" style="display:none"><span class="ico">⭮</span><span id="tb-update-label">更新</span></button>
     </div>
-    <!-- Windows/Linux 专用窗口控件（无 data-tauri-drag-region，可点；默认隐藏，由 platform.js 探测非 macOS 后显示） -->
+    <!-- Windows/Linux 专用窗口控件（无 data-tauri-drag-region，可点；默认隐藏，由 initPlatformChrome 探测非 macOS 后显示） -->
     <div class="win-ctrls" id="win-ctrls" style="display:none">
       <button class="win-btn" data-act="winMinimize" title="最小化"><span class="ico">─</span></button>
       <button class="win-btn" id="win-max-btn" data-act="winToggleMaximize" title="最大化"><span class="ico">□</span></button>
       <button class="win-btn win-close" data-act="winClose" title="关闭"><span class="ico">✕</span></button>
     </div>
   </div>
-  <!-- Windows/Linux 无系统边框缩放热区：四边 + 四角不可见拖拽条（macOS 用系统边框，platform.js 隐藏这些） -->
+  <!-- Windows/Linux 无系统边框缩放热区：四边 + 四角不可见拖拽条（macOS 用系统边框，initPlatformChrome 隐藏这些） -->
   <div class="resize-handle rh-t" data-resize="North"></div>
   <div class="resize-handle rh-b" data-resize="South"></div>
   <div class="resize-handle rh-l" data-resize="West"></div>

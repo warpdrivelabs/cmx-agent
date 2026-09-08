@@ -61,7 +61,9 @@ echo '{"cmd":"send","session_id":"s1","text":"算 2+3"}' | \
 ## M1 关键约束（在 M0 之上新增）
 
 6. **同核多壳**：桌面壳 / CLI / Web 壳 / 后续 Headless HTTP 都调 `cmx-agent-app::dispatch_json`——壳里零业务逻辑。
-   加新前门=加薄壳，不改核。
+   加新前门=加薄壳，不改核。同理**前端单份**：真源 = `crates/cmx-agent-web/ui/`（双壳通吃，桌面形态默认
+   `display:none`），Tauri 壳 `src-tauri/ui/` 是仓根 `./sync-ui.sh` 的生成物勿手改；**数据根统一**：
+   两壳共用 `cmx_agent_app::shared_data_dir()`（`CMX_AGENT_DATA_DIR` 可覆盖），model.json / 会话配一次双壳生效。
 7. **增量落库**：每回合只 append 新事件（`SessionStore::append_events`），绝不重写历史行——与
    append-only 内核日志同构。回合号从日志派生（`Session::next_turn_no`），故重启可续。
 8. **会话 id 即路径**：`FileSessionStore` 必须挡路径注入（`/`、`..`、`\0`）——`store_tests.rs` 守住。

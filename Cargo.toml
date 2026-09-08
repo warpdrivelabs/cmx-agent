@@ -55,5 +55,7 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.21", features = ["v4", "serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# 双壳统一数据根解析（Web 壳/Tauri 壳共用 ProjectDirs("com","pansoft","cmx-agent")；缓存命中 mirrors.aliyun 5.0.1）
+directories = "5"
 tokio = { version = "1.41", features = ["full"] }
 tokio-stream = "0.1"

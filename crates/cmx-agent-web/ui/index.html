@@ -1,6 +1,9 @@
 <!DOCTYPE html>
-<!-- cmx-agent Web 桌面壳前端。两栏布局（对齐 WorkBuddy）：左侧栏(品牌/新建/导航/会话列表/用户) + 主区(首页引导 ↔ 会话)。
-     所有后端交互经 POST /api → dispatch_json（= Tauri invoke 的 HTTP 版）。占位区标注「占位」，真实区接后端。 -->
+<!-- cmx-agent 桌面前端（双壳单份真源）。两栏布局（对齐 WorkBuddy）：左侧栏(品牌/新建/导航/会话列表/用户) + 主区(首页引导 ↔ 会话)。
+     ★ 本文件是唯一真源：Web 壳（本 crate，include_str! 内嵌）与 Tauri 壳（cmx-agent-shell/src-tauri/ui/）共用同一份。
+     后端交互走双桥：有 window.__TAURI__ 时 invoke("agent")，否则 POST /api——两者同达 dispatch_json。
+     桌面形态内容（自绘窗口三键 win-ctrls / 8 向缩放热区）默认 display:none，由 initPlatformChrome 探测非 macOS 且在 Tauri 壳内才启用，浏览器中无害。
+     改动后跑仓根 ./sync-ui.sh 发布到 Tauri 壳；勿直接改 src-tauri/ui/ 下的副本（生成物）。 -->
 <html lang="zh">
 <head>
 <meta charset="utf-8" />
@@ -62,10 +65,13 @@
   ::-webkit-scrollbar{width:8px;height:8px} ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px}
 
   /* 原生标题条：贯穿窗口顶部一整行，与系统交通灯同一行（Overlay 标题栏）。
-     整条可拖动（app-region: drag）；左侧留 78px 给交通灯；右侧放控件（控件本身设 no-drag）。 */
+     整条可拖动（app-region: drag）；左侧留 78px 给交通灯；右侧放控件（控件本身设 no-drag）。
+     左侧 82px 留白仅 macOS 需要（系统红绿灯浮在其上）；Windows/Linux 无原生装饰，JS 加 .no-native-decor
+     后去掉左 padding，标题条左对齐、右侧改放自绘窗口控件（.win-ctrls）。 */
   .titlebar{height:32px;flex:0 0 32px;display:flex;align-items:center;
     background:var(--panel);border-bottom:1px solid var(--border);
     padding:0 10px 0 82px;-webkit-app-region:drag;user-select:none}
+  body.no-native-decor .titlebar{padding-left:12px}
   .titlebar .tb-title{font-size:12.5px;color:var(--muted);font-weight:600}
   .titlebar .sp{flex:1}
   .tb-ctrls{display:flex;align-items:center;gap:3px;-webkit-app-region:no-drag}
@@ -74,6 +80,23 @@
   .tb-btn:hover{background:var(--hover);color:var(--ink);border-color:var(--border)}
   .tb-btn .ico{font-size:14px;line-height:1}
   .tb-update{color:var(--aqua)} .tb-update:hover{border-color:var(--aqua)}
+  /* Windows/Linux 窗口控件（最小化/最大化/关闭）：默认隐藏，initPlatformChrome 探测非 macOS 后 display:flex */
+  .win-ctrls{display:flex;align-items:center;-webkit-app-region:no-drag;margin-left:4px}
+  .win-btn{display:flex;align-items:center;justify-content:center;width:44px;height:32px;color:var(--ink2);border-radius:0}
+  .win-btn:hover{background:var(--hover);color:var(--ink)}
+  .win-btn.win-close:hover{background:#e34948;color:#fff}
+  .win-btn .ico{font-size:12px;line-height:1}
+  /* 无系统边框缩放热区：仅 Windows/Linux 显示（initPlatformChrome 控制），macOS 用系统边框缩放 */
+  .resize-handle{position:fixed;z-index:9999;display:none}
+  body.no-native-decor .resize-handle{display:block}
+  .rh-t{top:0;left:10px;right:10px;height:6px;cursor:n-resize}
+  .rh-b{bottom:0;left:10px;right:10px;height:6px;cursor:s-resize}
+  .rh-l{top:10px;bottom:10px;left:0;width:6px;cursor:w-resize}
+  .rh-r{top:10px;bottom:10px;right:0;width:6px;cursor:e-resize}
+  .rh-tl{top:0;left:0;width:10px;height:10px;cursor:nw-resize}
+  .rh-tr{top:0;right:0;width:10px;height:10px;cursor:ne-resize}
+  .rh-bl{bottom:0;left:0;width:10px;height:10px;cursor:sw-resize}
+  .rh-br{bottom:0;right:0;width:10px;height:10px;cursor:se-resize}
   /* 侧栏折叠 */
   body.sidebar-collapsed aside{display:none}
 
@@ -452,8 +475,11 @@
 </style>
 </head>
 <body>
-  <!-- ═════ 原生标题条：与系统交通灯同一行（Overlay）。左留交通灯位，右侧控件 ═════ -->
-  <!-- data-tauri-drag-region：Tauri 原生拖动（比 CSS -webkit-app-region 在 macOS 可靠）。按钮不带该属性故可点。 -->
+  <!-- ═════ 原生标题条 ═════
+       macOS：与系统交通灯同一行（Overlay，titleBarStyle 由 tauri.conf.json 配），左留 82px 交通灯位。
+       Windows/Linux：系统装饰关闭（tauri.windows.conf.json / tauri.linux.conf.json 的 decorations:false），
+       无交通灯可借，标题条改左对齐 + 右侧补最小化/最大化/关闭按钮（win-ctrls，initPlatformChrome 按平台显隐）。
+       data-tauri-drag-region：Tauri 原生拖动；按钮不带该属性故可点。 -->
   <div class="titlebar" data-tauri-drag-region>
     <span class="tb-title" data-tauri-drag-region>cmx 企业桌面智能体</span>
     <div class="sp" data-tauri-drag-region></div>
@@ -462,7 +488,22 @@
       <button class="tb-btn" data-act="toggleTheme" title="浅色/深色主题"><span class="ico" id="tb-theme-ico">☀</span></button>
       <button class="tb-btn tb-update" id="tb-update-btn" data-act="applyUpdate" title="安装更新" style="display:none"><span class="ico">⭮</span><span id="tb-update-label">更新</span></button>
     </div>
+    <!-- Windows/Linux 专用窗口控件（无 data-tauri-drag-region，可点；默认隐藏，由 initPlatformChrome 探测非 macOS 后显示） -->
+    <div class="win-ctrls" id="win-ctrls" style="display:none">
+      <button class="win-btn" data-act="winMinimize" title="最小化"><span class="ico">─</span></button>
+      <button class="win-btn" id="win-max-btn" data-act="winToggleMaximize" title="最大化"><span class="ico">□</span></button>
+      <button class="win-btn win-close" data-act="winClose" title="关闭"><span class="ico">✕</span></button>
+    </div>
   </div>
+  <!-- Windows/Linux 无系统边框缩放热区：四边 + 四角不可见拖拽条（macOS 用系统边框，initPlatformChrome 隐藏这些） -->
+  <div class="resize-handle rh-t" data-resize="North"></div>
+  <div class="resize-handle rh-b" data-resize="South"></div>
+  <div class="resize-handle rh-l" data-resize="West"></div>
+  <div class="resize-handle rh-r" data-resize="East"></div>
+  <div class="resize-handle rh-tl" data-resize="NorthWest"></div>
+  <div class="resize-handle rh-tr" data-resize="NorthEast"></div>
+  <div class="resize-handle rh-bl" data-resize="SouthWest"></div>
+  <div class="resize-handle rh-br" data-resize="SouthEast"></div>
   <div class="workspace">
   <!-- ═════ 最左活动栏（VSCode 式）═════ -->
   <div class="activitybar">
@@ -524,6 +565,7 @@
     </div>
     <div class="mi-sep"></div>
     <div class="mi" data-act="userProfile"><span class="mi-i">👤</span> 账户信息</div>
+    <div class="mi" data-act="imBinding"><span class="mi-i">🔗</span> IM 绑定（飞书）</div>
     <div class="mi" data-act="userSwitch"><span class="mi-i">⇄</span> 切换账户</div>
     <div class="mi" data-act="userWorkspace"><span class="mi-i">🗂</span> 工作空间</div>
     <div class="mi-sep"></div>
@@ -627,8 +669,12 @@
   </div>
 
 <script>
-// ── 后端桥：所有交互经 POST /api → dispatch_json ──
+// ── 后端桥：同核多壳。原生 Tauri 壳走 invoke("agent")，Web 壳回退 HTTP POST /api。两者同达 dispatch_json。 ──
 async function call(req){
+  if (window.__TAURI__ && window.__TAURI__.core){
+    const raw = await window.__TAURI__.core.invoke("agent", { payload: JSON.stringify(req) });
+    return JSON.parse(raw);
+  }
   const r = await fetch("/api",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(req)});
   return await r.json();
 }
@@ -657,10 +703,11 @@ document.addEventListener('change', async e => {
 // onEvent 收到每个会话事件（含终止标记 {kind:"stream_done"} / {kind:"stream_error",message}）。
 async function streamSend(sessionId, text, onEvent){
   if (window.__TAURI__ && window.__TAURI__.core){
+    STREAMING.add(sessionId);   // 标记本地流式中 → session_event 监听跳过，避免双重渲染
     const chan = "agentstream-" + Date.now() + "-" + Math.random().toString(36).slice(2,8);
     const un = await window.__TAURI__.event.listen(chan, e => onEvent(e.payload));
     try { await window.__TAURI__.core.invoke("send_stream", { sessionId, text, channel: chan }); }
-    finally { un(); }
+    finally { un(); STREAMING.delete(sessionId); }
     return;
   }
   // Web：fetch + ReadableStream 手动解析 SSE（\n\n 分帧，取 data: 行）
@@ -687,6 +734,9 @@ function el(cls,html){ const d=document.createElement("div"); d.className=cls; i
 let TABS = [];
 let ACTIVE = null;      // 当前 active tab 的 id
 let CURRENT = null;     // 当前 active 的会话 id（供任务列表高亮/发送；非会话 tab 时为 null）
+// 本地正在流式的会话 id 集合。全局 session_event 监听据此跳过本地回合，避免与 streamSend 双重渲染。
+// IM 来源会话永不在其中 → 走 session_event 实时通道。
+let STREAMING = new Set();
 const tabviews = ()=>document.getElementById("tabviews");
 const homeEl = ()=>document.getElementById("home");
 
@@ -1121,7 +1171,80 @@ function renderEvent(log, ev, sid){
     }
   }
   else if(k==="turn_ended"){ log._sb=null; log.append(el("meta","— 回合 #"+ev.turn+" 结束（"+ev.reason+"，"+ev.steps+" 步）—")); }
+  // Note：内核注记，回合出错时把错误文案作为 Note 追加（与飞书回发同一份内容，保证两端一致）。
+  else if(k==="note"){ log._sb=null; log.append(el("meta note",esc(ev.text||""))); }
   log.scrollTop=1e9;
+}
+
+// ── 会话事件总线实时通道（U16）──
+// 后端常驻 task 把 AgentApp 的 SessionEventBus 广播成全局 `session_event` Tauri 事件；前端监听后
+// 按 session_id 分流：已打开的 tab 实时 renderEvent，并节流刷新会话列表（让新 IM 会话出现/排序）。
+// 本地发起的回合在 STREAMING 集合里 → 跳过（交给 streamSend 的流式通道，避免双重渲染）；
+// IM（飞书/微信/钉钉…）来源会话永不在 STREAMING → 实时渲染，实现「飞书发消息实时显示到对话界面」。
+let _refreshTasksTimer = null;
+function scheduleRefreshTasks(){
+  if(_refreshTasksTimer) return;          // 已排队：合并到下一次
+  _refreshTasksTimer = setTimeout(()=>{ _refreshTasksTimer=null; refreshTasks(); }, 400);
+}
+function onSessionEvent(env){
+  if(!env || !env.session_id || !env.event) return;
+  const sid = env.session_id, ev = env.event;
+  if(STREAMING.has(sid)) return;          // 本地流式中：交给 streamSend，避免重复
+  let tab = findTab("s:"+sid);
+  if(!tab){
+    // 远程（IM）来源新会话：同步建 tab+log，让本条及后续实时事件立即渲染（不被 get_events 擦除）；
+    // 后台 get_events 补历史时只 prepend 未渲染过的事件，不擦除。避免「首条消息被 openSession 擦掉」。
+    openSessionLive(sid);
+    tab = findTab("s:"+sid);
+  }
+  const log = tab && tab.view.querySelector(".log");
+  if(log){
+    // 去重：已渲染过的 seq 跳过（防历史 prepend 与实时事件重复）。
+    if(ev.seq && (log._seqs=log._seqs||new Set()).has(ev.seq)) { /* 已渲染 */ }
+    else {
+      // session_event 通道（IM 来源）渲染 user_message 时无视 _skipUser——那是本地乐观渲染
+      // （doSendTab）专用标志，跨回合/跨通道残留会误吞 IM 的首条用户消息。
+      const saved = log._skipUser; log._skipUser = false;
+      renderEvent(log, ev, sid);
+      log._skipUser = saved;
+      if(ev.seq) log._seqs.add(ev.seq);
+    }
+  }
+  scheduleRefreshTasks();
+}
+
+// 远程来源会话首次有事件时同步建 tab：实时事件立即渲染进 log；后台 get_events 补历史（prepend，不擦除）。
+// 这是「飞书首条消息实时显示」的关键——若用普通 openSession（get_events 返回后 log.innerHTML="" 重画），
+// 会与并发到达的实时事件竞态，把首条 user_message 擦掉。
+function openSessionLive(sessionId){
+  const tabId="s:"+sessionId;
+  if(findTab(tabId)) return;
+  const t=openTab({id:tabId, kind:"session", title:sessionId, ico:"💬", sessionId});
+  const node=document.getElementById("tpl-session").content.cloneNode(true);
+  t.view.className="tabview";
+  t.view.append(node);
+  const inp=t.view.querySelector(".inp2");
+  inp.addEventListener("keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendChatTab(t);} });
+  inp.addEventListener("input",e=>autoGrow(e.target));
+  t.view.querySelector(".tab-send").onclick=()=>sendChatTab(t);
+  const log=t.view.querySelector(".log"); log.innerHTML=""; log._seqs=new Set(); log._sb=null;
+  activateTab(tabId);
+  refreshTasks();
+  // 后台补历史：把未渲染过的事件 prepend 到 log 顶部（历史在上、实时新事件在下），不擦除。
+  call({cmd:"get_events",session_id:sessionId,limit:HIST_PAGE}).then(resp=>{
+    const d=(resp&&resp.ok&&resp.data)||{}; const evs=d.events||[];
+    const frag=document.createDocumentFragment();
+    if((d.start||0)>0) frag.append(makeLoadMore(log, sessionId, d.start, d.total||0));
+    evs.forEach(ev=>{
+      if(log._seqs.has(ev.seq)) return;
+      const tmp=document.createElement('div'); tmp._sb=null;
+      const s=tmp._skipUser; tmp._skipUser=false; renderEvent(tmp, ev, sessionId); tmp._skipUser=s;
+      while(tmp.firstChild) frag.append(tmp.firstChild);
+      log._seqs.add(ev.seq);
+    });
+    log.prepend(frag);
+    if(d.title){ t.title=d.title||sessionId; renderTabs(); }
+  });
 }
 
 function newTask(){ ACTIVE=null; CURRENT=null; TABS.forEach(t=>t.view.classList.remove("active")); renderTabs();
@@ -1188,7 +1311,8 @@ const HIST_PAGE = 300;
 // 把一段事件渲染进临时容器再整体搬入目标（一次性插入，避免逐条重排）。
 function renderInto(target, sid, events){
   const tmp=document.createElement('div'); tmp._sb=null;
-  events.forEach(ev=>renderEvent(tmp, ev, sid));
+  // 历史回放无视 _skipUser（那是本地乐观渲染专用标志，残留会误吞历史首条用户消息）。
+  events.forEach(ev=>{ const s=tmp._skipUser; tmp._skipUser=false; renderEvent(tmp, ev, sid); tmp._skipUser=s; (target._seqs=target._seqs||new Set()).add(ev.seq); });
   while(tmp.firstChild) target.append(tmp.firstChild);
 }
 function makeLoadMore(log, sid, start, total){
@@ -1196,8 +1320,7 @@ function makeLoadMore(log, sid, start, total){
   b.dataset.sid=sid; b.dataset.before=start;
   b.onclick=()=>loadEarlier(log, b);
   return b;
-}
-function renderHistory(log, sid, events, start, total){
+}function renderHistory(log, sid, events, start, total){
   const frag=document.createDocumentFragment();
   if(start>0) frag.append(makeLoadMore(log, sid, start, total));   // 上方还有更早的
   renderInto(frag, sid, events);
@@ -1349,6 +1472,44 @@ function toggleMenu(){ document.getElementById("usermenu").classList.remove("on"
 function closeMenu(){ document.getElementById("cmxmenu").classList.remove("on"); document.getElementById("usermenu").classList.remove("on"); }
 function menuSettings(){ closeMenu(); alert("设置\n\n（M2 占位：主题、工作空间、默认权限、连接器地址等设置项将在此配置。）"); }
 function menuAbout(){ closeMenu(); alert("cmx 企业桌面智能体\n版本 "+APP_VERSION+"\n\n复刻并超越 WorkBuddy · 同核多壳架构\n形(前门) / 核(回合循环+守卫) / 体(cmx 引擎连接器)"); }
+
+// ── Windows/Linux 窗口控件（最小化/最大化/关闭）+ 无边框缩放 ──
+// macOS 用系统红绿灯（Overlay 标题栏），不建这些；仅非 macOS 且在 Tauri 壳内才生效（Web 壳无 __TAURI__.window）。
+function _tauriWin(){
+  return (window.__TAURI__ && window.__TAURI__.window) ? window.__TAURI__.window.getCurrentWindow() : null;
+}
+async function winMinimize(){ const w=_tauriWin(); if(w) await w.minimize(); }
+async function winToggleMaximize(){
+  const w=_tauriWin(); if(!w) return;
+  await w.toggleMaximize();
+  try{
+    const maxed = await w.isMaximized();
+    document.getElementById("win-max-btn").querySelector(".ico").textContent = maxed ? "❐" : "□";
+  }catch(e){}
+}
+async function winClose(){ const w=_tauriWin(); if(w) await w.close(); }
+// 无边框缩放热区：pointerdown 触发 Tauri 原生 startResizeDragging（比手搓 CSS resize 在各平台更可靠）。
+// macOS 用系统边框缩放（decorations=Overlay 保留系统 resize），resize-handle 在 mac 上通过 CSS 隐藏，不干扰。
+document.querySelectorAll(".resize-handle").forEach(h=>{
+  h.addEventListener("pointerdown", async e=>{
+    e.preventDefault();
+    const w=_tauriWin(); if(!w) return;
+    try{ await w.startResizeDragging(h.dataset.resize); }catch(e){}
+  });
+});
+// 平台探测：非 macOS 才显示自绘窗口控件 + 缩放热区（decorations:false 仅在 tauri.windows/linux.conf.json 生效）。
+// 用自定义 `platform` 命令（= std::env::consts::OS）而非 tauri-plugin-os：省一份插件依赖/首次联网编译。
+(async function initPlatformChrome(){
+  if(!(window.__TAURI__ && window.__TAURI__.core)) return; // Web 壳：系统浏览器窗口，不处理
+  try{
+    const platform = await window.__TAURI__.core.invoke("platform"); // "macos" | "windows" | "linux"
+    if(platform !== "macos"){
+      document.body.classList.add("no-native-decor");
+      document.getElementById("win-ctrls").style.display = "flex";
+    }
+  }catch(e){}
+})();
+
 // 用户菜单
 let CURRENT_USER = null;   // {user_id, username, nickname, roles} 或 null
 // 拉取当前登录用户（前门 current_user），填充活动栏头像 + 用户菜单。未登录则显示占位。
@@ -1357,6 +1518,10 @@ async function refreshUser(){
     const r = await call({cmd:"current_user"});
     CURRENT_USER = (r.ok && r.data && r.data.user) || null;
   }catch(e){ CURRENT_USER = null; }
+  // 原生壳未登录：隐藏主窗、聚焦登录窗（每次启动先见登录门，与登出行为对齐）。
+  if(!CURRENT_USER && window.__TAURI__ && window.__TAURI__.core){
+    try{ await window.__TAURI__.core.invoke("guard_login"); }catch(e){}
+  }
   const u = CURRENT_USER;
   const name = u ? (u.nickname || u.username) : "未登录";
   const initial = name && name !== "未登录" ? name.trim().charAt(0).toUpperCase() : "👤";
@@ -1375,6 +1540,70 @@ function userProfile(){ closeMenu();
   alert("账户信息\n\n"+(u.nickname||u.username)+"（@"+u.username+"）\n用户 ID："+u.user_id+"\n角色："+((u.roles||[]).join("、")||"—")+"\n\n对接 cmx 门户统一认证（/api/auth）。"); }
 function userSwitch(){ closeMenu(); alert("切换账户\n\n退出后重新登录即可切换账户/租户。"); }
 function userWorkspace(){ closeMenu(); alert("工作空间（占位）\n\n管理沙箱工作区根目录与数据目录。"); }
+
+// ── IM 绑定（飞书 ↔ 门户账号）──
+// 验证码模式：点「获取验证码」→ 把码发到飞书机器人 → 机器人侧核销并建立绑定。
+// 之后飞书消息按绑定用户身份跑 agent（数据权限按此人）。
+async function imBinding(){
+  closeMenu();
+  if(!CURRENT_USER){ showToast("请先登录"); return; }
+  // 弹层（点遮罩关闭）
+  const ov=document.createElement("div");
+  ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center";
+  const box=document.createElement("div");
+  box.style.cssText="width:400px;max-width:90vw;background:var(--panel,#1e1e2e);border:1px solid var(--border,#333);border-radius:12px;padding:18px 20px;color:var(--fg,#ddd);font-size:13px";
+  box.innerHTML=`
+    <div style="font-weight:700;font-size:15px;margin-bottom:10px">🔗 IM 绑定</div>
+    <div style="color:var(--muted,#999);margin-bottom:12px;line-height:1.6">
+      把你的飞书账号绑定到当前登录账号。绑定后，你在飞书给机器人发消息，
+      智能体将<b>以你的身份</b>运行（数据权限按你的账号判定）。
+    </div>
+    <div id="imb-code-row" style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+      <button id="imb-gen" style="flex:none;padding:6px 12px;border-radius:8px;border:1px solid var(--border,#444);background:var(--accent,#4f46e5);color:#fff;cursor:pointer">获取验证码</button>
+      <span id="imb-code" style="font-family:monospace;font-size:20px;letter-spacing:3px;font-weight:700"></span>
+    </div>
+    <div id="imb-hint" style="color:var(--muted,#999);margin-bottom:12px;line-height:1.5"></div>
+    <div style="font-weight:600;margin-bottom:6px">已绑定账号</div>
+    <div id="imb-list" style="min-height:36px;margin-bottom:10px"></div>
+    <div style="text-align:right"><button id="imb-close" style="padding:5px 14px;border-radius:8px;border:1px solid var(--border,#444);background:transparent;color:inherit;cursor:pointer">关闭</button></div>`;
+  ov.append(box);
+  ov.onclick=(e)=>{ if(e.target===ov) ov.remove(); };
+  box.querySelector("#imb-close").onclick=()=>ov.remove();
+  document.body.append(ov);
+
+  const codeEl=box.querySelector("#imb-code"), hintEl=box.querySelector("#imb-hint"), listEl=box.querySelector("#imb-list");
+  const refreshList=async()=>{
+    listEl.textContent="加载中…";
+    const r=await call({cmd:"im_list_bindings"});
+    const items=(r.ok&&r.data&&r.data.items)||[];
+    if(!r.ok){ listEl.textContent="查询失败："+((r.error&&r.error.message)||"未知"); return; }
+    if(!items.length){ listEl.innerHTML='<span style="color:var(--muted,#999)">（暂无绑定）</span>'; return; }
+    listEl.innerHTML="";
+    items.forEach(b=>{
+      const row=document.createElement("div");
+      row.style.cssText="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border,#333)";
+      row.innerHTML=`<span>${esc(b.provider)} · <span style="font-family:monospace">${esc(String(b.open_id).slice(0,14))}…</span></span>`;
+      const del=document.createElement("button");
+      del.textContent="解绑"; del.style.cssText="padding:3px 10px;border-radius:6px;border:1px solid var(--border,#444);background:transparent;color:#f66;cursor:pointer";
+      del.onclick=async()=>{
+        const r2=await call({cmd:"im_unbind",provider:b.provider,open_id:b.open_id});
+        if(r2.ok){ showToast("已解绑"); refreshList(); } else { showToast("解绑失败："+((r2.error&&r2.error.message)||"未知")); }
+      };
+      row.append(del); listEl.append(row);
+    });
+  };
+  box.querySelector("#imb-gen").onclick=async(e)=>{
+    e.target.disabled=true; e.target.textContent="生成中…";
+    const r=await call({cmd:"im_bind_gen_code"});
+    e.target.disabled=false; e.target.textContent="重新获取";
+    if(!r.ok){ hintEl.textContent="❌ "+((r.error&&r.error.message)||"生成失败"); return; }
+    const d=r.data||{};
+    codeEl.textContent=d.code||"";
+    hintEl.innerHTML="在<b>飞书</b>里给机器人发送这个验证码完成绑定（"+((d.expires_in||300)/60)+" 分钟内有效）。";
+    setTimeout(refreshList, 3000); // 用户发码后稍等刷新列表
+  };
+  refreshList();
+}
 async function userLogout(){ closeMenu();
   if(!confirm("确定退出登录？")) return;
   try{ await call({cmd:"logout"}); }catch(e){}
@@ -1727,8 +1956,8 @@ function showToast(msg){
 }
 
 // 内联 onclick 属性全被拦截。用委托（监听在 document 上，由 nonce'd 脚本注册）在两壳都工作。
-const ACTIONS = { newTask, openConnectors, startFromHome, toggleSidebar, toggleTheme, checkUpdate, applyUpdate, toggleMenu, menuSettings, menuAbout, toggleVoice, toggleUserMenu, userProfile, userSwitch, userWorkspace, userLogout,
-  toggleTabOverflow, tabCtxClose, tabCtxCloseOthers, tabCtxCloseRight, tabCtxCloseAll };
+const ACTIONS = { newTask, openConnectors, startFromHome, toggleSidebar, toggleTheme, checkUpdate, applyUpdate, toggleMenu, menuSettings, menuAbout, toggleVoice, toggleUserMenu, userProfile, imBinding, userSwitch, userWorkspace, userLogout,
+  toggleTabOverflow, tabCtxClose, tabCtxCloseOthers, tabCtxCloseRight, tabCtxCloseAll, winMinimize, winToggleMaximize, winClose };
 document.addEventListener("click", e=>{
   const el = e.target.closest("[data-act]");
   if(!el){ closeMenu(); closeTabCtx(); document.getElementById("modelmenu").classList.remove("on"); document.getElementById("tab-dropdown").classList.remove("on"); return; }
@@ -1787,6 +2016,18 @@ applyTheme((()=>{ try{ return localStorage.getItem("cmx-theme")||"dark"; }catch(
 // 登录后主窗口被显示时刷新用户信息：原生壳监听 Tauri "logged-in" 事件；并兜底监听窗口 focus。
 if(window.__TAURI__ && window.__TAURI__.event){ window.__TAURI__.event.listen("logged-in", ()=>refreshUser()); }
 window.addEventListener("focus", ()=>{ refreshUser(); });
+
+// 会话事件总线实时通道（U16）：任意来源（本地 / IM 桥）的会话事件广播给前端，按 session_id 分流渲染。
+// 这是「飞书发消息实时显示到对话界面」的最后一公里——IM 无关，微信/钉钉接入后走同一条路。
+if(window.__TAURI__ && window.__TAURI__.event){
+  window.__TAURI__.event.listen("session_event", e => {
+    try { console.log("[session_event] recv", JSON.stringify(e && e.payload)); } catch(err){ console.log("[session_event] recv (unserializable)", e && e.payload); }
+    onSessionEvent(e.payload);
+  });
+  console.log("[session_event] 监听已注册");
+} else {
+  console.log("[session_event] 未注册：window.__TAURI__.event 不可用");
+}
 </script>
 </body>
 </html>

@@ -36,10 +36,10 @@ async fn main() {
 
     let no_open = std::env::args().any(|a| a == "--no-open");
 
-    // 数据目录 & 工作区（沙箱根）。放本机标准临时区下，避免污染仓库。
-    let base = std::env::temp_dir().join("cmx-agent-desktop");
-    let data_dir = base.join("data");
-    let workdir = base.join("workspace");
+    // 数据根 & 工作区（沙箱根）：与 Tauri 壳同一数据根（ProjectDirs，CMX_AGENT_DATA_DIR 可覆盖）——
+    // model.json / 会话双壳共享，配置一次两壳生效。此前落 %TEMP% 会被清临时目录连坐丢失。
+    let data_dir = cmx_agent_app::shared_data_dir();
+    let workdir = data_dir.join("workspace");
     std::fs::create_dir_all(&workdir).expect("create workdir");
 
     let app = build_app(&workdir, &data_dir).await;

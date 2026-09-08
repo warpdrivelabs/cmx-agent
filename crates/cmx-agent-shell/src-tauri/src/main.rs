@@ -207,9 +207,8 @@ async fn logout_to_login(app: tauri::AppHandle, state: State<'_, AppState>) -> R
 }
 
 fn build_app() -> AgentApp {
-    let dirs = directories::ProjectDirs::from("com", "pansoft", "cmx-agent")
-        .expect("resolve project dirs");
-    let data_dir = dirs.data_dir().to_path_buf();
+    // 双壳统一数据根（与 Web 壳同一份：model.json / 会话共享；CMX_AGENT_DATA_DIR 可覆盖，隔离测试用）。
+    let data_dir = cmx_agent_app::shared_data_dir();
     let workdir = data_dir.join("workspace");
     std::fs::create_dir_all(&workdir).ok();
 

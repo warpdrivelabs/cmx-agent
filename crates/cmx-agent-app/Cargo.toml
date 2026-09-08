@@ -24,6 +24,7 @@ async-trait.workspace = true
 chrono.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+directories.workspace = true
 
 [dev-dependencies]
 # 离线环境不引 tempfile：测试用 std::env::temp_dir() + 唯一后缀自管临时目录。

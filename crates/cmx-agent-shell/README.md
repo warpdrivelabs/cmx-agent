@@ -15,8 +15,10 @@ cd crates/cmx-agent-shell/src-tauri
 cargo run                 # 弹出原生窗口（首次已联网拉过 tauri 依赖，之后可 --offline）
 ```
 
-数据落到 `~/Library/Application Support/com.pansoft.cmx-agent/`（sessions/ + workspace/）——与 Web 壳
-同一 `FileSessionStore`，同核。
+数据根与 Web 壳**统一**：`ProjectDirs("com","pansoft","cmx-agent")` 的 data_dir（Windows
+`%APPDATA%\pansoft\cmx-agent\data`，macOS `~/Library/Application Support/com.pansoft.cmx-agent`），
+`model.json` / `mcp.json` / sessions / workspace 两壳共享——模型配置一次、双壳生效。隔离测试用
+`CMX_AGENT_DATA_DIR` 环境变量指向临时目录。
 
 ## 与 Web 壳的关系（同核多壳）
 
@@ -28,7 +30,9 @@ cargo run                 # 弹出原生窗口（首次已联网拉过 tauri 依
 | 前端 | **同一份** `ui/index.html`（`call()` 检测 `window.__TAURI__` 自动切换） | 同左 |
 | 离线 workspace | **不属于**（独立 Cargo.lock，联网构建一次） | 属于（离线可测） |
 
-前端 `ui/index.html` 从 `cmx-agent-web/ui/index.html` 复制而来，仅 `call()` 一处适配双壳。
+前端 `ui/` 是**生成物**：唯一真源在 `crates/cmx-agent-web/ui/`（双壳单份，含 `call()` 双桥与
+Windows/Linux 自绘窗口形态——后者默认 `display:none`，仅在本壳内由 `initPlatformChrome` 启用，
+浏览器中无害）。改 UI 只改真源，改完跑仓根 `./sync-ui.sh` 同步过来；**勿直接改本目录 `ui/`**。
 
 ## 关键文件
 
