@@ -58,6 +58,8 @@ pub struct AgentApp {
     model_config_dir: Option<std::path::PathBuf>,
     /// U16 会话事件总线：任意来源（本地 / IM 桥）追加事件时广播给订阅者（`/api/subscribe` SSE）。
     event_bus: Arc<crate::bus::SessionEventBus>,
+    /// IM 绑定客户端（Some=启用绑定面板：gen_code/list/unbind 三命令）。
+    im_binding: Option<cmx_agent_connectors::ImBindingClient>,
 }
 
 impl AgentApp {
@@ -79,6 +81,7 @@ impl AgentApp {
             model_slot: None,
             model_config_dir: None,
             event_bus: Arc::new(crate::bus::SessionEventBus::new()),
+            im_binding: None,
         }
     }
 
@@ -146,6 +149,62 @@ impl AgentApp {
     pub fn with_approver(mut self, approver: Arc<crate::approval::InteractiveApprover>) -> Self {
         self.approver = Some(approver);
         self
+    }
+
+    /// 注入 IM 绑定客户端（桌面壳「设置 → IM 绑定」面板用；由壳装配，配了才有绑定命令）。
+    pub fn with_im_binding(mut self, client: cmx_agent_connectors::ImBindingClient) -> Self {
+        self.im_binding = Some(client);
+        self
+    }
+
+    /// 当前登录用户的 access_token（绑定命令用；从共享令牌槽读）。
+    fn current_token(&self) -> AppResult<String> {
+        self.token_store
+            .as_ref()
+            .and_then(|ts| ts.read().ok().and_then(|g| g.clone()))
+            .ok_or_else(|| AppError::Auth("请先登录".into()))
+    }
+
+    /// IM 绑定：为当前登录用户生成一次性验证码（前端引导用户把码发到 IM 机器人完成绑定）。
+    pub async fn im_bind_gen_code(&self) -> AppResult<serde_json::Value> {
+        let client = self
+            .im_binding
+            .as_ref()
+            .ok_or_else(|| AppError::BadRequest("未启用 IM 绑定".into()))?;
+        let token = self.current_token()?;
+        let (code, expires_in) = client
+            .gen_code(&token)
+            .await
+            .map_err(|e| AppError::Auth(format!("生成绑定验证码失败：{e}")))?;
+        Ok(serde_json::json!({ "code": code, "expires_in": expires_in }))
+    }
+
+    /// IM 绑定：列出当前登录用户已绑定的 IM 身份。
+    pub async fn im_list_bindings(&self) -> AppResult<serde_json::Value> {
+        let client = self
+            .im_binding
+            .as_ref()
+            .ok_or_else(|| AppError::BadRequest("未启用 IM 绑定".into()))?;
+        let token = self.current_token()?;
+        let items = client
+            .list(&token)
+            .await
+            .map_err(|e| AppError::Auth(format!("查询绑定失败：{e}")))?;
+        Ok(serde_json::json!({ "items": items }))
+    }
+
+    /// IM 绑定：解绑一个 IM 身份。
+    pub async fn im_unbind(&self, provider: &str, open_id: &str) -> AppResult<serde_json::Value> {
+        let client = self
+            .im_binding
+            .as_ref()
+            .ok_or_else(|| AppError::BadRequest("未启用 IM 绑定".into()))?;
+        let token = self.current_token()?;
+        client
+            .unbind(&token, provider, open_id)
+            .await
+            .map_err(|e| AppError::Auth(format!("解绑失败：{e}")))?;
+        Ok(serde_json::json!({ "unbound": true }))
     }
 
     /// 前端送回审批决定（`approve` 命令）：唤醒挂起的回合。返回是否命中一个待决审批。
@@ -457,7 +516,18 @@ impl AgentApp {
     /// 向某会话发一条用户消息，跑一个回合，**增量落库**新事件，返回结果。
     /// 若会话已有持久化日志，先加载恢复（回合号、历史上下文都续上）。
     pub async fn send(&self, session_id: &str, user_input: &str) -> AppResult<SendOutcome> {
-        self.send_inner(session_id, user_input, None).await
+        self.send_inner(session_id, user_input, None, None).await
+    }
+
+    /// 以指定主体跑一个回合（IM 绑定场景）：守卫/数据权限按 `subject`（绑定用户的 user_id+roles）
+    /// 判定，与桌面登录身份（auth_identity）互不干扰、并发无竞态。其余语义同 [`Self::send`]。
+    pub async fn send_as(
+        &self,
+        session_id: &str,
+        user_input: &str,
+        subject: &cmx_agent_core::Subject,
+    ) -> AppResult<SendOutcome> {
+        self.send_inner(session_id, user_input, None, Some(subject.clone())).await
     }
 
     /// 流式版：同 [`Self::send`]，但在回合开始前给会话日志挂上 `sink`——回合中每产生一个事件
@@ -469,7 +539,7 @@ impl AgentApp {
         user_input: &str,
         sink: std::sync::Arc<crate::stream::ChannelSink>,
     ) -> AppResult<SendOutcome> {
-        self.send_inner(session_id, user_input, Some(sink)).await
+        self.send_inner(session_id, user_input, Some(sink), None).await
     }
 
     async fn send_inner(
@@ -477,6 +547,7 @@ impl AgentApp {
         session_id: &str,
         user_input: &str,
         sink: Option<std::sync::Arc<crate::stream::ChannelSink>>,
+        subject: Option<cmx_agent_core::Subject>,
     ) -> AppResult<SendOutcome> {
         // 加载已有会话；不存在则以默认 system 新建一个内存会话（并补落元数据）。
         let mut session = match self.store.load(session_id) {
@@ -500,14 +571,47 @@ impl AgentApp {
             session_id.to_string(),
             self.event_bus.sender(),
         )));
-        let outcome = match &sink {
-            Some(s) => {
+        let outcome = match (&sink, &subject) {
+            (Some(s), Some(subj)) => {
+                session.log.add_sink(s.clone());
+                self.agent
+                    .run_turn_observed_as(&mut session, user_input, Some(s.as_ref()), Some(subj))
+                    .await
+            }
+            (Some(s), None) => {
                 session.log.add_sink(s.clone());
                 self.agent
                     .run_turn_observed(&mut session, user_input, Some(s.as_ref()))
-                    .await?
+                    .await
             }
-            None => self.agent.run_turn(&mut session, user_input).await?,
+            (None, Some(subj)) => self.agent.run_turn_as(&mut session, user_input, subj).await,
+            (None, None) => self.agent.run_turn(&mut session, user_input).await,
+        };
+        // 出错一致性（飞书 ↔ 界面）：回合中途模型失败等会让 run_turn 提前返回 Err。若直接 `?` 抛出，
+        // 已 append 的 TurnStarted/UserMessage 不会落库、不广播；错误文案只被 ImBridge 发给飞书，
+        // 界面什么都看不到 → 两端不一致。故捕获错误：把错误文案作为 Note 事件追加（同步广播给界面
+        // + 落库），补一条 TurnEnded(Error)，把错误文案塞进 final_text——ImBridge 据此回发飞书，
+        // 界面经事件总线拿到同一份内容，两端一致。
+        let outcome = match outcome {
+            Ok(o) => o,
+            Err(e) => {
+                let msg = format!("⚠ 处理出错：{e}");
+                session.log.append(cmx_agent_core::event::EventKind::Note {
+                    text: msg.clone(),
+                });
+                let turn = session.next_turn_no().saturating_sub(1);
+                session.log.append(cmx_agent_core::event::EventKind::TurnEnded {
+                    turn,
+                    reason: cmx_agent_core::event::StopReason::Error,
+                    steps: 0,
+                });
+                cmx_agent_core::TurnOutcome {
+                    turn,
+                    reason: cmx_agent_core::event::StopReason::Error,
+                    steps: 0,
+                    final_text: Some(msg),
+                }
+            }
         };
 
         // 只取本回合新增的事件，append 落库（不重写历史行）。

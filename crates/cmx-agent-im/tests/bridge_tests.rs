@@ -57,6 +57,7 @@ async fn bridge_runs_turn_and_replies() {
         chat_id: "555".into(),
         text: "在吗".into(),
         update_id: 1,
+        sender: String::new(),
     }]);
     let bridge = ImBridge::new(app, prov.clone(), "test", allow(&["555"]));
 
@@ -75,6 +76,7 @@ async fn bridge_blocks_unauthorized() {
         chat_id: "999".into(),
         text: "hi".into(),
         update_id: 1,
+        sender: String::new(),
     }]);
     let bridge = ImBridge::new(app, prov.clone(), "test", allow(&["555"]));
 
@@ -92,6 +94,7 @@ async fn same_chat_reuses_session() {
         chat_id: "42".into(),
         text: "第一句".into(),
         update_id: 1,
+        sender: String::new(),
     }]);
     let bridge = ImBridge::new(app.clone(), prov.clone(), "test", allow(&["42"]));
     bridge.tick().await.unwrap();
@@ -100,6 +103,7 @@ async fn same_chat_reuses_session() {
         chat_id: "42".into(),
         text: "第二句".into(),
         update_id: 2,
+        sender: String::new(),
     }];
     bridge.tick().await.unwrap();
 

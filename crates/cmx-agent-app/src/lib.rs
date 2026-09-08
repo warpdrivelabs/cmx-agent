@@ -35,5 +35,6 @@ pub use store::{FileSessionStore, SessionMeta, SessionStore};
 
 // 连接器类型 re-export，便于前门壳（web/tauri）无需直接依赖 cmx-agent-connectors 即可配置。
 pub use cmx_agent_connectors::{
-    AuthConfig, ConnectorCard, ConnectorConfig, ConnectorRegistry, LoggedInUser,
+    AuthConfig, BoundIdentity, ConnectorCard, ConnectorConfig, ConnectorRegistry, ImBinding,
+    ImBindingClient, LoggedInUser,
 };

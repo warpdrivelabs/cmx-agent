@@ -101,12 +101,22 @@ impl FeishuProvider {
 
     /// 测试注入：往入站队列塞一条消息（生产路径由 Stream task 调用）。
     pub async fn inject(&self, chat_id: &str, text: &str) {
+        self.inject_with_sender(chat_id, text, "").await;
+    }
+
+    /// 测试注入（带 sender）：模拟飞书某 open_id 发消息，驱动绑定/鉴权路径测试。
+    pub async fn inject_with_sender(&self, chat_id: &str, text: &str, sender: &str) {
         let id = self.inner.seq.fetch_add(1, Ordering::SeqCst) + 1;
         self.inner
             .inbox
             .lock()
             .await
-            .push_back(InboundMsg { chat_id: chat_id.into(), text: text.into(), update_id: id });
+            .push_back(InboundMsg {
+                chat_id: chat_id.into(),
+                text: text.into(),
+                update_id: id,
+                sender: sender.into(),
+            });
     }
 
     /// 换取/刷新 tenant_access_token（缓存到过期前 60s）。
@@ -189,14 +199,19 @@ impl FeishuProvider {
                                 let t = get_header(&frame.headers, "type");
                                 if t == "event" {
                                     if let Ok(s) = std::str::from_utf8(&frame.payload)
-                                        && let Some((chat_id, text)) = parse_receive_event(s)
+                                        && let Some((chat_id, text, open_id)) = parse_receive_event(s)
                                     {
                                         let id = self.inner.seq.fetch_add(1, Ordering::SeqCst) + 1;
                                         self.inner
                                             .inbox
                                             .lock()
                                             .await
-                                            .push_back(InboundMsg { chat_id, text, update_id: id });
+                                            .push_back(InboundMsg {
+                                                chat_id,
+                                                text,
+                                                update_id: id,
+                                                sender: open_id,
+                                            });
                                     }
                                     // ack：回数据帧，payload {"code":200}，透传原 headers
                                     let _ = sink.send(Message::Binary(make_ack_frame(&frame))).await;
@@ -298,14 +313,16 @@ impl FeishuInner {
 
 // ── 纯函数：消息解析 / 构造（可单测，无网络）──────────────────────────────
 
-/// 从 v2 事件 payload 解析 `(chat_id, text)`。仅处理 `im.message.receive_v1` 文本消息。
-pub fn parse_receive_event(payload: &str) -> Option<(String, String)> {
+/// 从 v2 事件 payload 解析 `(chat_id, text, open_id)`。仅处理 `im.message.receive_v1` 文本消息。
+/// open_id 取自 `event.sender.sender_id.open_id`，用于 IM 用户 ↔ 门户用户绑定（按 sender 查绑定身份）。
+pub fn parse_receive_event(payload: &str) -> Option<(String, String, String)> {
     let v: Value = serde_json::from_str(payload).ok()?;
     let header = v.get("header")?;
     if header.get("event_type").and_then(|t| t.as_str()) != Some("im.message.receive_v1") {
         return None;
     }
-    let message = v.get("event")?.get("message")?;
+    let event = v.get("event")?;
+    let message = event.get("message")?;
     let chat_id = message.get("chat_id").and_then(|c| c.as_str())?.to_string();
     if message.get("message_type").and_then(|t| t.as_str()) != Some("text") {
         return None; // 一期仅文本
@@ -319,7 +336,15 @@ pub fn parse_receive_event(payload: &str) -> Option<(String, String)> {
     if text.is_empty() {
         return None;
     }
-    Some((chat_id, text))
+    // sender open_id：event.sender.sender_id.open_id（缺失则空串，绑定按未绑定处理）。
+    let open_id = event
+        .get("sender")
+        .and_then(|s| s.get("sender_id"))
+        .and_then(|id| id.get("open_id"))
+        .and_then(|o| o.as_str())
+        .unwrap_or("")
+        .to_string();
+    Some((chat_id, text, open_id))
 }
 
 /// 构造发消息 body（`receive_id` / `msg_type` / `content`）。
@@ -566,9 +591,18 @@ mod tests {
     #[test]
     fn parse_text_receive_event() {
         let payload = r#"{"schema":"2.0","header":{"event_id":"e1","event_type":"im.message.receive_v1","create_time":"1"},"event":{"sender":{"sender_id":{"open_id":"o1"}},"message":{"message_id":"om_1","chat_id":"oc_abc","chat_type":"p2p","message_type":"text","content":"{\"text\":\"你好\"}"}}}"#;
-        let (chat, text) = parse_receive_event(payload).expect("应解析出文本消息");
+        let (chat, text, open_id) = parse_receive_event(payload).expect("应解析出文本消息");
         assert_eq!(chat, "oc_abc");
         assert_eq!(text, "你好");
+        assert_eq!(open_id, "o1");
+    }
+
+    #[test]
+    fn parse_open_id_missing_is_empty() {
+        // sender.sender_id.open_id 缺失：open_id 返空串（不阻断解析；绑定按未绑定处理）。
+        let payload = r#"{"header":{"event_type":"im.message.receive_v1"},"event":{"message":{"chat_id":"oc_x","message_type":"text","content":"{\"text\":\"hi\"}"}}}"#;
+        let (_, _, open_id) = parse_receive_event(payload).expect("应解析出文本消息");
+        assert_eq!(open_id, "");
     }
 
     #[test]

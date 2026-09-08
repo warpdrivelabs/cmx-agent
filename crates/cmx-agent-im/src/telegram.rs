@@ -69,6 +69,7 @@ impl ImProvider for TelegramProvider {
                                 chat_id: chat,
                                 text: text.to_string(),
                                 update_id: uid,
+                                sender: String::new(), // Telegram 一期不绑定，留空
                             });
                         }
                     }

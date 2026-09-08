@@ -11,10 +11,12 @@ pub mod client;
 pub mod connectors;
 pub mod dataauth;
 pub mod health;
+pub mod im_binding;
 pub mod registry;
 
 pub use auth::{AuthConfig, AuthProvider, LoggedInUser};
 pub use client::{ClientError, CmxServiceClient, TokenStore};
+pub use im_binding::{BoundIdentity, ImBinding, ImBindingClient};
 pub use connectors::{
     EngineChain, EnterpriseContext, FlowCompleteTask, FlowConnector, FlowStartInstance,
     OntoConnector, OntoExecuteAction, OntoPutObject, ReportCompute, ReportConnector,

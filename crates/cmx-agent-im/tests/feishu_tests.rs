@@ -68,3 +68,90 @@ async fn feishu_same_chat_reuses_session() {
         .count();
     assert_eq!(turns, 2, "同 chat 两条消息应落到同一会话两轮");
 }
+
+// ── 用户绑定模式（飞书 open_id ↔ 门户用户）──
+// MockBindingResolver 内存实现，无网络。断言口径：
+// 已绑定 → 跑回合（会话有事件）；未绑定 → 不跑、回绑定提示；发有效验证码 → 完成绑定并回成功。
+
+use cmx_agent_connectors::im_binding::BoundIdentity;
+use cmx_agent_im::MockBindingResolver;
+use std::sync::Arc;
+
+fn bound_id(user: &str, roles: &[&str]) -> BoundIdentity {
+    BoundIdentity {
+        user_id: user.into(),
+        username: user.into(),
+        roles: roles.iter().map(|s| s.to_string()).collect(),
+    }
+}
+
+#[tokio::test]
+async fn binding_mode_unbound_sender_gets_prompt_no_turn() {
+    let app = temp_app(MockModel::saying("不该跑"));
+    let prov = Arc::new(FeishuProvider::new("id", "secret", None));
+    let resolver = Arc::new(MockBindingResolver::new()); // 无绑定
+    let bridge = ImBridge::new(app.clone(), prov.clone(), "feishu", None)
+        .with_bindings(resolver);
+
+    prov.inject_with_sender("oc_1", "hello", "ou_stranger").await;
+    bridge.tick().await.unwrap();
+
+    // 未绑定：不建会话、不跑回合
+    let evs = app.get_events("im-feishu-oc_1").unwrap_or_default();
+    assert!(evs.is_empty(), "未绑定 sender 不应跑回合");
+}
+
+#[tokio::test]
+async fn binding_mode_code_message_binds_and_replies() {
+    let app = temp_app(MockModel::saying("回复"));
+    let prov = Arc::new(FeishuProvider::new("id", "secret", None));
+    let resolver = Arc::new(MockBindingResolver::new().with_code("888888", bound_id("u9", &["user"])));
+    let bridge = ImBridge::new(app.clone(), prov.clone(), "feishu", None)
+        .with_bindings(resolver);
+
+    // 发验证码 → 完成绑定（不跑回合，无会话事件）
+    prov.inject_with_sender("oc_1", "888888", "ou_new").await;
+    bridge.tick().await.unwrap();
+    let evs = app.get_events("im-feishu-oc_1").unwrap_or_default();
+    assert!(evs.is_empty(), "验证码消息本身不跑回合");
+
+    // 绑定后正常消息 → 跑回合
+    prov.inject_with_sender("oc_1", "你好", "ou_new").await;
+    bridge.tick().await.unwrap();
+    let evs = app.get_events("im-feishu-oc_1").unwrap_or_default();
+    assert!(!evs.is_empty(), "绑定后应跑回合");
+}
+
+#[tokio::test]
+async fn binding_mode_bound_sender_runs_turn() {
+    let app = temp_app(MockModel::saying("已绑定回复"));
+    let prov = Arc::new(FeishuProvider::new("id", "secret", None));
+    let resolver = Arc::new(
+        MockBindingResolver::new().with_bound("ou_vip", bound_id("u1", &["admin"])),
+    );
+    let bridge = ImBridge::new(app.clone(), prov.clone(), "feishu", None)
+        .with_bindings(resolver);
+
+    prov.inject_with_sender("oc_2", "在吗", "ou_vip").await;
+    bridge.tick().await.unwrap();
+
+    let evs = app.get_events("im-feishu-oc_2").unwrap_or_default();
+    assert!(!evs.is_empty(), "已绑定 sender 应跑回合");
+}
+
+#[tokio::test]
+async fn binding_mode_broken_service_fails_closed() {
+    let app = temp_app(MockModel::saying("不该跑"));
+    let prov = Arc::new(FeishuProvider::new("id", "secret", None));
+    let mut resolver = MockBindingResolver::new();
+    resolver.broken = true; // 门户不可达
+    let resolver = Arc::new(resolver);
+    let bridge = ImBridge::new(app.clone(), prov.clone(), "feishu", None)
+        .with_bindings(resolver);
+
+    prov.inject_with_sender("oc_3", "hello", "ou_any").await;
+    bridge.tick().await.unwrap();
+
+    let evs = app.get_events("im-feishu-oc_3").unwrap_or_default();
+    assert!(evs.is_empty(), "绑定服务不可达应 fail-closed");
+}

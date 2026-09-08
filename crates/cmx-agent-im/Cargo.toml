@@ -11,6 +11,7 @@ unsafe_code = "forbid"
 [dependencies]
 cmx-agent-app.workspace = true
 cmx-agent-core.workspace = true
+cmx-agent-connectors.workspace = true
 serde_json.workspace = true
 async-trait.workspace = true
 tokio = { workspace = true }

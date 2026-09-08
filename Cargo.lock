@@ -312,6 +312,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "cmx-agent-app",
+ "cmx-agent-connectors",
  "cmx-agent-core",
  "futures-util",
  "reqwest",
