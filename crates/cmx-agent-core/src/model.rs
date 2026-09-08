@@ -87,6 +87,10 @@ pub struct ModelError(pub String);
 pub trait TurnObserver: Send + Sync {
     /// 模型产出一段文字增量（可能是几个字/一句）。
     fn on_text_delta(&self, delta: &str);
+
+    /// 流式中断后决定重试时调用：前端应**丢弃**此前收到的所有 `on_text_delta` 半截文字，
+    /// 等重试成功后再重新接收增量（避免重试时文字重复/错位）。默认空实现——未重试的模型/调用方无需改动。
+    fn on_stream_reset(&self) {}
 }
 
 /// 模型缝 trait。`complete` = 给定上下文，产出下一步响应。

@@ -575,7 +575,9 @@ impl AgentApp {
 /// B2：按 base_url 推断 provider 展示名（模型选择器用）。
 fn provider_label(base_url: &str) -> String {
     let b = base_url.to_ascii_lowercase();
-    if b.contains("deepseek") {
+    if b.contains("mlamp") {
+        "MLamp 网关".into()
+    } else if b.contains("deepseek") {
         "DeepSeek".into()
     } else if b.contains("openai") {
         "OpenAI".into()

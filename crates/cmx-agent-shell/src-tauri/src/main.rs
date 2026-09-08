@@ -50,6 +50,49 @@ async fn agent(payload: String, state: State<'_, AppState>) -> Result<String, St
     dispatch_on_net(state.app.clone(), payload).await
 }
 
+/// 当前操作系统标识（"macos" | "windows" | "linux" | ...= `std::env::consts::OS`）。
+///
+/// 前端据此决定标题条形态：macOS 用系统红绿灯（Overlay，见 tauri.conf.json）；Windows/Linux 关闭系统
+/// 装饰（tauri.windows.conf.json / tauri.linux.conf.json 的 decorations:false）后需自绘最小化/最大化/
+/// 关闭按钮 + 缩放热区。不用 `tauri-plugin-os`（避免新增依赖首次联网编译）——编译期常量足够。
+#[tauri::command]
+fn platform() -> &'static str {
+    std::env::consts::OS
+}
+
+/// 启动守卫（主窗口前端调用）：若当前**未认证**，则隐藏主窗口、显示并聚焦登录窗口。
+///
+/// 登录门是「每次启动先见登录窗」的既定行为；但主窗口的 `index.html` 启动即渲染、不检查登录态，
+/// 而 `visible:false` 的配置在部分平台/场景下不保证前面隐藏。此命令把启动行为与登出行为对齐：
+/// 未登录 → 回到登录窗（同 `logout_to_login`）。前端在 `refreshUser()` 拉到空用户时调用。
+#[tauri::command]
+fn guard_login(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    if state.app.is_authenticated() {
+        return Ok(()); // 已登录：保持主窗口
+    }
+    // 未登录：隐藏主窗口，重建/显示登录窗。
+    if let Some(login_win) = app.get_webview_window("login") {
+        let _ = login_win.show();
+        let _ = login_win.set_focus();
+    } else {
+        tauri::WebviewWindowBuilder::new(
+            &app,
+            "login",
+            tauri::WebviewUrl::App("login.html".into()),
+        )
+        .title("登录 · cmx 企业桌面智能体")
+        .inner_size(980.0, 640.0)
+        .resizable(false)
+        .center()
+        .build()
+        .map_err(|e| e.to_string())?;
+    }
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.hide();
+    }
+    Ok(())
+}
+
 /// 登录命令（登录窗口专用）：校验凭据 → **成功则显示主窗口并关闭登录窗**，返回用户 JSON；失败返回错误文案。
 ///
 /// 这正是「登录成功后打开现有窗口」：主窗口在启动时已创建但 `visible:false`，此处仅 `show()` 之。
@@ -227,7 +270,7 @@ fn main() {
 
     tauri::Builder::default()
         .manage(AppState { app: Arc::new(app) })
-        .invoke_handler(tauri::generate_handler![agent, login, logout_to_login, send_stream])
+        .invoke_handler(tauri::generate_handler![agent, login, logout_to_login, guard_login, send_stream, platform])
         // 登录门守卫：未登录时关闭登录窗 = 退出应用（否则只剩隐藏的主窗，界面像卡死）。
         .on_window_event(|window, event| {
             if window.label() == "login" {

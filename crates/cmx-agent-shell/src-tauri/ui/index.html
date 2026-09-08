@@ -62,10 +62,13 @@
   ::-webkit-scrollbar{width:8px;height:8px} ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px}
 
   /* 原生标题条：贯穿窗口顶部一整行，与系统交通灯同一行（Overlay 标题栏）。
-     整条可拖动（app-region: drag）；左侧留 78px 给交通灯；右侧放控件（控件本身设 no-drag）。 */
+     整条可拖动（app-region: drag）；左侧留 78px 给交通灯；右侧放控件（控件本身设 no-drag）。
+     左侧 82px 留白仅 macOS 需要（系统红绿灯浮在其上）；Windows/Linux 无原生装饰，JS 加 .no-native-decor
+     后去掉左 padding，标题条左对齐、右侧改放自绘窗口控件（.win-ctrls）。 */
   .titlebar{height:32px;flex:0 0 32px;display:flex;align-items:center;
     background:var(--panel);border-bottom:1px solid var(--border);
     padding:0 10px 0 82px;-webkit-app-region:drag;user-select:none}
+  body.no-native-decor .titlebar{padding-left:12px}
   .titlebar .tb-title{font-size:12.5px;color:var(--muted);font-weight:600}
   .titlebar .sp{flex:1}
   .tb-ctrls{display:flex;align-items:center;gap:3px;-webkit-app-region:no-drag}
@@ -74,6 +77,23 @@
   .tb-btn:hover{background:var(--hover);color:var(--ink);border-color:var(--border)}
   .tb-btn .ico{font-size:14px;line-height:1}
   .tb-update{color:var(--aqua)} .tb-update:hover{border-color:var(--aqua)}
+  /* Windows/Linux 窗口控件（最小化/最大化/关闭）：默认隐藏，platform.js 探测非 macOS 后 display:flex */
+  .win-ctrls{display:flex;align-items:center;-webkit-app-region:no-drag;margin-left:4px}
+  .win-btn{display:flex;align-items:center;justify-content:center;width:44px;height:32px;color:var(--ink2);border-radius:0}
+  .win-btn:hover{background:var(--hover);color:var(--ink)}
+  .win-btn.win-close:hover{background:#e34948;color:#fff}
+  .win-btn .ico{font-size:12px;line-height:1}
+  /* 无系统边框缩放热区：仅 Windows/Linux 显示（platform.js 控制），macOS 用系统边框缩放 */
+  .resize-handle{position:fixed;z-index:9999;display:none}
+  body.no-native-decor .resize-handle{display:block}
+  .rh-t{top:0;left:10px;right:10px;height:6px;cursor:n-resize}
+  .rh-b{bottom:0;left:10px;right:10px;height:6px;cursor:s-resize}
+  .rh-l{top:10px;bottom:10px;left:0;width:6px;cursor:w-resize}
+  .rh-r{top:10px;bottom:10px;right:0;width:6px;cursor:e-resize}
+  .rh-tl{top:0;left:0;width:10px;height:10px;cursor:nw-resize}
+  .rh-tr{top:0;right:0;width:10px;height:10px;cursor:ne-resize}
+  .rh-bl{bottom:0;left:0;width:10px;height:10px;cursor:sw-resize}
+  .rh-br{bottom:0;right:0;width:10px;height:10px;cursor:se-resize}
   /* 侧栏折叠 */
   body.sidebar-collapsed aside{display:none}
 
@@ -452,8 +472,11 @@
 </style>
 </head>
 <body>
-  <!-- ═════ 原生标题条：与系统交通灯同一行（Overlay）。左留交通灯位，右侧控件 ═════ -->
-  <!-- data-tauri-drag-region：Tauri 原生拖动（比 CSS -webkit-app-region 在 macOS 可靠）。按钮不带该属性故可点。 -->
+  <!-- ═════ 原生标题条 ═════
+       macOS：与系统交通灯同一行（Overlay，titleBarStyle 由 tauri.conf.json 配），左留 82px 交通灯位。
+       Windows/Linux：系统装饰关闭（tauri.windows.conf.json / tauri.linux.conf.json 的 decorations:false），
+       无交通灯可借，标题条改左对齐 + 右侧补最小化/最大化/关闭按钮（win-ctrls，platform.js 按平台显隐）。
+       data-tauri-drag-region：Tauri 原生拖动；按钮不带该属性故可点。 -->
   <div class="titlebar" data-tauri-drag-region>
     <span class="tb-title" data-tauri-drag-region>cmx 企业桌面智能体</span>
     <div class="sp" data-tauri-drag-region></div>
@@ -462,7 +485,22 @@
       <button class="tb-btn" data-act="toggleTheme" title="浅色/深色主题"><span class="ico" id="tb-theme-ico">☀</span></button>
       <button class="tb-btn tb-update" id="tb-update-btn" data-act="applyUpdate" title="安装更新" style="display:none"><span class="ico">⭮</span><span id="tb-update-label">更新</span></button>
     </div>
+    <!-- Windows/Linux 专用窗口控件（无 data-tauri-drag-region，可点；默认隐藏，由 platform.js 探测非 macOS 后显示） -->
+    <div class="win-ctrls" id="win-ctrls" style="display:none">
+      <button class="win-btn" data-act="winMinimize" title="最小化"><span class="ico">─</span></button>
+      <button class="win-btn" id="win-max-btn" data-act="winToggleMaximize" title="最大化"><span class="ico">□</span></button>
+      <button class="win-btn win-close" data-act="winClose" title="关闭"><span class="ico">✕</span></button>
+    </div>
   </div>
+  <!-- Windows/Linux 无系统边框缩放热区：四边 + 四角不可见拖拽条（macOS 用系统边框，platform.js 隐藏这些） -->
+  <div class="resize-handle rh-t" data-resize="North"></div>
+  <div class="resize-handle rh-b" data-resize="South"></div>
+  <div class="resize-handle rh-l" data-resize="West"></div>
+  <div class="resize-handle rh-r" data-resize="East"></div>
+  <div class="resize-handle rh-tl" data-resize="NorthWest"></div>
+  <div class="resize-handle rh-tr" data-resize="NorthEast"></div>
+  <div class="resize-handle rh-bl" data-resize="SouthWest"></div>
+  <div class="resize-handle rh-br" data-resize="SouthEast"></div>
   <div class="workspace">
   <!-- ═════ 最左活动栏（VSCode 式）═════ -->
   <div class="activitybar">
@@ -1332,6 +1370,44 @@ function toggleMenu(){ document.getElementById("usermenu").classList.remove("on"
 function closeMenu(){ document.getElementById("cmxmenu").classList.remove("on"); document.getElementById("usermenu").classList.remove("on"); }
 function menuSettings(){ closeMenu(); alert("设置\n\n（M2 占位：主题、工作空间、默认权限、连接器地址等设置项将在此配置。）"); }
 function menuAbout(){ closeMenu(); alert("cmx 企业桌面智能体\n版本 "+APP_VERSION+"\n\n复刻并超越 WorkBuddy · 同核多壳架构\n形(前门) / 核(回合循环+守卫) / 体(cmx 引擎连接器)"); }
+
+// ── Windows/Linux 窗口控件（最小化/最大化/关闭）+ 无边框缩放 ──
+// macOS 用系统红绿灯（Overlay 标题栏），不建这些；仅非 macOS 且在 Tauri 壳内才生效（Web 壳无 __TAURI__.window）。
+function _tauriWin(){
+  return (window.__TAURI__ && window.__TAURI__.window) ? window.__TAURI__.window.getCurrentWindow() : null;
+}
+async function winMinimize(){ const w=_tauriWin(); if(w) await w.minimize(); }
+async function winToggleMaximize(){
+  const w=_tauriWin(); if(!w) return;
+  await w.toggleMaximize();
+  try{
+    const maxed = await w.isMaximized();
+    document.getElementById("win-max-btn").querySelector(".ico").textContent = maxed ? "❐" : "□";
+  }catch(e){}
+}
+async function winClose(){ const w=_tauriWin(); if(w) await w.close(); }
+// 无边框缩放热区：pointerdown 触发 Tauri 原生 startResizeDragging（比手搓 CSS resize 在各平台更可靠）。
+// macOS 用系统边框缩放（decorations=Overlay 保留系统 resize），resize-handle 在 mac 上通过 CSS 隐藏，不干扰。
+document.querySelectorAll(".resize-handle").forEach(h=>{
+  h.addEventListener("pointerdown", async e=>{
+    e.preventDefault();
+    const w=_tauriWin(); if(!w) return;
+    try{ await w.startResizeDragging(h.dataset.resize); }catch(e){}
+  });
+});
+// 平台探测：非 macOS 才显示自绘窗口控件 + 缩放热区（decorations:false 仅在 tauri.windows/linux.conf.json 生效）。
+// 用自定义 `platform` 命令（= std::env::consts::OS）而非 tauri-plugin-os：省一份插件依赖/首次联网编译。
+(async function initPlatformChrome(){
+  if(!(window.__TAURI__ && window.__TAURI__.core)) return; // Web 壳：系统浏览器窗口，不处理
+  try{
+    const platform = await window.__TAURI__.core.invoke("platform"); // "macos" | "windows" | "linux"
+    if(platform !== "macos"){
+      document.body.classList.add("no-native-decor");
+      document.getElementById("win-ctrls").style.display = "flex";
+    }
+  }catch(e){}
+})();
+
 // 用户菜单
 let CURRENT_USER = null;   // {user_id, username, nickname, roles} 或 null
 // 拉取当前登录用户（前门 current_user），填充活动栏头像 + 用户菜单。未登录则显示占位。
@@ -1340,6 +1416,10 @@ async function refreshUser(){
     const r = await call({cmd:"current_user"});
     CURRENT_USER = (r.ok && r.data && r.data.user) || null;
   }catch(e){ CURRENT_USER = null; }
+  // 原生壳未登录：隐藏主窗、聚焦登录窗（每次启动先见登录门，与登出行为对齐）。
+  if(!CURRENT_USER && window.__TAURI__ && window.__TAURI__.core){
+    try{ await window.__TAURI__.core.invoke("guard_login"); }catch(e){}
+  }
   const u = CURRENT_USER;
   const name = u ? (u.nickname || u.username) : "未登录";
   const initial = name && name !== "未登录" ? name.trim().charAt(0).toUpperCase() : "👤";
@@ -1711,7 +1791,7 @@ function showToast(msg){
 
 // 内联 onclick 属性全被拦截。用委托（监听在 document 上，由 nonce'd 脚本注册）在两壳都工作。
 const ACTIONS = { newTask, openConnectors, startFromHome, toggleSidebar, toggleTheme, checkUpdate, applyUpdate, toggleMenu, menuSettings, menuAbout, toggleVoice, toggleUserMenu, userProfile, userSwitch, userWorkspace, userLogout,
-  toggleTabOverflow, tabCtxClose, tabCtxCloseOthers, tabCtxCloseRight, tabCtxCloseAll };
+  toggleTabOverflow, tabCtxClose, tabCtxCloseOthers, tabCtxCloseRight, tabCtxCloseAll, winMinimize, winToggleMaximize, winClose };
 document.addEventListener("click", e=>{
   const el = e.target.closest("[data-act]");
   if(!el){ closeMenu(); closeTabCtx(); document.getElementById("modelmenu").classList.remove("on"); document.getElementById("tab-dropdown").classList.remove("on"); return; }

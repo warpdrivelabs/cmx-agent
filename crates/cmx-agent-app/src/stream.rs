@@ -35,4 +35,9 @@ impl TurnObserver for ChannelSink {
             .tx
             .send(serde_json::json!({ "kind": "text_delta", "text": delta }));
     }
+
+    fn on_stream_reset(&self) {
+        // 流中断重试：前端清掉已显示的半截文字，等重试成功后再重新收增量。
+        let _ = self.tx.send(serde_json::json!({ "kind": "text_reset" }));
+    }
 }

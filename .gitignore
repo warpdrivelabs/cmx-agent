@@ -1,4 +1,8 @@
 /target
+# cmx-agent-shell/src-tauri 是独立单成员 workspace（不并入根 workspace），自带 target/。
+/crates/cmx-agent-shell/src-tauri/target
+# 桌面壳运行日志（本地调试产物，不入库）。
+/crates/cmx-agent-shell/logs
 **/*.rs.bk
 .DS_Store
 **/.DS_Store
