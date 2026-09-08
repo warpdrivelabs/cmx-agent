@@ -3,6 +3,8 @@
 /crates/cmx-agent-shell/src-tauri/target
 # 桌面壳运行日志（本地调试产物，不入库）。
 /crates/cmx-agent-shell/logs
+# tauri-build 自动生成的平台 schema（每次构建按平台重写，勿入库）。
+/crates/cmx-agent-shell/src-tauri/gen/
 **/*.rs.bk
 .DS_Store
 **/.DS_Store
