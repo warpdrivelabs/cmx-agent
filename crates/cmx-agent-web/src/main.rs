@@ -81,7 +81,7 @@ async fn build_app(workdir: &std::path::Path, data_dir: &std::path::Path) -> Age
     // U15：plugins 目录里 kind:"mcp" 的插件清单，也作为 MCP server 连上（统一插件面入口）。
     mcp_tools.extend(cmx_agent_plugin::connect_mcp_plugins(&data_dir.join("plugins")).await);
     // U13：opt-in 数据权限接地——设 CMX_AGENT_DATAAUTH_URL 指向 cmx-data-auth 即启用真 PEP；否则 allow_all 占位。
-    DesktopAppBuilder::new(workdir, data_dir, model)
+    let mut app = DesktopAppBuilder::new(workdir, data_dir, model)
         .connectors(cmx_agent_app::ConnectorConfig::default())
         .auth(cmx_agent_app::AuthConfig::default())
         .interactive_approval() // X4：shell 等需审批工具挂起等前端点按
@@ -89,7 +89,17 @@ async fn build_app(workdir: &std::path::Path, data_dir: &std::path::Path) -> Age
         .maybe_data_auth(std::env::var("CMX_AGENT_DATAAUTH_URL").ok())
         .user_config_base(data_dir.join("users")) // per-user 模型配置：<data_dir>/users/<username>/model.json
         .build()
-        .expect("build agent app")
+        .expect("build agent app");
+
+    // IM 绑定面板（设置 → IM 绑定）：不注入则绑定三命令一律报「未启用 IM 绑定」。
+    // 门户基址与登录门同源（AuthConfig::default().base_url），CMX_AGENT_PORTAL_BASE 可覆盖。
+    let portal_base = std::env::var("CMX_AGENT_PORTAL_BASE")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| cmx_agent_app::AuthConfig::default().base_url);
+    app = app.with_im_binding(cmx_agent_app::ImBindingClient::new(portal_base));
+
+    app
 }
 
 async fn index() -> Html<&'static str> {
@@ -157,36 +167,60 @@ async fn api_stream(
 /// 用 Chrome `--app=` 模式开一个无边框独立窗口（观感=桌面 App）。找不到 Chrome 则退回默认浏览器。
 fn open_desktop_window(url: &str) {
     #[cfg(target_os = "macos")]
-    let chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+    let chrome = std::path::Path::new("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
 
     #[cfg(target_os = "macos")]
     {
-        if std::path::Path::new(chrome).exists() {
-            let profile = std::env::temp_dir().join("cmx-agent-chrome-profile");
-            let ok = std::process::Command::new(chrome)
-                .arg(format!("--app={url}"))
-                .arg(format!("--user-data-dir={}", profile.display()))
-                .arg("--window-size=1000,720")
-                .arg("--no-first-run")
-                .arg("--no-default-browser-check")
-                .spawn()
-                .is_ok();
-            if ok {
-                return;
-            }
+        if chrome.exists() && spawn_chromium_app(chrome, url) {
+            return;
         }
         // 退回系统默认打开方式
         let _ = std::process::Command::new("open").arg(url).spawn();
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     {
-        // 其他平台：尽力用系统默认浏览器打开
-        #[cfg(target_os = "windows")]
+        // Chromium 系候选：Chrome 三个标准安装位（64 位 ProgramFiles / 32 位 ProgramFiles(x86) /
+        // per-user LocalAppData）优先，Edge 两个 ProgramFiles 兜底；两者 --app= 参数完全一致。
+        let candidates = [
+            ("ProgramFiles", r"Google\Chrome\Application\chrome.exe"),
+            ("ProgramFiles(x86)", r"Google\Chrome\Application\chrome.exe"),
+            ("LOCALAPPDATA", r"Google\Chrome\Application\chrome.exe"),
+            ("ProgramFiles", r"Microsoft\Edge\Application\msedge.exe"),
+            ("ProgramFiles(x86)", r"Microsoft\Edge\Application\msedge.exe"),
+        ]
+        .into_iter()
+        .filter_map(|(env, rel)| {
+            std::env::var_os(env).map(|base| std::path::PathBuf::from(base).join(rel))
+        })
+        .find(|p| p.exists());
+        if let Some(chrome) = candidates
+            && spawn_chromium_app(&chrome, url)
+        {
+            return;
+        }
+        // 退回系统默认浏览器
         let _ = std::process::Command::new("cmd")
             .args(["/C", "start", "", url])
             .spawn();
-        #[cfg(all(unix, not(target_os = "macos")))]
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
         let _ = std::process::Command::new("xdg-open").arg(url).spawn();
     }
+}
+
+/// Chromium 系（Chrome/Edge）`--app=` 独立窗：独立临时 profile（不粘用户日常标签页/会话）+ 固定初始
+/// 尺寸。返回是否启动成功。
+fn spawn_chromium_app(program: &std::path::Path, url: &str) -> bool {
+    let profile = std::env::temp_dir().join("cmx-agent-chrome-profile");
+    std::process::Command::new(program)
+        .arg(format!("--app={url}"))
+        .arg(format!("--user-data-dir={}", profile.display()))
+        .arg("--window-size=1000,720")
+        .arg("--no-first-run")
+        .arg("--no-default-browser-check")
+        .spawn()
+        .is_ok()
 }
