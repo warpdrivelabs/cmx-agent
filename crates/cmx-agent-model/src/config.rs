@@ -149,6 +149,17 @@ impl ModelProviderConfig {
             vec![]
         }
     }
+
+    /// API Key 脱敏展示（前端配置面板用）：末 4 位明文，其余 `sk-...`；短于 8 字符全 `*`。
+    pub fn masked_api_key(&self) -> String {
+        let k = &self.api_key;
+        if k.len() <= 8 {
+            "*".repeat(k.len().max(1))
+        } else {
+            let tail: String = k.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+            format!("sk-...{tail}")
+        }
+    }
 }
 
 #[cfg(test)]
@@ -191,5 +202,28 @@ mod tests {
             assert_eq!(c.model, "deepseek-v4-pro");
         }
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn masked_api_key_long() {
+        let c = ModelProviderConfig::new("http://x", "sk-VIZBzFoeHvpS12kZhK6abcd", "m");
+        let m = c.masked_api_key();
+        assert!(m.starts_with("sk-..."), "should be prefixed: {m}");
+        assert!(m.ends_with("abcd"), "should end with last 4: {m}");
+        assert!(!m.contains("VIZBz"), "should not expose middle: {m}");
+    }
+
+    #[test]
+    fn masked_api_key_short() {
+        let c = ModelProviderConfig::new("http://x", "abc", "m");
+        let m = c.masked_api_key();
+        assert_eq!(m, "***");
+    }
+
+    #[test]
+    fn masked_api_key_empty() {
+        let c = ModelProviderConfig::new("http://x", "", "m");
+        let m = c.masked_api_key();
+        assert_eq!(m, "*");
     }
 }

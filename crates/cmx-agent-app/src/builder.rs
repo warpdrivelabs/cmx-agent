@@ -37,6 +37,8 @@ pub struct DesktopAppBuilder {
     mcp_tools: Vec<Arc<dyn cmx_agent_core::Tool>>,
     /// U13 数据权限：Some(base_url) = 接 cmx-data-auth PDP 做权限接地（AuthGuard 换真 PEP）；None = allow_all 占位。
     data_auth: Option<String>,
+    /// Web 壳 per-user 模型配置基目录：Some(base) = `<base>/<username>/model.json`；None = 全局（Tauri 用）。
+    user_config_base: Option<PathBuf>,
 }
 
 impl DesktopAppBuilder {
@@ -60,6 +62,7 @@ impl DesktopAppBuilder {
             interactive_approval: false,
             mcp_tools: Vec::new(),
             data_auth: None,
+            user_config_base: None,
         }
     }
 
@@ -105,6 +108,13 @@ impl DesktopAppBuilder {
             Some(u) if !u.is_empty() => self.data_auth(u),
             _ => self,
         }
+    }
+
+    /// 启用 per-user 模型配置目录（Web 壳调用）：已登录用户的配置存 `<dir>/<username>/model.json`。
+    /// Tauri 壳不调用此方法，始终用全局 data_dir/model.json（单机单用户场景）。
+    pub fn user_config_base(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.user_config_base = Some(dir.into());
+        self
     }
 
     pub fn sandbox(mut self, s: SandboxMode) -> Self {
@@ -293,6 +303,9 @@ impl DesktopAppBuilder {
         // U13：把 PEP + 共享 identity 交给 app——登录后按真实用户角色重热 PDP 判定（授权门接地）。
         if let Some((pep, identity)) = data_auth_wire {
             app = app.with_data_auth_identity(pep, identity);
+        }
+        if let Some(base) = self.user_config_base {
+            app = app.with_user_config_base(base);
         }
         Ok(app)
     }

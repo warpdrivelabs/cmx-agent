@@ -56,6 +56,9 @@ pub struct AgentApp {
     model_slot: Option<crate::ModelSlot>,
     /// B2 模型配置目录（含 model.json）：切换模型后持久化。
     model_config_dir: Option<std::path::PathBuf>,
+    /// Web 壳启用 per-user 配置后的基目录：`<base>/<username>/model.json`。
+    /// Tauri 壳不设此字段，始终用 model_config_dir（单机单用户）。
+    user_config_base: Option<std::path::PathBuf>,
     /// U16 会话事件总线：任意来源（本地 / IM 桥）追加事件时广播给订阅者（`/api/subscribe` SSE）。
     event_bus: Arc<crate::bus::SessionEventBus>,
     /// IM 绑定客户端（Some=启用绑定面板：gen_code/list/unbind 三命令）。
@@ -80,6 +83,7 @@ impl AgentApp {
             auth_identity: None,
             model_slot: None,
             model_config_dir: None,
+            user_config_base: None,
             event_bus: Arc::new(crate::bus::SessionEventBus::new()),
             im_binding: None,
         }
@@ -142,6 +146,12 @@ impl AgentApp {
     pub fn with_model(mut self, slot: crate::ModelSlot, config_dir: impl Into<std::path::PathBuf>) -> Self {
         self.model_slot = Some(slot);
         self.model_config_dir = Some(config_dir.into());
+        self
+    }
+
+    /// 启用 per-user 模型配置基目录（Web 壳由 DesktopAppBuilder::user_config_base 注入）。
+    pub fn with_user_config_base(mut self, base: impl Into<std::path::PathBuf>) -> Self {
+        self.user_config_base = Some(base.into());
         self
     }
 
@@ -299,6 +309,111 @@ impl AgentApp {
     }
 
     /// 列出连接器卡片（描述 + live 健康）。未启用连接器时返回空表。
+    /// 返回当前有效的模型配置目录。
+    /// - Web 壳且已登录：`<user_config_base>/<username>/`（自动创建）
+    /// - 其他（Tauri 或未登录）：`model_config_dir`（原有全局路径）
+    fn effective_model_config_dir(&self) -> Option<std::path::PathBuf> {
+        if let Some(base) = &self.user_config_base {
+            if let Some(username) = self
+                .current_user
+                .lock()
+                .ok()
+                .and_then(|g| g.as_ref().map(|u| u.username.clone()))
+            {
+                let dir = base.join(&username);
+                std::fs::create_dir_all(&dir).ok();
+                return Some(dir);
+            }
+        }
+        self.model_config_dir.clone()
+    }
+
+    /// B2：读取当前完整模型配置（api_key 脱敏），供前端配置面板填充表单。
+    pub fn get_model_config(&self) -> serde_json::Value {
+        let dir = self.effective_model_config_dir();
+        let cfg = cmx_agent_model::ModelProviderConfig::resolve(dir.as_deref());
+        match cfg {
+            Some(c) => {
+                let candidates: Vec<String> = c.candidate_models().iter().map(|s| s.to_string()).collect();
+                serde_json::json!({
+                    "configured": true,
+                    "base_url": c.base_url,
+                    "api_key_masked": c.masked_api_key(),
+                    "model": c.model,
+                    "temperature": c.temperature,
+                    "timeout_ms": c.timeout_ms,
+                    "candidates": candidates,
+                })
+            }
+            None => serde_json::json!({
+                "configured": false,
+                "base_url": "",
+                "api_key_masked": "",
+                "model": "",
+                "temperature": 0.2_f32,
+                "timeout_ms": 60000_u64,
+                "candidates": [],
+            }),
+        }
+    }
+
+    /// B2：保存完整模型配置并热换（前端配置面板「保存」按钮调用）。
+    ///
+    /// payload 字段：
+    /// - `base_url`：字符串（必填）
+    /// - `model`：字符串（必填）
+    /// - `temperature`：浮点（可选，缺省 0.2）
+    /// - `timeout_ms`：整数（可选，缺省 60000）
+    /// - `api_key_action`："keep"（保留现有 key）| "set"（使用 `api_key_value`）
+    /// - `api_key_value`：字符串（仅 action=="set" 时有意义）
+    pub fn set_model_config(&self, payload: serde_json::Value) -> AppResult<serde_json::Value> {
+        let get_str = |k: &str| payload.get(k).and_then(|v| v.as_str()).map(|s| s.trim().to_string());
+        let base_url = get_str("base_url")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| AppError::BadRequest("base_url 不能为空".into()))?;
+        let model = get_str("model")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| AppError::BadRequest("model 不能为空".into()))?;
+        let temperature = payload.get("temperature").and_then(|v| v.as_f64()).map(|f| f as f32).unwrap_or(0.2);
+        let timeout_ms = payload.get("timeout_ms").and_then(|v| v.as_u64()).unwrap_or(60_000);
+        let action = get_str("api_key_action").unwrap_or_else(|| "keep".into());
+
+        let dir = self.effective_model_config_dir();
+        // 解析旧 api_key（keep 时沿用；set 时替换）
+        let api_key = if action == "set" {
+            get_str("api_key_value").unwrap_or_default()
+        } else {
+            // keep：从已有配置中取旧 key；若还没有配置则允许空（keyless 端点）
+            cmx_agent_model::ModelProviderConfig::resolve(dir.as_deref())
+                .map(|c| c.api_key.clone())
+                .unwrap_or_default()
+        };
+
+        let cfg = cmx_agent_model::ModelProviderConfig {
+            base_url: base_url.trim_end_matches('/').to_string(),
+            api_key,
+            model: model.clone(),
+            temperature,
+            timeout_ms,
+        };
+
+        // 热换（若有模型槽）
+        if let Some(slot) = &self.model_slot {
+            slot.swap(std::sync::Arc::new(cmx_agent_model::OpenAiCompatModel::new(cfg.clone())));
+        }
+
+        // 持久化
+        let persisted = dir.as_ref().map(|d| cfg.save(d).is_ok()).unwrap_or(false);
+        let note = if persisted { "已保存并立即生效" } else { "已应用（本次会话；持久化失败）" };
+        Ok(serde_json::json!({
+            "service": "cmx-model",
+            "current": model,
+            "provider": provider_label(&cfg.base_url),
+            "persisted": persisted,
+            "note": note,
+        }))
+    }
+
     pub async fn list_connectors(&self) -> Vec<ConnectorCard> {
         match &self.connectors {
             Some(cr) => cr.probe_all().await,
@@ -309,7 +424,7 @@ impl AgentApp {
     /// B2：列出可选模型（前门 list_models → 模型选择器）。
     /// `current` = 当前生效模型（真实 provider 的 model，或 demo）；`candidates` = 同 provider 候选 + demo。
     pub fn list_models(&self) -> serde_json::Value {
-        let cfg = cmx_agent_model::ModelProviderConfig::resolve(self.model_config_dir.as_deref());
+        let cfg = cmx_agent_model::ModelProviderConfig::resolve(self.effective_model_config_dir().as_deref());
         let (current, provider, base_url) = match &cfg {
             Some(c) => (c.model.clone(), provider_label(&c.base_url), c.base_url.clone()),
             None => ("demo".to_string(), "离线演示".to_string(), String::new()),
@@ -347,14 +462,15 @@ impl AgentApp {
             return Ok(serde_json::json!({ "service": "cmx-model", "current": "demo", "persisted": false,
                 "note": "已切到离线演示模型（本次会话；重启按 model.json）" }));
         }
-        let mut cfg = cmx_agent_model::ModelProviderConfig::resolve(self.model_config_dir.as_deref())
+        let dir = self.effective_model_config_dir();
+        let mut cfg = cmx_agent_model::ModelProviderConfig::resolve(dir.as_deref())
             .ok_or_else(|| AppError::BadRequest("未配置真实模型（无 model.json/env），只能用 demo".into()))?;
         cfg.model = model.to_string();
         slot.swap(std::sync::Arc::new(cmx_agent_model::OpenAiCompatModel::new(cfg.clone())));
         // 持久化到 model.json（切换后重启沿用）。
         let mut persisted = false;
-        if let Some(dir) = &self.model_config_dir {
-            persisted = cfg.save(dir).is_ok();
+        if let Some(ref d) = dir {
+            persisted = cfg.save(d).is_ok();
         }
         let note = if persisted { "已切换并持久化，立即生效" } else { "已切换（本次会话；持久化失败）" };
         Ok(serde_json::json!({ "service": "cmx-model", "current": model, "provider": provider_label(&cfg.base_url),
