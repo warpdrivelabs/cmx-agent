@@ -71,7 +71,7 @@ impl Tool for WebFetchTool {
         };
         let is_html = ctype.contains("html")
             || body.trim_start().starts_with("<!")
-            || html::extract_title(&body) != "";
+            || !html::extract_title(&body).is_empty();
         let (title, text) = if is_html {
             (html::extract_title(&body), html::html_to_text(&body))
         } else {

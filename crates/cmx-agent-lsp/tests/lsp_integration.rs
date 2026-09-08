@@ -2,8 +2,6 @@
 //! 走 initialize → didOpen → hover / documentSymbol / diagnostics(推送)。python3 缺失则跳过。
 
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
 
 use cmx_agent_core::guard::SandboxMode;
 use cmx_agent_core::{Tool, ToolCtx};

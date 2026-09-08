@@ -178,6 +178,58 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+/// 生成 PPT(.pptx)：每页 = 标题 + 要点列表（纯 Rust 组包 zip+PresentationML，无外部依赖）。
+pub struct PptxWriteTool;
+
+#[async_trait]
+impl Tool for PptxWriteTool {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::new(
+            "pptx_write",
+            "生成 PPT(.pptx)：给 slides=[{title, bullets:[要点,...]}]，每页标题+要点列表（标题+正文版式）。需 workspace-write。",
+        )
+        .schema(json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "工作区内输出 .pptx 路径" },
+                "slides": {
+                    "type": "array",
+                    "items": { "type": "object", "properties": {
+                        "title": {"type":"string"},
+                        "bullets": {"type":"array","items":{"type":"string"}}
+                    }, "required": ["title"] }
+                }
+            },
+            "required": ["path", "slides"]
+        }))
+        .guard(GuardHints { requires_auth: Some("fs:write".into()), idempotent: false, ..Default::default() })
+    }
+
+    async fn invoke(&self, input: Value, ctx: &ToolCtx<'_>) -> Result<ToolResult, ToolError> {
+        if !ctx.sandbox.allows_write() {
+            return Ok(ToolResult::err("pptx_write: 需 workspace-write 沙箱"));
+        }
+        let Some(path) = input.get("path").and_then(|v| v.as_str()) else {
+            return Ok(ToolResult::err("pptx_write: 'path' is required"));
+        };
+        let Some(slides) = input.get("slides") else {
+            return Ok(ToolResult::err("pptx_write: 'slides' is required"));
+        };
+        let abs = match resolve(path, ctx) {
+            Ok(p) => p,
+            Err(e) => return Ok(ToolResult::err(format!("pptx_write: {e}"))),
+        };
+        let n = slides.as_array().map(|a| a.len()).unwrap_or(0);
+        match crate::pptx::write_pptx(&abs, slides) {
+            Ok(()) => Ok(ToolResult::ok(json!({
+                "path": abs.display().to_string(), "slides": n, "ok": true,
+                "note": "标题+要点版式；可用 Office/WPS 打开后进一步美化"
+            }))),
+            Err(e) => Ok(ToolResult::err(format!("pptx_write: {e}"))),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

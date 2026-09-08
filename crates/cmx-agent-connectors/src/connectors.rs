@@ -582,8 +582,8 @@ fn resolve_refs(v: &Value, prior: &[Value]) -> Value {
                 Some((i, p)) => (i, Some(p)),
                 None => (body, None),
             };
-            if let Ok(idx) = idx_str.parse::<usize>() {
-                if idx >= 1 && idx <= prior.len() {
+            if let Ok(idx) = idx_str.parse::<usize>()
+                && idx >= 1 && idx <= prior.len() {
                     let base = &prior[idx - 1];
                     return match path {
                         Some(p) => base
@@ -593,7 +593,6 @@ fn resolve_refs(v: &Value, prior: &[Value]) -> Value {
                         None => base.clone(),
                     };
                 }
-            }
             v.clone()
         }
         Value::Object(m) => Value::Object(m.iter().map(|(k, val)| (k.clone(), resolve_refs(val, prior))).collect()),

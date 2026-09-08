@@ -321,11 +321,10 @@ pub fn load_plugins(dir: &Path) -> (Vec<Arc<dyn Tool>>, Vec<PluginManifest>) {
     let mut manifests = Vec::new();
     for (pdir, m) in read_manifests(dir) {
         // 禁用的插件：登记进清单（列表可见）但不构建工具（启动不加载）。
-        if !is_plugin_disabled(&pdir) {
-            if let Some(t) = tool_from_manifest(&m, Some(&pdir)) {
+        if !is_plugin_disabled(&pdir)
+            && let Some(t) = tool_from_manifest(&m, Some(&pdir)) {
                 tools.push(t);
             }
-        }
         manifests.push(m);
     }
     (tools, manifests)

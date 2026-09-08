@@ -572,7 +572,7 @@
           <select id="perm" title="默认权限 = 两旋钮：沙箱能力 × 审批许可">
             <option value="workspace-write/on-request">默认权限：工作区可写 · 按需审批</option>
             <option value="read-only/on-request">只读 · 按需审批</option>
-            <option value="danger/never">完全访问 · 从不打断（危险）</option>
+            <option value="danger-full-access/never">完全访问 · 从不打断（危险）</option>
           </select>
         </div>
       </div>
@@ -632,6 +632,27 @@ async function call(req){
   const r = await fetch("/api",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(req)});
   return await r.json();
 }
+// ── 默认权限（两旋钮）：🛡 下拉切换沙箱能力 × 审批许可（前门 set_policy，立即生效）。
+// 选择记在 localStorage，启动时恢复（后端默认 workspace-write/on-request，由前端补投上次选择）──
+document.addEventListener('change', async e => {
+  const sel = e.target;
+  if (!sel || sel.id !== 'perm') return;
+  const [sandbox, approval] = sel.value.split('/');
+  try { localStorage.setItem('cmx-perm', sel.value); } catch (_) {}
+  const r = await call({cmd:'set_policy', sandbox, approval});
+  if (!r || r.ok === false) alert('切换权限失败：' + (r && r.error ? r.error.message : '未知错误'));
+});
+(function restorePerm(){
+  const sel = document.getElementById('perm');
+  let saved = null;
+  try { saved = localStorage.getItem('cmx-perm'); } catch (_) {}
+  if (!sel || !saved || ![...sel.options].some(o => o.value === saved)) return;
+  sel.value = saved;
+  const [sandbox, approval] = saved.split('/');
+  call({cmd:'set_policy', sandbox, approval}).then(r => {
+    if (!r || r.ok === false) console.warn('恢复权限档失败', r);
+  });
+})();
 // ── 流式对话桥（同核多壳）：原生 Tauri 壳走 invoke("send_stream")+事件；Web 壳走 POST /api/stream 的 SSE。──
 // onEvent 收到每个会话事件（含终止标记 {kind:"stream_done"} / {kind:"stream_error",message}）。
 async function streamSend(sessionId, text, onEvent){
@@ -842,7 +863,7 @@ function renderMarkdown(src){
 function renderToolInvoke(c){
   const name=c.name||"", input=c.input||{};
   if(name==="task" && input.prompt!=null) return `<div class="tchead">🤖 <b>子智能体</b> <span class="tcpath">${esc(input.label||"子任务")}</span></div><div class="tcsub">${esc(String(input.prompt))}</div>`;
-  if(name==="bash" && input.cmd!=null) return `<div class="tchead">🔧 <b>bash</b></div><pre class="tterm">$ ${esc(input.cmd)}</pre>`;
+  if(name==="shell" && input.cmd!=null) return `<div class="tchead">🔧 <b>shell</b></div><pre class="tterm">$ ${esc(input.cmd)}</pre>`;
   if(name==="web_fetch" && input.url!=null) return `<div class="tchead">🌐 <b>web_fetch</b> <span class="tcpath">${esc(input.url)}</span></div>`;
   if(name==="web_search" && input.query!=null) return `<div class="tchead">🔎 <b>web_search</b> <span class="tcpath">${esc(input.query)}</span></div>`;
   if(name==="browser_read" && input.url!=null) return `<div class="tchead">🖥 <b>browser_read</b> <span class="tcpath">${esc(input.url)}</span></div>`;

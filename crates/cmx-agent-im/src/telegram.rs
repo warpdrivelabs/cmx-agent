@@ -63,15 +63,14 @@ impl ImProvider for TelegramProvider {
                         .and_then(|c| c.get("id"))
                         .map(|id| id.to_string())
                         .unwrap_or_default();
-                    if let Some(text) = msg.get("text").and_then(|t| t.as_str()) {
-                        if !chat.is_empty() {
+                    if let Some(text) = msg.get("text").and_then(|t| t.as_str())
+                        && !chat.is_empty() {
                             out.push(InboundMsg {
                                 chat_id: chat,
                                 text: text.to_string(),
                                 update_id: uid,
                             });
                         }
-                    }
                 }
             }
         }

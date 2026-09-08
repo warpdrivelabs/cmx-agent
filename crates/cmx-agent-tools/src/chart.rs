@@ -279,12 +279,11 @@ fn render_pie(title: &str, labels: &[String], ser: &Series) -> String {
 }
 
 fn fmt_num(v: f64) -> String {
-    if v.abs() >= 1000.0 {
-        format!("{:.0}", v)
-    } else if v.fract() == 0.0 {
-        format!("{:.0}", v)
+    // 大数与整数不带小数位；其余保留一位小数。
+    if v.abs() >= 1000.0 || v.fract() == 0.0 {
+        format!("{v:.0}")
     } else {
-        format!("{:.1}", v)
+        format!("{v:.1}")
     }
 }
 

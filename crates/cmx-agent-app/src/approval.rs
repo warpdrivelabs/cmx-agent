@@ -103,7 +103,7 @@ mod tests {
     #[tokio::test]
     async fn decide_approves_pending() {
         let approver = std::sync::Arc::new(InteractiveApprover::new(Duration::from_secs(5)));
-        let call = ToolCall::with_id("c1", "bash", json!({"cmd":"ls"}));
+        let call = ToolCall::with_id("c1", "shell", json!({"cmd":"ls"}));
         let a2 = approver.clone();
         // 并发：一个 task 挂起等待，另一处 decide 唤醒
         let h = tokio::spawn(async move { a2.resolve(&call, "需审批").await });
@@ -120,7 +120,7 @@ mod tests {
     #[tokio::test]
     async fn decide_rejects_pending() {
         let approver = std::sync::Arc::new(InteractiveApprover::new(Duration::from_secs(5)));
-        let call = ToolCall::with_id("c2", "bash", json!({}));
+        let call = ToolCall::with_id("c2", "shell", json!({}));
         let a2 = approver.clone();
         let h = tokio::spawn(async move { a2.resolve(&call, "x").await });
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -132,7 +132,7 @@ mod tests {
     #[tokio::test]
     async fn timeout_rejects() {
         let approver = InteractiveApprover::new(Duration::from_millis(80));
-        let call = ToolCall::with_id("c3", "bash", json!({}));
+        let call = ToolCall::with_id("c3", "shell", json!({}));
         let (ok, by) = approver.resolve(&call, "x").await;
         assert!(!ok);
         assert_eq!(by, "timeout");

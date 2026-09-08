@@ -156,7 +156,6 @@ fn default_registry_exposes_all_tools_sorted() {
         vec![
             "add",
             "apply_patch",
-            "bash",
             "chart",
             "clock",
             "danger_rm",
@@ -170,6 +169,7 @@ fn default_registry_exposes_all_tools_sorted() {
             "grep",
             "repo_map",
             "run_tests",
+            "shell",
             "update_plan",
         ]
     );

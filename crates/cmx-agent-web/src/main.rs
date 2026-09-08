@@ -84,7 +84,7 @@ async fn build_app(workdir: &std::path::Path, data_dir: &std::path::Path) -> Age
     DesktopAppBuilder::new(workdir, data_dir, model)
         .connectors(cmx_agent_app::ConnectorConfig::default())
         .auth(cmx_agent_app::AuthConfig::default())
-        .interactive_approval() // X4：bash 等需审批工具挂起等前端点按
+        .interactive_approval() // X4：shell 等需审批工具挂起等前端点按
         .mcp_tools(mcp_tools) // U3：外部 MCP 工具
         .maybe_data_auth(std::env::var("CMX_AGENT_DATAAUTH_URL").ok())
         .build()

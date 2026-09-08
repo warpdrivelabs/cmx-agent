@@ -4,7 +4,7 @@
 //! **transport 无关**：核心是 [`ImProvider`] trait（拉取 + 发送）+ [`ImBridge`] 编排。
 //! 参考实现 [`TelegramProvider`]（长轮询）；企业微信/飞书/钉钉/自建网关按同一 trait 追加即可。
 //!
-//! **安全**：IM 可驱动 agent 跑工具（bash/写文件…）→ 生产务必配**白名单**（`allow`）。
+//! **安全**：IM 可驱动 agent 跑工具（shell/写文件…）→ 生产务必配**白名单**（`allow`）。
 //! `allow=None` 表示开放，仅供测试/纯内网；CLI `im` 模式强制要求白名单。
 
 use std::collections::{HashMap, HashSet};

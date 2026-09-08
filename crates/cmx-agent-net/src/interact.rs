@@ -178,11 +178,10 @@ async fn drive_inner(ws: &str, actions: &[Value]) -> Result<(String, String, usi
 
     // 等加载完成（readyState complete/interactive，最多 ~6s）
     for _ in 0..60 {
-        if let Ok(Value::String(s)) = eval(&mut cdp, &sid, "document.readyState").await {
-            if s == "complete" || s == "interactive" {
+        if let Ok(Value::String(s)) = eval(&mut cdp, &sid, "document.readyState").await
+            && (s == "complete" || s == "interactive") {
                 break;
             }
-        }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 

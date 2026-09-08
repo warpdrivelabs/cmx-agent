@@ -80,7 +80,7 @@ pub fn resolve(path: &str, ctx: &ToolCtx) -> Result<PathBuf, String> {
     Ok(abs)
 }
 
-/// 沙箱工作根（bash cwd / glob 基准）：第一个 allowed_root。
+/// 沙箱工作根（shell cwd / glob 基准）：第一个 allowed_root。
 pub fn first_root<'a>(ctx: &ToolCtx<'a>) -> Option<&'a PathBuf> {
     ctx.allowed_roots.first()
 }

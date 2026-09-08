@@ -59,11 +59,10 @@ impl Tool for GrepTool {
                 Ok(r) => r,
                 Err(_) => continue,
             };
-            if let Some(g) = &file_glob {
-                if !g.matches_path_with(rel, gopts) {
+            if let Some(g) = &file_glob
+                && !g.matches_path_with(rel, gopts) {
                     continue;
                 }
-            }
             // 只读文本文件；二进制/超大跳过（>2MB）。
             let meta = entry.metadata().ok();
             if meta.map(|m| m.len() > 2_000_000).unwrap_or(false) {

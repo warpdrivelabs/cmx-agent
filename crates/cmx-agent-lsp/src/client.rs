@@ -126,11 +126,10 @@ impl LspClient {
     pub async fn collect_diagnostics(&mut self, uri: &str, wait: Duration) -> Vec<Value> {
         let deadline = tokio::time::Instant::now() + wait;
         loop {
-            if let Some(d) = self.diagnostics.get(uri) {
-                if !d.is_empty() {
+            if let Some(d) = self.diagnostics.get(uri)
+                && !d.is_empty() {
                     return d.clone();
                 }
-            }
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             if remaining.is_zero() {
                 break;
@@ -172,14 +171,12 @@ impl LspClient {
     }
 
     fn handle_incoming(&mut self, msg: &Value) {
-        if msg.get("method").and_then(|m| m.as_str()) == Some("textDocument/publishDiagnostics") {
-            if let Some(p) = msg.get("params") {
-                if let Some(uri) = p.get("uri").and_then(|u| u.as_str()) {
+        if msg.get("method").and_then(|m| m.as_str()) == Some("textDocument/publishDiagnostics")
+            && let Some(p) = msg.get("params")
+                && let Some(uri) = p.get("uri").and_then(|u| u.as_str()) {
                     let diags = p.get("diagnostics").and_then(|d| d.as_array()).cloned().unwrap_or_default();
                     self.diagnostics.insert(uri.to_string(), diags);
                 }
-            }
-        }
     }
 
     async fn notify(&mut self, method: &str, params: Value) -> Result<(), LspError> {

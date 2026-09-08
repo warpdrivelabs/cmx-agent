@@ -16,11 +16,10 @@ use crate::{ensure_public_url, html};
 
 /// 找本机 Chrome/Chromium。env `CMX_AGENT_CHROME` 优先，其次常见安装路径。
 pub(crate) fn find_chrome() -> Option<String> {
-    if let Ok(p) = std::env::var("CMX_AGENT_CHROME") {
-        if !p.is_empty() && Path::new(&p).exists() {
+    if let Ok(p) = std::env::var("CMX_AGENT_CHROME")
+        && !p.is_empty() && Path::new(&p).exists() {
             return Some(p);
         }
-    }
     [
         "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
         "/Applications/Chromium.app/Contents/MacOS/Chromium",

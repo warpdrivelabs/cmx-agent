@@ -37,11 +37,10 @@ impl OpenAiCompatModel {
 /// 把内核 `ModelContext` 编成 OpenAI chat/completions 请求体（纯函数，可测）。
 pub fn build_request_body(cfg: &ModelProviderConfig, ctx: &ModelContext) -> Value {
     let mut messages: Vec<Value> = Vec::new();
-    if let Some(sys) = &ctx.system {
-        if !sys.is_empty() {
+    if let Some(sys) = &ctx.system
+        && !sys.is_empty() {
             messages.push(json!({"role": "system", "content": sys}));
         }
-    }
     for m in &ctx.messages {
         match m {
             ModelMessage::User { text } => {
@@ -226,13 +225,12 @@ fn apply_stream_chunk(acc: &mut StreamAcc, v: &Value) -> Option<String> {
 
     // 完成判据：服务端发来 `finish_reason`（stop / tool_calls / length …）即认为本回合生成结束。
     // 即使随后 HTTP 连接被掐断，已收到的内容也是完整语义，可安全采纳（不再重试）。
-    if let Some(fr) = choice.and_then(|c0| c0.get("finish_reason")).and_then(|x| x.as_str()) {
-        if !fr.is_empty() {
+    if let Some(fr) = choice.and_then(|c0| c0.get("finish_reason")).and_then(|x| x.as_str())
+        && !fr.is_empty() {
             acc.finished = true;
         }
-    }
 
-    let Some(c0) = choice else { return None };
+    let c0 = choice?;
     let delta = c0.get("delta")?;
 
     // 工具调用分片：按 index 拼 id/name/arguments
@@ -240,17 +238,15 @@ fn apply_stream_chunk(acc: &mut StreamAcc, v: &Value) -> Option<String> {
         for tc in tcs {
             let idx = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as usize;
             let slot = acc.slot(idx);
-            if let Some(id) = tc.get("id").and_then(|x| x.as_str()) {
-                if !id.is_empty() {
+            if let Some(id) = tc.get("id").and_then(|x| x.as_str())
+                && !id.is_empty() {
                     slot.id = id.to_string();
                 }
-            }
             if let Some(f) = tc.get("function") {
-                if let Some(name) = f.get("name").and_then(|x| x.as_str()) {
-                    if !name.is_empty() {
+                if let Some(name) = f.get("name").and_then(|x| x.as_str())
+                    && !name.is_empty() {
                         slot.name = name.to_string();
                     }
-                }
                 if let Some(args) = f.get("arguments").and_then(|x| x.as_str()) {
                     slot.args.push_str(args);
                 }
@@ -259,12 +255,11 @@ fn apply_stream_chunk(acc: &mut StreamAcc, v: &Value) -> Option<String> {
     }
 
     // 文字增量
-    if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
-        if !content.is_empty() {
+    if let Some(content) = delta.get("content").and_then(|c| c.as_str())
+        && !content.is_empty() {
             acc.text.push_str(content);
             return Some(content.to_string());
         }
-    }
     None
 }
 
@@ -283,10 +278,7 @@ async fn read_sse_once(
     while let Some(chunk) = stream.next().await {
         let bytes = chunk.map_err(|e| ModelError(format!("读取流失败: {e}")))?;
         buf.extend_from_slice(&bytes);
-        loop {
-            let Some(pos) = buf.iter().position(|&b| b == b'\n') else {
-                break;
-            };
+        while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
             let line_bytes: Vec<u8> = buf.drain(..=pos).collect();
             let line = String::from_utf8_lossy(&line_bytes);
             let line = line.trim();
@@ -297,13 +289,11 @@ async fn read_sse_once(
             if data == "[DONE]" {
                 return Ok(true);
             }
-            if let Ok(v) = serde_json::from_str::<Value>(data) {
-                if let Some(delta) = apply_stream_chunk(acc, &v) {
-                    if !delta.is_empty() {
+            if let Ok(v) = serde_json::from_str::<Value>(data)
+                && let Some(delta) = apply_stream_chunk(acc, &v)
+                    && !delta.is_empty() {
                         observer.on_text_delta(&delta);
                     }
-                }
-            }
         }
     }
     // 流正常收尾但没见 [DONE]：交给上层判据（acc.finished）。
@@ -330,9 +320,7 @@ impl ModelSeam for OpenAiCompatModel {
             .map_err(|e| ModelError(format!("解析模型响应失败: {e}")))?;
         if !status.is_success() {
             // 优先取上游错误信息
-            if let Err(e) = parse_response(&v) {
-                return Err(e);
-            }
+            parse_response(&v)?;
             return Err(ModelError(format!("模型服务返回 HTTP {}", status.as_u16())));
         }
         parse_response(&v)
@@ -349,10 +337,12 @@ impl ModelSeam for OpenAiCompatModel {
 
         // 健壮性：单次模型生成自愈。GLM/DeepSeek 等推理模型会先流长段 reasoning 再出正文，流很长；
         // 网关/负载均衡器偶发在长流中途切断 HTTP/2（reqwest 抛 Kind::Decode「读取流失败」）。
-        // 处理：若已收到服务端 finish_reason（生成真正结束）→ 采纳已收内容；否则整轮重试（最多 3 次），
-        // 重试前经 observer.on_stream_reset 通知前端清掉已显示的半截文字。
+        // 处理：**流中途断也纳入自愈**——若已收到服务端 finish_reason（生成真正结束，掐断只丢了
+        // 收尾标记）→ 采纳已收内容；否则整轮重试（最多 3 次），重试前经 observer.on_stream_reset
+        // 通知前端清掉已显示的半截文字。重试耗尽时回报最后一次真实流错误（比笼统文案更可诊断）。
         const MAX_ATTEMPTS: usize = 3;
         let mut attempt = 0usize;
+        let mut last_err: Option<ModelError> = None;
         loop {
             attempt += 1;
 
@@ -368,8 +358,18 @@ impl ModelSeam for OpenAiCompatModel {
             let status = resp.status();
             if status.is_success() {
                 let mut acc = StreamAcc::default();
-                let got_done = read_sse_once(resp, &mut acc, observer).await?;
-                if got_done || acc.finished {
+                let got_done = match read_sse_once(resp, &mut acc, observer).await {
+                    Ok(done) => Some(done),
+                    Err(e) => {
+                        if acc.finished {
+                            // 服务端已宣告生成结束：掐断只影响收尾标记，已收内容语义完整，采纳。
+                            return Ok(acc.into_response());
+                        }
+                        last_err = Some(e); // 中途断且未完成 → 记下错误，走整轮重试
+                        None
+                    }
+                };
+                if got_done == Some(true) || acc.finished {
                     // 收到 [DONE] 或服务端 finish_reason → 生成完整，采纳。
                     return Ok(acc.into_response());
                 }
@@ -380,11 +380,13 @@ impl ModelSeam for OpenAiCompatModel {
                 return Err(ModelError(format!("模型服务返回 HTTP {}", status.as_u16())));
             }
 
-            // 尝试耗尽：用最后一次已收内容（若完整）或返回明确错误。
+            // 尝试耗尽：优先回报最后一次真实流错误；否则说明只是"不完整"而非断流。
             if attempt >= MAX_ATTEMPTS {
-                return Err(ModelError(format!(
-                    "模型响应不完整（{MAX_ATTEMPTS} 次尝试后仍无 finish_reason），请稍后重试"
-                )));
+                return Err(last_err.unwrap_or_else(|| {
+                    ModelError(format!(
+                        "模型响应不完整（{MAX_ATTEMPTS} 次尝试后仍无 finish_reason），请稍后重试"
+                    ))
+                }));
             }
             // 重试前清掉前端已显示的半截文字，避免重试后重复/错位。
             observer.on_stream_reset();
@@ -404,10 +406,117 @@ async fn upstream_error_message(resp: reqwest::Response) -> Option<ModelError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cmx_agent_core::TurnObserver;
     use cmx_agent_core::tool::ToolSpec;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn cfg() -> ModelProviderConfig {
         ModelProviderConfig::new("http://x", "k", "deepseek-chat")
+    }
+
+    /// 计数观察者：记录文字增量与流重置次数。
+    struct CountingObserver {
+        resets: AtomicUsize,
+    }
+    impl TurnObserver for CountingObserver {
+        fn on_text_delta(&self, _d: &str) {}
+        fn on_stream_reset(&self) {
+            self.resets.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// 本地假 SSE 服务器：第 1 个连接声明 Content-Length 但只发半截就断流（复现网关掐流，
+    /// reqwest 抛 Kind::Decode「读取流失败」）；第 2 个连接回完整 SSE（含 [DONE]）。
+    /// 回归验证 complete_streaming 的自愈重试：断流不再直接抛错，重试后拿到完整文本。
+    #[tokio::test]
+    async fn mid_stream_abort_is_retried_not_fatal() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            // —— 连接 1：半截响应 + 断流 ——
+            let (mut s1, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 8192];
+            let _ = s1.read(&mut buf).await; // 消费请求（本地一回包内含头+体）
+            let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 1000\r\n\r\n";
+            let body = "data: {\"choices\":[{\"delta\":{\"content\":\"半截\"},\"finish_reason\":null}]}\n\n";
+            s1.write_all(head.as_bytes()).await.unwrap();
+            s1.write_all(body.as_bytes()).await.unwrap();
+            let _ = s1.flush().await;
+            drop(s1); // 未达 Content-Length 即断 → reqwest 解码错误（复现掐流）
+
+            // —— 连接 2：完整 SSE ——
+            let (mut s2, _) = listener.accept().await.unwrap();
+            let _ = s2.read(&mut buf).await;
+            let resp = concat!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n",
+                "data: {\"choices\":[{\"delta\":{\"content\":\"完整回复\"},\"finish_reason\":null}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: [DONE]\n\n",
+            );
+            s2.write_all(resp.as_bytes()).await.unwrap();
+            let _ = s2.flush().await;
+            drop(s2);
+        });
+
+        let model = OpenAiCompatModel::new(ModelProviderConfig::new(
+            format!("http://{addr}"),
+            "k",
+            "test-model",
+        ));
+        let ctx = ModelContext {
+            system: None,
+            messages: vec![ModelMessage::User { text: "hi".into() }],
+            tools: vec![],
+        };
+        let observer = CountingObserver { resets: AtomicUsize::new(0) };
+        let r = model.complete_streaming(&ctx, &observer).await;
+        server.await.unwrap();
+        assert!(r.is_ok(), "断流一次后应自愈重试成功: {r:?}");
+        let resp = r.unwrap();
+        assert_eq!(resp.text.as_deref(), Some("完整回复"), "重试后应拿到第二次的完整文本");
+        assert_eq!(observer.resets.load(Ordering::SeqCst), 1, "重试前应通知前端清屏一次");
+    }
+
+    /// 断流但服务端**已发 finish_reason**：掐断只丢了收尾标记，已收内容应被直接采纳（不重试）。
+    #[tokio::test]
+    async fn abort_after_finish_reason_adopts_partial() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut s, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 8192];
+            let _ = s.read(&mut buf).await;
+            let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: 1000\r\n\r\n";
+            let body = concat!(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"语义完整\"},\"finish_reason\":null}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            );
+            s.write_all(head.as_bytes()).await.unwrap();
+            s.write_all(body.as_bytes()).await.unwrap();
+            let _ = s.flush().await;
+            drop(s); // finish_reason 已到但流被掐
+        });
+
+        let model = OpenAiCompatModel::new(ModelProviderConfig::new(
+            format!("http://{addr}"),
+            "k",
+            "test-model",
+        ));
+        let ctx = ModelContext {
+            system: None,
+            messages: vec![ModelMessage::User { text: "hi".into() }],
+            tools: vec![],
+        };
+        let observer = CountingObserver { resets: AtomicUsize::new(0) };
+        let r = model.complete_streaming(&ctx, &observer).await;
+        server.await.unwrap();
+        assert!(r.is_ok(), "已收 finish_reason 的断流应采纳: {r:?}");
+        assert_eq!(r.unwrap().text.as_deref(), Some("语义完整"));
+        assert_eq!(observer.resets.load(Ordering::SeqCst), 0, "采纳场景不应触发重试清屏");
     }
 
     #[test]

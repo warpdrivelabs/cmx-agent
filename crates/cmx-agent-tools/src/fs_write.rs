@@ -45,11 +45,10 @@ impl Tool for FsWriteTool {
             Ok(p) => p,
             Err(e) => return Ok(ToolResult::err(format!("fs_write: {e}"))),
         };
-        if let Some(parent) = target.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
+        if let Some(parent) = target.parent()
+            && let Err(e) = std::fs::create_dir_all(parent) {
                 return Ok(ToolResult::err(format!("fs_write: 建目录失败 {e}")));
             }
-        }
         match std::fs::write(&target, content.as_bytes()) {
             Ok(()) => Ok(ToolResult::ok(json!({
                 "path": target.display().to_string(),

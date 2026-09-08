@@ -106,11 +106,10 @@ pub trait ModelSeam: Send + Sync {
         observer: &dyn TurnObserver,
     ) -> Result<ModelResponse, ModelError> {
         let resp = self.complete(ctx).await?;
-        if let Some(t) = &resp.text {
-            if !t.is_empty() {
+        if let Some(t) = &resp.text
+            && !t.is_empty() {
                 observer.on_text_delta(t);
             }
-        }
         Ok(resp)
     }
 }

@@ -10,7 +10,7 @@ fn find_ci_from(hay: &str, needle: &str, from: usize) -> Option<usize> {
     let mut i = from;
     while i + n.len() <= h.len() {
         let mut j = 0;
-        while j < n.len() && h[i + j].to_ascii_lowercase() == n[j].to_ascii_lowercase() {
+        while j < n.len() && h[i + j].eq_ignore_ascii_case(&n[j]) {
             j += 1;
         }
         if j == n.len() {
@@ -96,8 +96,8 @@ fn decode_numeric(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut i = 0;
     while i < s.len() {
-        if b[i] == b'&' && i + 2 < s.len() && b[i + 1] == b'#' {
-            if let Some(semi) = s[i..].find(';') {
+        if b[i] == b'&' && i + 2 < s.len() && b[i + 1] == b'#'
+            && let Some(semi) = s[i..].find(';') {
                 let ent = &s[i + 2..i + semi];
                 let code = if ent.starts_with(['x', 'X']) {
                     u32::from_str_radix(&ent[1..], 16).ok()
@@ -110,7 +110,6 @@ fn decode_numeric(s: &str) -> String {
                     continue;
                 }
             }
-        }
         let ch = s[i..].chars().next().unwrap();
         out.push(ch);
         i += ch.len_utf8();
@@ -152,14 +151,13 @@ pub fn truncate(s: &str, max: usize) -> String {
 
 /// 提取 <title> 文本。
 pub fn extract_title(html: &str) -> String {
-    if let Some(a) = find_ci(html, "<title") {
-        if let Some(gt) = html[a..].find('>') {
+    if let Some(a) = find_ci(html, "<title")
+        && let Some(gt) = html[a..].find('>') {
             let start = a + gt + 1;
             if let Some(rel) = find_ci_from(html, "</title>", start) {
                 return oneline(&decode_entities(&strip_tags(&html[start..rel])));
             }
         }
-    }
     String::new()
 }
 
@@ -195,13 +193,12 @@ fn pct_decode(s: &str) -> String {
     let mut out: Vec<u8> = Vec::with_capacity(b.len());
     let mut i = 0;
     while i < b.len() {
-        if b[i] == b'%' && i + 2 < b.len() {
-            if let Ok(x) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+        if b[i] == b'%' && i + 2 < b.len()
+            && let Ok(x) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
                 out.push(x);
                 i += 3;
                 continue;
             }
-        }
         out.push(if b[i] == b'+' { b' ' } else { b[i] });
         i += 1;
     }

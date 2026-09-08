@@ -7,6 +7,9 @@
 //! 登录门（参照 CMXPortalManager 的登录方式）：启动时**主窗口隐藏**、只显示 `login` 窗口；`login.html`
 //! 提交 → `invoke("login")` → 校验凭据（对接门户 /api/auth/login）→ **成功后显示已存在的主窗口并关闭登录窗**。
 
+// Windows 发布版按"窗口程序"链接，双击不挂控制台终端；调试版保留终端看 eprintln 日志。
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use std::sync::Arc;
 use std::sync::OnceLock;
 
@@ -186,7 +189,7 @@ fn build_app() -> AgentApp {
     DesktopAppBuilder::new(workdir, data_dir, model)
         .connectors(cmx_agent_app::ConnectorConfig::default())
         .auth(AuthConfig::default()) // 登录门：对接门户 :8080 /api/auth
-        .interactive_approval() // X4：bash 等需审批工具挂起等前端点按
+        .interactive_approval() // X4：shell 等需审批工具挂起等前端点按
         .mcp_tools(mcp_tools)   // U3：外部 MCP 工具
         // U13：opt-in 数据权限接地——env CMX_AGENT_DATAAUTH_URL 指向 cmx-data-auth 即启用真 PEP。
         .maybe_data_auth(std::env::var("CMX_AGENT_DATAAUTH_URL").ok())

@@ -188,9 +188,10 @@ impl DesktopAppBuilder {
         registry.register(Arc::new(cmx_agent_lsp::LspTool::from_config_file(
             &self.data_dir.join("lsp.json"),
         )));
-        // U6 办公文档：读 Excel/PDF/Word/PPT + 写 Excel。
+        // U6 办公文档：读 Excel/PDF/Word/PPT + 写 Excel + 生成 PPT。
         registry.register(Arc::new(cmx_agent_office::DocReadTool));
         registry.register(Arc::new(cmx_agent_office::XlsxWriteTool));
+        registry.register(Arc::new(cmx_agent_office::PptxWriteTool));
         // U10 联网研究：web_fetch 抓网页取正文 + web_search 网络搜索（SSRF 基线；端点/私网经 env 配置）。
         registry.register(Arc::new(cmx_agent_net::WebFetchTool::from_env()));
         registry.register(Arc::new(cmx_agent_net::WebSearchTool::from_env()));
@@ -307,8 +308,9 @@ pub fn default_office_system_prompt() -> String {
      \n\
      可用能力：\n\
      - 文件：fs_read 读文件、fs_write 写/建文件、fs_edit 精确改、apply_patch 打补丁、glob 找文件、grep 搜内容、repo_map 看目录结构。\n\
-     - 执行：bash 跑命令、run_tests 跑测试、git 版本控制（都在工作区内）。\n\
-     - 联网：web_search 搜索、web_fetch 抓网页取正文（查资料、读在线文档；优先用它们而不是 bash+curl）；\
+     - 执行：shell 跑命令（按工具描述里的当前 shell 生成兼容命令）、run_tests 跑测试、git 版本控制（都在工作区内）。\n\
+     - 办公：doc_read 读 Excel/PDF/Word/PPT、xlsx_write 生成 Excel、pptx_write 生成 PPT（做表格/幻灯片/文档交付优先用它们，别手搓文件）。\n\
+     - 联网：web_search 搜索、web_fetch 抓网页取正文（查资料、读在线文档；优先用它们而不是 shell+curl）；\
      动态/JS 页面(SPA)用 browser_read 无头渲染后取正文、browser_screenshot 网页截图；\
      需点按/填表/搜索的交互页用 browser_do；无稳定选择器、必须看画面操作的用 computer_use(视觉回环)。\n\
      - 计划：update_plan 登记多步任务清单（复杂任务先列计划再逐步执行）。\n\

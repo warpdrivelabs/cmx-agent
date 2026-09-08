@@ -1,5 +1,5 @@
 //! `git` —— 工作区内的版本控制（白名单子命令）。读类(status/diff/log/show/branch/ls-files)任意沙箱可用；
-//! 写类(add/commit/checkout/restore)需 workspace-write。比裸 bash 更安全（受控子命令）。
+//! 写类(add/commit/checkout/restore)需 workspace-write。比裸 shell 更安全（受控子命令）。
 
 use async_trait::async_trait;
 use cmx_agent_core::tool::GuardHints;

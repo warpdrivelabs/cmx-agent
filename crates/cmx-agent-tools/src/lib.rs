@@ -2,13 +2,13 @@
 //! 挂进同一个 [`cmx_agent_core::ToolRegistry`]。
 //!
 //! - 基础示例：echo / clock / add / danger_rm（验证内核与守卫管道）。
-//! - **编码面（E1）**：fs_read / fs_write / fs_edit / apply_patch / bash / grep / glob。
+//! - **编码面（E1）**：fs_read / fs_write / fs_edit / apply_patch / shell / grep / glob
+//!   （shell 2026-09-08 由 bash 改名，Windows 探测链见 `proc.rs`）。
 //! - **编码面进阶（E2）**：git / run_tests / repo_map / update_plan——仓库理解 + 版本控制 + 测试 + 计划。
 //! - 企业能力（cmx-flow/rules/ontology/report）经连接器与 MCP 在后续里程碑接入。
 
 mod add;
 mod apply_patch;
-mod bash;
 mod chart;
 mod clock;
 mod danger_rm;
@@ -19,19 +19,21 @@ mod fs_read;
 mod fs_write;
 mod git;
 mod glob_tool;
+#[cfg(windows)]
+mod job;
 mod grep;
 mod plan;
 mod proc;
 mod repo_map;
 mod run_tests;
 mod sandbox;
+mod shell;
 mod task;
 #[cfg(test)]
 mod testutil;
 
 pub use add::AddTool;
 pub use apply_patch::ApplyPatchTool;
-pub use bash::BashTool;
 pub use chart::ChartTool;
 pub use clock::ClockTool;
 pub use danger_rm::DangerRmTool;
@@ -46,6 +48,7 @@ pub use grep::GrepTool;
 pub use plan::UpdatePlanTool;
 pub use repo_map::RepoMapTool;
 pub use run_tests::RunTestsTool;
+pub use shell::ShellTool;
 // 子智能体（U1）：不进 default_registry（需构建后注入 agent 句柄），由 DesktopAppBuilder 装配。
 pub use task::{SubagentHandle, TaskTool};
 
@@ -64,7 +67,7 @@ pub fn default_registry() -> ToolRegistry {
         .register(Arc::new(FsWriteTool))
         .register(Arc::new(FsEditTool))
         .register(Arc::new(ApplyPatchTool))
-        .register(Arc::new(BashTool))
+        .register(Arc::new(ShellTool))
         .register(Arc::new(GrepTool))
         .register(Arc::new(GlobTool))
         // 编码面进阶（E2）

@@ -40,7 +40,7 @@ impl Tool for RunTestsTool {
         .schema(json!({
             "type": "object",
             "properties": {
-                "command": { "type": "string", "description": "可选：自定义测试命令（sh -c）；给了则忽略自动识别" },
+                "command": { "type": "string", "description": "可选：自定义测试命令（与当前 shell 兼容）；给了则忽略自动识别" },
                 "timeout_ms": { "type": "integer", "default": 120000 }
             }
         }))
@@ -64,7 +64,8 @@ impl Tool for RunTestsTool {
             .unwrap_or(120_000);
 
         if let Some(cmd) = input.get("command").and_then(|v| v.as_str()) {
-            let out = proc::run("sh", &["-c".into(), cmd.to_string()], cwd, timeout).await;
+            // 与 shell 工具同一探测链/argv 模板（P0：不再硬编码 sh -c）。
+            let out = proc::run_cmd(cmd, cwd, timeout).await;
             return Ok(ToolResult::ok(json!({"framework":"custom","command":cmd,"result":out})));
         }
         match detect(cwd) {

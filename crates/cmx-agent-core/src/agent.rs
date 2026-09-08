@@ -14,9 +14,11 @@ use crate::guard::{GuardCtx, GuardDecision, GuardPhase, GuardPipeline, SandboxMo
 use crate::model::{ModelResponse, ModelSeam};
 use crate::session::Session;
 use crate::tool::{Approval, Tool, ToolCall, ToolCtx, ToolRegistry, ToolResult, ToolSpec};
+use serde::{Deserialize, Serialize};
 
 /// 审批策略（两旋钮之「许可」——何时问你）。对齐 codex `approval_policy`。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum ApprovalPolicy {
     /// 从不打断：把所有 NeedApproval 视为拒绝（无人值守自动化用，最安全的自动档）。
     Never,
@@ -109,7 +111,9 @@ pub struct Agent {
     tools: ToolRegistry,
     guards: GuardPipeline,
     approver: Arc<dyn Approver>,
-    policy: Policy,
+    /// 策略（两旋钮等）。RwLock：`Agent` 经 Arc 共享，两旋钮须运行时可切（前门 `set_policy`）；
+    /// 回合内按快照读取（clone），写入方仅 set_policy。
+    policy: std::sync::RwLock<Policy>,
 }
 
 impl Agent {
@@ -117,8 +121,14 @@ impl Agent {
         AgentBuilder::default()
     }
 
-    pub fn policy(&self) -> &Policy {
-        &self.policy
+    /// 当前策略快照（clone；Policy 小，回合内每步取一次开销可忽略）。
+    pub fn policy(&self) -> Policy {
+        self.policy.read().expect("policy lock poisoned").clone()
+    }
+
+    /// 运行时替换策略（前门 set_policy 用；其余字段照抄当前值由调用方组装）。
+    pub fn set_policy(&self, p: Policy) {
+        *self.policy.write().expect("policy lock poisoned") = p;
     }
 
     pub fn tools(&self) -> &ToolRegistry {
@@ -157,7 +167,7 @@ impl Agent {
         let mut steps = 0usize;
         let mut final_text = None;
         let reason = loop {
-            if steps >= self.policy.max_steps {
+            if steps >= self.policy().max_steps {
                 break StopReason::MaxSteps;
             }
             steps += 1;
@@ -227,6 +237,8 @@ impl Agent {
             spec: ToolSpec,
         }
 
+        // 本批工具调用的策略快照（两旋钮运行时可切；一批内取一致值）。
+        let policy = self.policy();
         // —— ①–④ 前置(串行)：落库调用、路由、pre 守卫、审批 ——
         let mut pending: Vec<Pending<'_>> = Vec::new();
         for call in calls {
@@ -251,8 +263,8 @@ impl Agent {
                     phase: GuardPhase::PreExecute,
                     call,
                     spec: &spec,
-                    sandbox: self.policy.sandbox,
-                    subject: &self.policy.subject,
+                    sandbox: policy.sandbox,
+                    subject: &policy.subject,
                     result: None,
                 };
                 self.guards.run(&gctx)
@@ -281,7 +293,7 @@ impl Agent {
                 }
                 GuardDecision::Allow => {
                     // 即便守卫未要求审批，UnlessTrusted 策略下对非幂等工具也要问一次
-                    if self.policy.approval == ApprovalPolicy::UnlessTrusted
+                    if policy.approval == ApprovalPolicy::UnlessTrusted
                         && spec.guard.requires_approval == Approval::Never
                         && !spec.guard.idempotent
                     {
@@ -314,8 +326,8 @@ impl Agent {
         // —— ⑤ 沙箱执行(并发)：只有工具体 invoke() 并发；ToolCtx 只读、被所有 future 共享借用。
         // join_all 在同一任务上协作式并发：子智能体/网络 I/O 型工具在此段真并行推进。
         let tctx = ToolCtx {
-            sandbox: self.policy.sandbox,
-            allowed_roots: &self.policy.allowed_roots,
+            sandbox: policy.sandbox,
+            allowed_roots: &policy.allowed_roots,
         };
         let results: Vec<ToolResult> =
             futures_util::future::join_all(pending.iter().map(|p| {
@@ -338,8 +350,8 @@ impl Agent {
                     phase: GuardPhase::PostExecute,
                     call: p.call,
                     spec: &p.spec,
-                    sandbox: self.policy.sandbox,
-                    subject: &self.policy.subject,
+                    sandbox: policy.sandbox,
+                    subject: &policy.subject,
                     result: Some(&result),
                 };
                 self.guards.run(&gctx)
@@ -367,7 +379,7 @@ impl Agent {
         tool: &str,
         reason: &str,
     ) -> bool {
-        if self.policy.approval == ApprovalPolicy::Never {
+        if self.policy().approval == ApprovalPolicy::Never {
             // 不打断策略：视 NeedApproval 为拒绝
             session.log.append(EventKind::ApprovalRequested {
                 call_id: call.id.clone(),
@@ -461,7 +473,7 @@ impl AgentBuilder {
             approver: self
                 .approver
                 .unwrap_or_else(|| Arc::new(AutoApprover::reject())),
-            policy: self.policy,
+            policy: std::sync::RwLock::new(self.policy),
         })
     }
 }

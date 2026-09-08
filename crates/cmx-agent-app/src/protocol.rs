@@ -44,6 +44,9 @@ pub enum AppRequest {
     ListModels,
     /// B2 切换模型（热换 + 持久化 model.json；`model=="demo"` 换离线演示）。
     SetModel { model: String },
+    /// 运行时切换两旋钮（沙箱能力 × 审批许可；其余 Policy 项不动）。
+    /// `sandbox`: `read-only|workspace-write|danger-full-access`；`approval`: `never|on-request|unless-trusted`。
+    SetPolicy { sandbox: String, approval: String },
     /// 登录（对接门户 /api/auth/login）。成功后前门持有当前用户。
     Login { username: String, password: String },
     /// 取当前登录用户（前端启动时填充用户菜单；未登录 data.user=null）。
@@ -113,6 +116,17 @@ fn error_code(e: &AppError) -> &'static str {
     }
 }
 
+/// 解析 kebab-case 枚举字符串（set_policy 的 sandbox/approval 参数），带合法值提示。
+fn parse_enum<T: serde::de::DeserializeOwned>(field: &str, raw: &str) -> Result<T, String> {
+    let valid = match field {
+        "sandbox" => "read-only|workspace-write|danger-full-access",
+        "approval" => "never|on-request|unless-trusted",
+        _ => "unknown",
+    };
+    serde_json::from_value(serde_json::json!(raw))
+        .map_err(|e| format!("{field} 无效（合法值：{valid}）：{e}"))
+}
+
 /// 派发一个请求到 app，产出统一信封响应。**永不 panic / 永不 Err**——错误进信封，前门始终拿到 JSON。
 pub async fn dispatch(app: &AgentApp, req: AppRequest) -> AppResponse {
     let result = dispatch_inner(app, req).await;
@@ -163,6 +177,13 @@ async fn dispatch_inner(app: &AgentApp, req: AppRequest) -> Result<AppResponse, 
         }
         AppRequest::ListModels => Ok(AppResponse::ok(app.list_models())),
         AppRequest::SetModel { model } => Ok(AppResponse::ok(app.set_model(&model)?)),
+        AppRequest::SetPolicy { sandbox, approval } => {
+            let s: cmx_agent_core::SandboxMode = parse_enum("sandbox", &sandbox)
+                .map_err(AppError::BadRequest)?;
+            let a: cmx_agent_core::ApprovalPolicy = parse_enum("approval", &approval)
+                .map_err(AppError::BadRequest)?;
+            Ok(AppResponse::ok(app.set_policy(s, a)?))
+        }
         AppRequest::Login { username, password } => {
             let user = app.login(&username, &password).await?;
             Ok(AppResponse::ok(serde_json::json!({ "user": user })))

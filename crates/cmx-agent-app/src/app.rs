@@ -181,11 +181,10 @@ impl AgentApp {
             .map_err(|e| AppError::Auth(friendly_auth_error(e, auth.base_url())))?;
         let public = user.public_json();
         // 把 access_token 写入共享令牌槽 → 之后连接器读写自动带 Bearer（auth=on 服务如 cmx-flow 必需）。
-        if let Some(ts) = &self.token_store {
-            if let Ok(mut g) = ts.write() {
+        if let Some(ts) = &self.token_store
+            && let Ok(mut g) = ts.write() {
                 *g = Some(user.access_token.clone());
             }
-        }
         // U13：把授权主体换成真实登录用户(userId+roles)并重热 PDP → 数据权限门按此人判定。
         if let (Some(pep), Some(identity)) = (&self.data_auth_pep, &self.auth_identity) {
             let subj = {
@@ -223,17 +222,15 @@ impl AgentApp {
     pub fn logout(&self) {
         *self.current_user.lock().expect("current_user lock") = None;
         // 清共享令牌槽 → 连接器回落到未认证（X-Tenant）态。
-        if let Some(ts) = &self.token_store {
-            if let Ok(mut g) = ts.write() {
+        if let Some(ts) = &self.token_store
+            && let Ok(mut g) = ts.write() {
                 *g = None;
             }
-        }
         // U13：授权主体复位为无角色匿名 → 数据权限门 fail-closed（登出后写操作被 PDP 拒）。
-        if let Some(identity) = &self.auth_identity {
-            if let Ok(mut g) = identity.write() {
+        if let Some(identity) = &self.auth_identity
+            && let Ok(mut g) = identity.write() {
                 *g = cmx_agent_core::Subject::new("anon");
             }
-        }
     }
 
     /// 列出连接器卡片（描述 + live 健康）。未启用连接器时返回空表。
@@ -297,6 +294,21 @@ impl AgentApp {
         let note = if persisted { "已切换并持久化，立即生效" } else { "已切换（本次会话；持久化失败）" };
         Ok(serde_json::json!({ "service": "cmx-model", "current": model, "provider": provider_label(&cfg.base_url),
             "persisted": persisted, "note": note }))
+    }
+
+    /// 运行时切换两旋钮（前门 set_policy）：沙箱能力 × 审批许可。
+    /// 其余 Policy 项（max_steps / allowed_roots / subject）照抄当前值；仅本进程生效，不持久化。
+    pub fn set_policy(
+        &self,
+        sandbox: cmx_agent_core::SandboxMode,
+        approval: cmx_agent_core::ApprovalPolicy,
+    ) -> AppResult<serde_json::Value> {
+        let mut p = self.agent.policy();
+        p.sandbox = sandbox;
+        p.approval = approval;
+        self.agent.set_policy(p);
+        tracing::info!("cmx-agent 策略切换：sandbox={sandbox:?} · approval={approval:?}");
+        Ok(serde_json::json!({ "sandbox": sandbox, "approval": approval }))
     }
 
     /// U15：列出插件（前门 list_plugins → master-detail 视图）。
