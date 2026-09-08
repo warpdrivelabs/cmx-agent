@@ -27,6 +27,9 @@ pub struct ImBinding {
     pub open_id: String,
     /// 绑定时间（门户 epoch 毫秒；缺失为 0）。
     pub created_at: i64,
+    /// 绑定的 IM 端用户名（门户可能回填，如飞书用户名；缺失为空串，前端自行降级）。
+    #[serde(default)]
+    pub im_username: String,
 }
 
 /// 绑定解析出的门户身份：IM 消息按此人跑回合（Subject.user=user_id, roles=roles）。
@@ -109,6 +112,9 @@ impl ImBindingClient {
                 provider: str_of(b, "provider"),
                 open_id: str_of(b, "open_id"),
                 created_at: b.get("created_at").and_then(|c| c.as_i64()).unwrap_or(0),
+                im_username: opt_str(b, "im_username")
+                    .or_else(|| opt_str(b, "nickname"))
+                    .unwrap_or_default(),
             })
             .collect())
     }
@@ -148,6 +154,14 @@ fn str_of(v: &Value, key: &str) -> String {
     v.get(key).and_then(|x| x.as_str()).unwrap_or("").to_string()
 }
 
+/// 同 `str_of` 但返回 `Option`（用于 `.or_else` 链式回退取多个候选字段）。
+fn opt_str(v: &Value, key: &str) -> Option<String> {
+    v.get(key)
+        .and_then(|x| x.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,5 +183,34 @@ mod tests {
         assert!(id2.roles.is_empty());
 
         assert!(parse_identity(&json!({ "username": "nouser" })).is_err());
+    }
+
+    #[test]
+    fn list_parses_im_username_with_fallback() {
+        // 门户 list 端点返回的 item 形态：取 im_username，缺失时回退 nickname，都没有则空串。
+        let env = json!({
+            "code": 0,
+            "data": {
+                "items": [
+                    { "user_id":"u1","provider":"feishu","open_id":"ou_abc","created_at":1700000000000i64,"im_username":"张三" },
+                    { "user_id":"u2","provider":"telegram","open_id":"tg_xyz","nickname":"Bob" },
+                    { "user_id":"u3","provider":"feishu","open_id":"ou_def" }
+                ]
+            }
+        });
+        // 直接验证 item → ImBinding 的映射逻辑（绕过 HTTP，用 list 内部同样的 map 规则）。
+        let items = env["data"]["items"].as_array().unwrap();
+        let bindings: Vec<ImBinding> = items.iter().map(|b| ImBinding {
+            user_id: str_of(b, "user_id"),
+            provider: str_of(b, "provider"),
+            open_id: str_of(b, "open_id"),
+            created_at: b.get("created_at").and_then(|c| c.as_i64()).unwrap_or(0),
+            im_username: opt_str(b, "im_username").or_else(|| opt_str(b, "nickname")).unwrap_or_default(),
+        }).collect();
+        assert_eq!(bindings.len(), 3);
+        assert_eq!(bindings[0].im_username, "张三");
+        assert_eq!(bindings[1].im_username, "Bob");   // 回退 nickname
+        assert_eq!(bindings[2].im_username, "");       // 都没有 → 空串
+        assert_eq!(bindings[0].created_at, 1700000000000i64);
     }
 }
