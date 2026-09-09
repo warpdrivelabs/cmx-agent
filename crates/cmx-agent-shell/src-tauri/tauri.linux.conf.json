@@ -27,5 +27,8 @@
         "visible": true
       }
     ]
+  },
+  "bundle": {
+    "targets": ["deb", "appimage"]
   }
 }
