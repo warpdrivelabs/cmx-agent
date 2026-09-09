@@ -17,9 +17,9 @@ use std::sync::OnceLock;
 use cmx_agent_app::{AgentApp, AuthConfig, DesktopAppBuilder, dispatch_json};
 use tauri::{Emitter, Manager, State};
 
-/// 门户地址·构建期烧录默认：build.rs 从仓库根 `.env` 的 CMX_AGENT_PORTAL_BASE 读取注入
-/// （CI 可用编译环境变量 CMX_AGENT_PORTAL_DEFAULT 覆盖）。作为 [`portal_base`] 的兜底层——
-/// 分发包零配置即连打包时配置的门户；未注入退回本机 :8080。
+/// 门户地址·构建期烧录（唯一来源）：build.rs 从仓库根 `.env` 的 CMX_AGENT_PORTAL_BASE 读取注入
+/// （CI 可用编译环境变量 CMX_AGENT_PORTAL_DEFAULT 覆盖）。[`portal_base`] 直接取值——
+/// 分发包零配置即连打包时配置的门户，运行期不可改；未注入退回 [`AuthConfig::default`]（团队门户）。
 fn portal_packed_default() -> Option<String> {
     option_env!("CMX_AGENT_PORTAL_DEFAULT")
         .map(|s| s.to_string())
@@ -34,47 +34,11 @@ fn set_im_status(s: String) {
 }
 
 /// 门户基址统一来源（登录门 / IM 绑定 client / IM 桥 resolver 三处共用）：
-/// env `CMX_AGENT_PORTAL_BASE` > `<data_dir>/portal.json` 的 `base_url`（设置面板写）>
-/// 构建期烧录默认（仓库根 `.env`，见 [`portal_packed_default`]）> 默认本机。
-/// 注意存的是 **API 根**（`http://host:8080`，API 挂 `/api/*`）；浏览器门户页的 `/portal`
-/// 后缀在保存时会被剥掉（那只是前端路由，不属于 API base）。
+/// **构建期烧录默认**（仓库根 `.env` 的 CMX_AGENT_PORTAL_BASE，见 [`portal_packed_default`]）>
+/// 默认本机。运行期不提供任何修改手段（用户要求：分发包地址与打包配置一致，装后不可改）。
+/// 注意存的是 **API 根**（`http://host:8080`，API 挂 `/api/*`）。
 fn portal_base() -> String {
-    if let Ok(v) = std::env::var("CMX_AGENT_PORTAL_BASE") {
-        let v = v.trim().to_string();
-        if !v.is_empty() {
-            return v;
-        }
-    }
-    let path = cmx_agent_app::shared_data_dir().join("portal.json");
-    if let Ok(text) = std::fs::read_to_string(&path) {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-            if let Some(u) = v.get("base_url").and_then(|x| x.as_str()) {
-                let u = u.trim().to_string();
-                if !u.is_empty() {
-                    return u;
-                }
-            }
-        }
-    }
-    portal_packed_default().unwrap_or_else(|| "http://127.0.0.1:8080".into())
-}
-
-/// 保存门户基址到 `<data_dir>/portal.json`（设置面板「门户服务器地址」）。
-fn save_portal_base(base: &str) -> Result<(), String> {
-    let dir = cmx_agent_app::shared_data_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| format!("创建数据目录失败：{e}"))?;
-    let text = serde_json::json!({ "base_url": base }).to_string();
-    std::fs::write(dir.join("portal.json"), text).map_err(|e| format!("写入 portal.json 失败：{e}"))
-}
-
-/// 归一化门户地址：去空白、去尾 `/`、剥浏览器前端路由后缀 `/portal`（API 挂根 `/api`）。
-fn normalize_portal_base(raw: &str) -> String {
-    let mut s = raw.trim().trim_end_matches('/').to_string();
-    if s.ends_with("/portal") {
-        s.truncate(s.len() - "/portal".len());
-        s = s.trim_end_matches('/').to_string();
-    }
-    s
+    portal_packed_default().unwrap_or_else(|| AuthConfig::default().base_url)
 }
 
 /// IM 遥控装配（U16）：读 `CMX_AGENT_IM_*` env（开发联调）或 `<data_dir>/im.json`（GUI 设置面板），
@@ -147,7 +111,7 @@ async fn im_config(action: String, payload: Option<String>) -> Result<String, St
                     })
                 });
             let mut data = data;
-            data["portal_base"] = serde_json::json!(portal_base());
+            data["portal_base"] = serde_json::json!(portal_base()); // 只读回显（运行期不可改）
             data["env_active"] = serde_json::json!(cmx_agent_im::env_active());
             Ok(serde_json::json!({ "ok": true, "data": data }).to_string())
         }
@@ -177,14 +141,7 @@ async fn im_config(action: String, payload: Option<String>) -> Result<String, St
                 cfg.telegram.token = get_str("telegram_token_value").unwrap_or_default();
             }
             // 白名单不进 GUI：GUI set 不触碰 cfg.allow（im.json 手工维护，已有值保留）。
-            // 门户服务器地址：非空则归一化（剥 `/portal` 前端后缀）后落 portal.json（登录门同源）。
-            if let Some(base) = get_str("portal_base").filter(|s| !s.is_empty()) {
-                let normalized = normalize_portal_base(&base);
-                if !normalized.starts_with("http://") && !normalized.starts_with("https://") {
-                    return Ok(err_json("bad_request", "门户地址须以 http:// 或 https:// 开头"));
-                }
-                save_portal_base(&normalized)?;
-            }
+            // 门户服务器地址：运行期不可改（构建期烧录），set 请求里的 portal_base 一律忽略。
             // 启用态下按 provider 校验凭证齐备（禁用态允许存半成品）。
             if cfg.enabled {
                 let missing = match cfg.kind.trim() {
@@ -384,7 +341,7 @@ fn build_app() -> AgentApp {
 
     let mut app = DesktopAppBuilder::new(workdir, data_dir.clone(), model)
         .connectors(cmx_agent_app::ConnectorConfig::default())
-        // 登录门：对接门户 /api/auth（基址统一走 portal_base()：env > portal.json > 烧录默认）。
+        // 登录门：对接门户 /api/auth（基址统一走 portal_base()：构建期烧录默认，运行期不可改）。
         .auth(AuthConfig { base_url: portal_base() })
         .interactive_approval() // X4：shell 等需审批工具挂起等前端点按
         .mcp_tools(mcp_tools)   // U3：外部 MCP 工具

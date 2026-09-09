@@ -31,7 +31,7 @@ pub trait ImBindingResolver: Send + Sync {
     ) -> Result<Option<BoundIdentity>, String>;
 }
 
-/// 真实现：调门户 `/api/agent/bindings/*`。`base_url` 指门户（默认 `http://127.0.0.1:8080`）。
+/// 真实现：调门户 `/api/agent/bindings/*`。`base_url` 指门户 API 根（由壳侧统一传入，见其 portal_base）。
 pub struct PortalBindingResolver {
     client: ImBindingClient,
 }

@@ -635,10 +635,7 @@
   <div class="mcfg-overlay hidden" id="settings-overlay">
     <div class="mcfg-box">
       <div class="mcfg-head">⚙ 设置 <button data-act="closeSettings">✕</button></div>
-      <div class="mcfg-row">
-        <label>门户服务器地址</label>
-        <input id="scfg-portal" type="text" placeholder="http://192.168.x.x:8080（企业门户部署地址；改动后重启生效）">
-      </div>
+      <!-- 门户服务器地址：运行期不可改（构建期烧录），不进设置面板。 -->
       <div class="mcfg-row">
         <label>IM 遥控</label>
         <div class="mcfg-temp-row">
@@ -1612,7 +1609,6 @@ async function menuSettings(){
   try{ r = JSON.parse(await window.__TAURI__.core.invoke("im_config",{action:"get"})); }catch(e){ showToast("读取失败："+e); return; }
   if(!r||!r.ok){ showToast("读取 IM 配置失败："+((r&&r.error&&r.error.message)||"未知")); return; }
   const d=r.data;
-  document.getElementById("scfg-portal").value = d.portal_base||"";
   document.getElementById("scfg-kind").value    = d.kind||"feishu";
   document.getElementById("scfg-enabled").checked= d.enabled!==false;
   document.getElementById("scfg-app-id").value  = d.app_id||"";
@@ -1652,7 +1648,6 @@ function scfgSwitchKind(){
 }
 async function imcfgSave(){
   const payload={
-    portal_base:document.getElementById("scfg-portal").value.trim(),
     kind:document.getElementById("scfg-kind").value,
     enabled:document.getElementById("scfg-enabled").checked,
     personal:true,

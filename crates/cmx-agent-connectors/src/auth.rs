@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use crate::client::{ClientError, CmxServiceClient};
 
-/// 认证服务配置（缺省指向本机门户 `:8080`，即 CMXPortalManager 对接的同一服务）。
+/// 认证服务配置（缺省指向团队门户 `192.168.137.111:8080`，本机开发门户同端口）。
 #[derive(Debug, Clone)]
 pub struct AuthConfig {
     pub base_url: String,
@@ -17,7 +17,7 @@ pub struct AuthConfig {
 impl Default for AuthConfig {
     fn default() -> Self {
         Self {
-            base_url: "http://127.0.0.1:8080".into(),
+            base_url: "http://192.168.137.111:8080".into(),
         }
     }
 }
@@ -135,7 +135,7 @@ mod tests {
 
     #[test]
     fn default_base_is_portal() {
-        assert_eq!(AuthConfig::default().base_url, "http://127.0.0.1:8080");
+        assert_eq!(AuthConfig::default().base_url, "http://192.168.137.111:8080");
     }
 
     #[test]
