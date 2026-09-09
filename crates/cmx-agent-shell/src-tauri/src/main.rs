@@ -140,6 +140,9 @@ async fn im_config(
                         "app_secret_masked": "",
                         "base": "",
                         "telegram_token_masked": "",
+                        "qq_app_id": "",
+                        "qq_secret_masked": "",
+                        "qq_base": "",
                     })
                 });
             let mut data = data;
@@ -172,6 +175,16 @@ async fn im_config(
             if get_str("telegram_token_action").as_deref() == Some("set") {
                 cfg.telegram.token = get_str("telegram_token_value").unwrap_or_default();
             }
+            // QQ：字段名 qq_*（与飞书的 app_id/base 区分，面板按 kind 分块提交）。
+            if let Some(qq_app_id) = get_str("qq_app_id") {
+                cfg.qq.app_id = qq_app_id;
+            }
+            if let Some(qq_base) = get_str("qq_base") {
+                cfg.qq.base = qq_base;
+            }
+            if get_str("qq_secret_action").as_deref() == Some("set") {
+                cfg.qq.app_secret = get_str("qq_secret_value").unwrap_or_default();
+            }
             // 白名单不进 GUI：GUI set 不触碰 cfg.allow（im.json 手工维护，已有值保留）。
             // 门户服务器地址：运行期不可改（构建期烧录），set 请求里的 portal_base 一律忽略。
             // 启用态下按 provider 校验凭证齐备（禁用态允许存半成品）。
@@ -180,6 +193,8 @@ async fn im_config(
                     "telegram" if cfg.telegram.token.is_empty() => Some("Bot Token"),
                     "feishu" if cfg.feishu.app_id.is_empty() => Some("App ID"),
                     "feishu" if cfg.feishu.app_secret.is_empty() => Some("App Secret"),
+                    "qq" if cfg.qq.app_id.is_empty() => Some("QQ AppID"),
+                    "qq" if cfg.qq.app_secret.is_empty() => Some("QQ AppSecret"),
                     _ => None,
                 };
                 if let Some(field) = missing {

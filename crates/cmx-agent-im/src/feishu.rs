@@ -355,6 +355,12 @@ impl ImProvider for FeishuProvider {
         }
         Ok(())
     }
+
+    /// 热重载 trait 入口：委托固有实现（自增代际 + 发停止信号）。
+    /// 覆写不可缺——壳侧经 `dyn ImProvider` 调 `stop()`，仅固有方法会被默认空实现遮蔽。
+    fn stop(&self) {
+        FeishuProvider::stop(self);
+    }
 }
 
 impl FeishuProvider {

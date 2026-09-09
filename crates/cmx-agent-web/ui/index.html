@@ -8,7 +8,6 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>cmx 企业桌面智能体</title>
 <style>
   :root{
     --bg:#0d0d0d; --panel:#141414; --panel2:#1a1a19; --surface:#1e1e1d; --hover:#242423;
@@ -504,7 +503,6 @@
        无交通灯可借，标题条改左对齐 + 右侧补最小化/最大化/关闭按钮（win-ctrls，initPlatformChrome 按平台显隐）。
        data-tauri-drag-region：Tauri 原生拖动；按钮不带该属性故可点。 -->
   <div class="titlebar" data-tauri-drag-region>
-    <span class="tb-title" data-tauri-drag-region>cmx 企业桌面智能体</span>
     <div class="sp" data-tauri-drag-region></div>
     <div class="tb-ctrls">
       <button class="tb-btn" data-act="toggleSidebar" title="隐藏/显示左侧栏"><span class="ico" id="tb-side-ico">⇤</span></button>
@@ -577,7 +575,6 @@
     <div class="mi" data-act="toggleTheme"><span class="mi-i">☀</span> 切换主题</div>
     <div class="mi" data-act="checkUpdate"><span class="mi-i">⭮</span> 检查更新</div>
     <div class="mi-sep"></div>
-    <div class="mi" data-act="menuAbout"><span class="mi-i">ⓘ</span> 关于 cmx 智能体</div>
   </div>
   <!-- 模型选择弹层（点 composer 的 ◎ 模型按钮弹出；锚在按钮上方，点外部关闭）。 -->
   <div class="cmxmenu modelmenu" id="modelmenu"></div>
@@ -628,7 +625,7 @@
       </div>
     </div>
   </div>
-  <!-- 设置面板（Modal）：IM 遥控连接配置（飞书/Telegram 凭证 → 后端 im.json；重启生效）。
+  <!-- 设置面板（Modal）：IM 遥控连接配置（飞书/QQ/Telegram 凭证 → 后端 im.json；保存热重载即时生效）。
        个人模式固定（消息以桌面登录账号身份跑回合，无验证码绑定）。复用模型面板的 mcfg-*
        样式；交互走 data-act 委托（内联 onclick 被两壳 CSP 拦截，勿用）；密文走「锁」交互
        （面板只回显掩码，解锁才能改，保存 keep/set 语义同 API Key）。 -->
@@ -641,6 +638,7 @@
         <div class="mcfg-temp-row">
           <select id="scfg-kind" style="flex:1">
             <option value="feishu">飞书 Feishu</option>
+            <option value="qq">QQ 机器人</option>
             <option value="telegram">Telegram</option>
           </select>
           <label style="display:flex;align-items:center;gap:5px;font-weight:400;font-size:12.5px;color:var(--ink2);white-space:nowrap">
@@ -666,6 +664,29 @@
             <option value="">飞书 · 国内（open.feishu.cn）</option>
             <option value="https://open.larksuite.com">Lark · 海外（open.larksuite.com）</option>
           </select>
+        </div>
+      </div>
+      <div id="scfg-qq-block" style="display:none">
+        <div class="mcfg-row">
+          <label>AppID</label>
+          <input id="scfg-qq-app-id" type="text" placeholder="10…（QQ 开放平台 q.qq.com · 开发设置）">
+        </div>
+        <div class="mcfg-row">
+          <label>AppSecret</label>
+          <div class="mcfg-key-wrap">
+            <input id="scfg-qq-secret" type="password" placeholder="（脱敏；点 🔓 解锁填写）" readonly>
+            <button id="scfg-qq-lock" data-act="scfgQqLock" title="解锁/锁定 AppSecret">🔒</button>
+          </div>
+        </div>
+        <div class="mcfg-row">
+          <label>环境</label>
+          <select id="scfg-qq-base">
+            <option value="">正式（api.sgroup.qq.com）</option>
+            <option value="https://sandbox.api.sgroup.qq.com">沙箱（sandbox.api.sgroup.qq.com）</option>
+          </select>
+        </div>
+        <div style="font-size:11.5px;color:var(--muted);margin:2px 0 6px;line-height:1.5">
+          QQ 官方机器人仅支持被动回复：收到消息后 5 分钟内可回（群聊最多 5 条）；群聊使用需 @机器人。
         </div>
       </div>
       <div id="scfg-telegram-block" style="display:none">
@@ -1597,7 +1618,7 @@ function toggleMenu(){ document.getElementById("usermenu").classList.remove("on"
 function closeMenu(){ document.getElementById("cmxmenu").classList.remove("on"); document.getElementById("usermenu").classList.remove("on"); }
 // ── 设置 → IM 遥控连接配置（后端 im.json；Tauri 壳 invoke("im_config")）──
 // 密文交互照模型面板：打开即锁定（只回显掩码），解锁才能改，保存 keep/set 二选一。
-let _scfgSecretUnlocked=false, _scfgTgUnlocked=false;
+let _scfgSecretUnlocked=false, _scfgTgUnlocked=false, _scfgQqUnlocked=false;
 async function menuSettings(){
   closeMenu();
   if(!(window.__TAURI__ && window.__TAURI__.core)){
@@ -1615,20 +1636,25 @@ async function menuSettings(){
   document.getElementById("scfg-app-secret").value = d.app_secret_masked||"";
   document.getElementById("scfg-base").value    = d.base||"";
   document.getElementById("scfg-tg-token").value= d.telegram_token_masked||"";
+  document.getElementById("scfg-qq-app-id").value = d.qq_app_id||"";
+  document.getElementById("scfg-qq-secret").value = d.qq_secret_masked||"";
+  document.getElementById("scfg-qq-base").value   = d.qq_base||"";
   const note=[];
   if(d.env_active) note.push("⚠ 检测到环境变量 CMX_AGENT_IM_*（开发模式）优先生效，此处保存的配置暂不生效。");
-  if(!d.configured) note.push("尚未配置：填入你的 IM 机器人凭证（飞书自建应用 App ID/Secret），保存并重启即启用遥控。保存后，你在飞书给机器人发消息即以当前登录账号对话。");
+  if(!d.configured) note.push("尚未配置：填入你的 IM 机器人凭证（飞书 App ID/Secret、QQ AppID/AppSecret 等），保存即启用遥控。");
   document.getElementById("scfg-note").textContent = note.join("  ·  ");
   scfgSwitchKind();
   document.getElementById("settings-overlay").classList.remove("hidden");
 }
 function closeSettings(){ document.getElementById("settings-overlay").classList.add("hidden"); }
 function scfgResetLocks(){
-  _scfgSecretUnlocked=false; _scfgTgUnlocked=false;
+  _scfgSecretUnlocked=false; _scfgTgUnlocked=false; _scfgQqUnlocked=false;
   const s=document.getElementById("scfg-app-secret"), sb=document.getElementById("scfg-secret-lock");
   const t=document.getElementById("scfg-tg-token"),  tb=document.getElementById("scfg-tg-lock");
+  const q=document.getElementById("scfg-qq-secret"), qb=document.getElementById("scfg-qq-lock");
   s.readOnly=true; s.type="password"; s.value=""; sb.textContent="🔒";
   t.readOnly=true; t.type="password"; t.value=""; tb.textContent="🔒";
+  q.readOnly=true; q.type="password"; q.value=""; qb.textContent="🔒";
 }
 function scfgToggleSecretLock(){
   const input=document.getElementById("scfg-app-secret"), btn=document.getElementById("scfg-secret-lock");
@@ -1640,10 +1666,16 @@ function scfgToggleTgLock(){
   if(_scfgTgUnlocked){ input.readOnly=true; input.type="password"; input.value=""; btn.textContent="🔒"; _scfgTgUnlocked=false; }
   else { input.readOnly=false; input.type="text"; input.value=""; btn.textContent="🔓"; _scfgTgUnlocked=true; input.focus(); }
 }
+function scfgToggleQqLock(){
+  const input=document.getElementById("scfg-qq-secret"), btn=document.getElementById("scfg-qq-lock");
+  if(_scfgQqUnlocked){ input.readOnly=true; input.type="password"; input.value=""; btn.textContent="🔒"; _scfgQqUnlocked=false; }
+  else { input.readOnly=false; input.type="text"; input.value=""; btn.textContent="🔓"; _scfgQqUnlocked=true; input.focus(); }
+}
 // 平台切换：只显示所选 provider 的凭证块。
 function scfgSwitchKind(){
   const kind=document.getElementById("scfg-kind").value;
   document.getElementById("scfg-feishu-block").style.display   = kind==="feishu"   ? "" : "none";
+  document.getElementById("scfg-qq-block").style.display       = kind==="qq"      ? "" : "none";
   document.getElementById("scfg-telegram-block").style.display = kind==="telegram" ? "" : "none";
 }
 async function imcfgSave(){
@@ -1655,16 +1687,19 @@ async function imcfgSave(){
     base:document.getElementById("scfg-base").value,
     app_secret_action:_scfgSecretUnlocked?"set":"keep",
     telegram_token_action:_scfgTgUnlocked?"set":"keep",
+    qq_app_id:document.getElementById("scfg-qq-app-id").value.trim(),
+    qq_base:document.getElementById("scfg-qq-base").value,
+    qq_secret_action:_scfgQqUnlocked?"set":"keep",
   };
   if(_scfgSecretUnlocked) payload.app_secret_value=document.getElementById("scfg-app-secret").value.trim();
   if(_scfgTgUnlocked)     payload.telegram_token_value=document.getElementById("scfg-tg-token").value.trim();
+  if(_scfgQqUnlocked)     payload.qq_secret_value=document.getElementById("scfg-qq-secret").value.trim();
   let r=null;
   try{ r=JSON.parse(await window.__TAURI__.core.invoke("im_config",{action:"set", payload:JSON.stringify(payload)})); }
   catch(e){ showToast("保存失败："+e); return; }
   if(r&&r.ok){ showToast("IM 配置："+((r.data&&r.data.note)||"已保存")); closeSettings(); }
   else { showToast("保存失败："+((r&&r.error&&r.error.message)||"未知")); }
 }
-function menuAbout(){ closeMenu(); alert("cmx 企业桌面智能体\n版本 "+APP_VERSION+"\n\n复刻并超越 WorkBuddy · 同核多壳架构\n形(前门) / 核(回合循环+守卫) / 体(cmx 引擎连接器)"); }
 
 // ── Windows/Linux 窗口控件（最小化/最大化/关闭）+ 无边框缩放 ──
 // macOS 用系统红绿灯（Overlay 标题栏），不建这些；仅非 macOS 且在 Tauri 壳内才生效（Web 壳无 __TAURI__.window）。
@@ -2183,7 +2218,7 @@ function showToast(msg){
 // 内联 onclick 属性全被拦截。用委托（监听在 document 上，由 nonce'd 脚本注册）在两壳都工作。
 const ACTIONS = { newTask, openConnectors, startFromHome, toggleSidebar, toggleTheme, checkUpdate, applyUpdate, toggleMenu, menuSettings, menuAbout, toggleVoice, toggleUserMenu, userProfile, userSwitch, userWorkspace, userLogout,
   toggleTabOverflow, tabCtxClose, tabCtxCloseOthers, tabCtxCloseRight, tabCtxCloseAll, winMinimize, winToggleMaximize, winClose,
-  closeSettings, scfgSecretLock: scfgToggleSecretLock, scfgTgLock: scfgToggleTgLock, imcfgSave };
+  closeSettings, scfgSecretLock: scfgToggleSecretLock, scfgTgLock: scfgToggleTgLock, scfgQqLock: scfgToggleQqLock, imcfgSave };
 document.addEventListener("click", e=>{
   const el = e.target.closest("[data-act]");
   if(!el){ closeMenu(); closeTabCtx(); document.getElementById("modelmenu").classList.remove("on"); document.getElementById("tab-dropdown").classList.remove("on"); return; }

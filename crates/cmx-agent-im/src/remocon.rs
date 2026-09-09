@@ -15,7 +15,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::{FeishuProvider, ImKind, ImProvider, TelegramProvider, config::parse_kind, config::ImConfig};
+use crate::{FeishuProvider, ImKind, ImProvider, QqProvider, TelegramProvider, config::parse_kind, config::ImConfig};
 
 /// 飞书国内开放平台基址（与 `feishu.rs` 的默认一致；面板「区域」默认值用）。
 pub(crate) const FEISHU_BASE_CN: &str = "https://open.feishu.cn";
@@ -26,7 +26,7 @@ pub struct ImRemoconConfig {
     /// 总开关：false = 已保存凭证但停用（壳跳过 IM 桥）。
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// provider 类型：`feishu` / `telegram`。
+    /// provider 类型：`feishu` / `telegram` / `qq`。
     #[serde(default)]
     pub kind: String,
     /// 个人模式（默认 true）：所有 IM 消息直接以桌面壳当前登录用户身份跑回合，
@@ -38,6 +38,8 @@ pub struct ImRemoconConfig {
     pub feishu: FeishuCreds,
     #[serde(default)]
     pub telegram: TelegramCreds,
+    #[serde(default)]
+    pub qq: QqCreds,
     /// chat_id 白名单；**空 = 不限**。个人模式下这是唯一的安全门（任何能发消息给
     /// 机器人的会话都会以登录人身份跑 agent）——群机器人建议配置。
     #[serde(default)]
@@ -61,6 +63,18 @@ pub struct FeishuCreds {
 pub struct TelegramCreds {
     #[serde(default)]
     pub token: String,
+    #[serde(default)]
+    pub base: String,
+}
+
+/// QQ 官方机器人开放平台凭证（q.qq.com 管理端「开发设置」页）。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QqCreds {
+    #[serde(default)]
+    pub app_id: String,
+    #[serde(default)]
+    pub app_secret: String,
+    /// 空 = 默认正式 `https://api.sgroup.qq.com`；沙箱联调填 `https://sandbox.api.sgroup.qq.com`。
     #[serde(default)]
     pub base: String,
 }
@@ -95,6 +109,7 @@ impl Default for ImRemoconConfig {
             personal: true,
             feishu: FeishuCreds::default(),
             telegram: TelegramCreds::default(),
+            qq: QqCreds::default(),
             allow: Vec::new(),
         }
     }
@@ -112,6 +127,9 @@ impl ImRemoconConfig {
             "app_secret_masked": mask_secret(&self.feishu.app_secret),
             "base": self.feishu.base,
             "telegram_token_masked": mask_secret(&self.telegram.token),
+            "qq_app_id": self.qq.app_id,
+            "qq_secret_masked": mask_secret(&self.qq.app_secret),
+            "qq_base": self.qq.base,
             "allow": self.allow.join(", "),
         })
     }
@@ -145,6 +163,16 @@ impl ImRemoconConfig {
                     return Err("im.json 已选 telegram 但缺 Bot Token".into());
                 }
                 Arc::new(TelegramProvider::new(t.token.trim(), non_empty(&t.base)))
+            }
+            ImKind::Qq => {
+                let q = &self.qq;
+                if q.app_id.trim().is_empty() {
+                    return Err("im.json 已选 qq 但缺 AppID".into());
+                }
+                if q.app_secret.trim().is_empty() {
+                    return Err("im.json 已选 qq 但缺 AppSecret".into());
+                }
+                Arc::new(QqProvider::new(q.app_id.trim(), q.app_secret.trim(), non_empty(&q.base)))
             }
         };
         Ok(ResolvedIm { kind, allow, provider, personal: self.personal, source: "im.json" })
@@ -258,6 +286,60 @@ pub async fn test_feishu(app_id: &str, app_secret: &str, base: Option<&str>) -> 
     Ok("✓ 凭证有效，飞书 Stream 通道可用".into())
 }
 
+/// QQ 凭证连通性预检（面板「测试连接」备用，与 `test_feishu` 同地位）：getAppAccessToken 一跳。
+/// token 端点固定 `api.bot.qq.com`（官方统一鉴权域，不随沙箱 base 走）。
+pub async fn test_qq(app_id: &str, app_secret: &str, base: Option<&str>) -> Result<String, String> {
+    if app_id.trim().is_empty() || app_secret.trim().is_empty() {
+        return Err("AppID / AppSecret 不能为空".into());
+    }
+    let api_base = base
+        .map(str::trim)
+        .filter(|b| !b.is_empty())
+        .unwrap_or("https://api.sgroup.qq.com")
+        .trim_end_matches('/')
+        .to_string();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("构建 HTTP 客户端失败：{e}"))?;
+
+    // 1) getAppAccessToken：凭证对不对。
+    let v: Value = client
+        .post("https://api.bot.qq.com/app/getAppAccessToken")
+        .json(&json!({ "appId": app_id.trim(), "clientSecret": app_secret.trim() }))
+        .send()
+        .await
+        .map_err(|e| format!("请求失败（网络不通）：{e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("响应解析失败：{e}"))?;
+    let token = v.get("access_token").and_then(|t| t.as_str()).unwrap_or("");
+    if token.is_empty() {
+        return Err(format!("凭证无效：{v}"));
+    }
+
+    // 2) gateway：API 基址可达 + 机器人存在（沙箱地址配错在此暴露）。
+    let resp = client
+        .get(format!("{api_base}/gateway"))
+        .header("Authorization", format!("QQBot {token}"))
+        .send()
+        .await
+        .map_err(|e| format!("gateway 请求失败（检查 API 地址，沙箱为 sandbox.api.sgroup.qq.com）：{e}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("gateway HTTP {status}: {body}"));
+    }
+    let v: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("gateway 解析失败：{e}"))?;
+    if v.get("url").and_then(|u| u.as_str()).is_none() {
+        return Err("gateway 响应缺 url".into());
+    }
+    Ok("✓ 凭证有效，QQ 网关可用".into())
+}
+
 /// trim 后非空才 `Some`（provider base 可选参数用）。
 fn non_empty(s: &str) -> Option<String> {
     let t = s.trim();
@@ -300,7 +382,7 @@ mod tests {
         let dir = tmp_dir("roundtrip");
         let cfg = ImRemoconConfig {
             enabled: true,
-            kind: "feishu".into(),
+            kind: "qq".into(),
             personal: true,
             feishu: FeishuCreds {
                 app_id: "cli_x".into(),
@@ -308,12 +390,16 @@ mod tests {
                 base: String::new(),
             },
             telegram: TelegramCreds::default(),
+            qq: QqCreds { app_id: "10xx".into(), app_secret: "qq-secret".into(), base: String::new() },
             allow: vec!["oc_a".into(), "oc_b".into()],
         };
         save_im_config(&dir, &cfg).unwrap();
         let back = load_im_config(&dir).expect("应能读回");
         assert_eq!(back.feishu.app_id, "cli_x");
         assert_eq!(back.feishu.app_secret, "sec-secret-secret");
+        assert_eq!(back.qq.app_id, "10xx");
+        assert_eq!(back.qq.app_secret, "qq-secret");
+        assert_eq!(back.kind, "qq");
         assert_eq!(back.allow, vec!["oc_a", "oc_b"]);
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -375,6 +461,26 @@ mod tests {
         // telegram 缺 token → Err
         let tg = ImRemoconConfig { kind: "telegram".into(), ..Default::default() };
         assert!(tg.to_resolved().is_err());
+
+        // qq 缺 AppSecret → Err 带字段名
+        let bad_qq = ImRemoconConfig {
+            kind: "qq".into(),
+            qq: QqCreds { app_id: "10xx".into(), ..Default::default() },
+            ..Default::default()
+        };
+        let err = match bad_qq.to_resolved() {
+            Err(e) => e,
+            Ok(_) => panic!("缺凭证应 Err"),
+        };
+        assert!(err.contains("AppSecret"), "{err}");
+
+        // qq 齐备 → Ok
+        let ok_qq = ImRemoconConfig {
+            kind: "qq".into(),
+            qq: QqCreds { app_id: "10xx".into(), app_secret: "s".into(), base: String::new() },
+            ..Default::default()
+        };
+        assert_eq!(ok_qq.to_resolved().unwrap().kind, ImKind::Qq);
     }
 
     #[test]

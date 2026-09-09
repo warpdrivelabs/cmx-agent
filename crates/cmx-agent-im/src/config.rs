@@ -4,22 +4,25 @@
 //! 解析出的 [`ImConfig`] 经 CLI 装配成 `Arc<dyn ImProvider>` + 白名单，喂给 [`crate::ImBridge`]。
 //!
 //! 环境变量（IM 前缀 `CMX_AGENT_IM_*`）：
-//! - `CMX_AGENT_IM_KIND`：provider 类型，默认 `telegram`；可选 `feishu`（企业微信/钉钉后续追加）。
+//! - `CMX_AGENT_IM_KIND`：provider 类型，默认 `telegram`；可选 `feishu` / `qq`（企业微信/钉钉后续追加）。
 //! - `CMX_AGENT_IM_ALLOW`：逗号分隔的 chat_id 白名单（安全必需；CLI 无白名单拒启动）。
 //! - `CMX_AGENT_IM_NO_ALLOW`：设 `1` 显式放开白名单（仅测试/纯内网；生产勿用）。
 //! - Telegram：`CMX_AGENT_IM_TOKEN`（必需）+ 可选 `CMX_AGENT_IM_BASE`。
 //! - 飞书：`CMX_AGENT_IM_FEISHU_APP_ID` + `CMX_AGENT_IM_FEISHU_APP_SECRET`（必需）
 //!   + 可选 `CMX_AGENT_IM_FEISHU_BASE`（默认 `https://open.feishu.cn`，海外用 `https://open.larksuite.com`）。
+//! - QQ：`CMX_AGENT_IM_QQ_APP_ID` + `CMX_AGENT_IM_QQ_APP_SECRET`（必需）
+//!   + 可选 `CMX_AGENT_IM_QQ_BASE`（默认 `https://api.sgroup.qq.com`，沙箱 `https://sandbox.api.sgroup.qq.com`）。
 
 use std::collections::HashSet;
 
-use crate::{FeishuProvider, ImProvider, TelegramProvider};
+use crate::{FeishuProvider, ImProvider, QqProvider, TelegramProvider};
 
 /// IM provider 类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImKind {
     Telegram,
     Feishu,
+    Qq,
 }
 
 impl ImKind {
@@ -28,6 +31,7 @@ impl ImKind {
         match self {
             Self::Telegram => "telegram",
             Self::Feishu => "feishu",
+            Self::Qq => "qq",
         }
     }
 }
@@ -45,7 +49,8 @@ pub fn parse_kind(raw: &str) -> Result<ImKind, String> {
     match raw.trim() {
         "" | "telegram" => Ok(ImKind::Telegram),
         "feishu" => Ok(ImKind::Feishu),
-        other => Err(format!("未知 CMX_AGENT_IM_KIND: {other}（可选 telegram / feishu）")),
+        "qq" => Ok(ImKind::Qq),
+        other => Err(format!("未知 CMX_AGENT_IM_KIND: {other}（可选 telegram / feishu / qq）")),
     }
 }
 
@@ -81,6 +86,11 @@ impl ImConfig {
                 let p = FeishuProvider::from_env().ok_or_else(|| {
                     "缺 CMX_AGENT_IM_FEISHU_APP_ID / CMX_AGENT_IM_FEISHU_APP_SECRET".to_string()
                 })?;
+                std::sync::Arc::new(p)
+            }
+            ImKind::Qq => {
+                let p = QqProvider::from_env()
+                    .ok_or_else(|| "缺 CMX_AGENT_IM_QQ_APP_ID / CMX_AGENT_IM_QQ_APP_SECRET".to_string())?;
                 std::sync::Arc::new(p)
             }
         };
@@ -140,6 +150,7 @@ mod tests {
         assert_eq!(parse_kind("telegram").unwrap(), ImKind::Telegram);
         assert_eq!(parse_kind("feishu").unwrap(), ImKind::Feishu);
         assert_eq!(parse_kind("  feishu  ").unwrap(), ImKind::Feishu);
+        assert_eq!(parse_kind("qq").unwrap(), ImKind::Qq);
         assert!(parse_kind("bogus").is_err());
     }
 }

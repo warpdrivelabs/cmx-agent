@@ -25,16 +25,18 @@ pub use cmx_agent_connectors::im_binding::BoundIdentity;
 
 mod telegram;
 mod feishu;
+mod qq;
 mod config;
 mod remocon;
 pub mod binding;
 pub use telegram::TelegramProvider;
 pub use feishu::FeishuProvider;
+pub use qq::QqProvider;
 pub use config::{ImConfig, ImKind, parse_allow};
 pub use binding::{ImBindingResolver, MockBindingResolver, PortalBindingResolver};
 pub use remocon::{
-    FeishuCreds, ImRemoconConfig, ResolvedIm, TelegramCreds, env_active, im_config_path,
-    load_im_config, resolve, save_im_config, test_feishu,
+    FeishuCreds, ImRemoconConfig, QqCreds, ResolvedIm, TelegramCreds, env_active, im_config_path,
+    load_im_config, resolve, save_im_config, test_feishu, test_qq,
 };
 
 /// 一条入站 IM 消息。
@@ -64,6 +66,11 @@ pub trait ImProvider: Send + Sync {
     /// 热重载：请求停止常驻接收链（断开长连接、退出后台 task）。
     /// 有常驻 task 的 provider 覆盖实现；轮询型默认 no-op。
     fn stop(&self) {}
+    /// 回复文本单条分块上限（按字符数）。各平台消息长度上限不同
+    /// （Telegram 4096 / QQ 文本远小于此），provider 覆盖；默认 3800。
+    fn max_chunk(&self) -> usize {
+        3800
+    }
 }
 
 /// 绑定模式下一条入站消息的发送者解析结果（决定 tick 对它的处理方式）。
@@ -312,7 +319,7 @@ impl ImBridge {
                     Err(e) => format!("⚠ 处理出错：{e}"),
                 },
             };
-            for chunk in chunk_text(&reply, 3800) {
+            for chunk in chunk_text(&reply, self.provider.max_chunk()) {
                 let _ = self.provider.send(&m.chat_id, &chunk).await;
             }
         }
