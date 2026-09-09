@@ -54,8 +54,8 @@
     ],
     "publisher": "Pansoft",
     "category": "Productivity",
-    "shortDescription": "TrueMate · cmx 企业桌面智能体（同核多壳：原生 / Web）",
-    "longDescription": "TrueMate（cmx 企业桌面智能体）。复用已测的 cmx-agent-app 核（façade / JSONL 落库 / 前门协议 / 五层守卫），对接 cmx 门户统一认证，连接 cmx 各引擎连接器。本包为原生 Tauri 桌面壳。",
+    "shortDescription": "TrueMate — 专注工作，真心搭档（同核多壳：原生 / Web）",
+    "longDescription": "TrueMate（专注工作，真心搭档）。复用已测的 cmx-agent-app 核（façade / JSONL 落库 / 前门协议 / 五层守卫），对接 cmx 门户统一认证，连接 cmx 各引擎连接器。本包为原生 Tauri 桌面壳。",
     "copyright": "© 2026 Pansoft",
     "windows": {
       "webviewInstallMode": {
