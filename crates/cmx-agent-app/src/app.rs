@@ -54,11 +54,13 @@ pub struct AgentApp {
     auth_identity: Option<Arc<std::sync::RwLock<cmx_agent_core::Subject>>>,
     /// B2 可热换模型槽（与 Agent 共享）：模型选择器切换模型即时生效。
     model_slot: Option<crate::ModelSlot>,
-    /// B2 模型配置目录（含 model.json）：切换模型后持久化。
+    /// B2 模型配置目录（含 providers.json / model.json）：切换模型后持久化。
     model_config_dir: Option<std::path::PathBuf>,
-    /// Web 壳启用 per-user 配置后的基目录：`<base>/<username>/model.json`。
+    /// Web 壳启用 per-user 配置后的基目录：`<base>/<username>/providers.json`。
     /// Tauri 壳不设此字段，始终用 model_config_dir（单机单用户）。
     user_config_base: Option<std::path::PathBuf>,
+    /// 多 provider 配置读写锁：providers.json 的 load→改→save 序列串行化，防并发写坏。
+    providers_lock: Mutex<()>,
     /// U16 会话事件总线：任意来源（本地 / IM 桥）追加事件时广播给订阅者（`/api/subscribe` SSE）。
     event_bus: Arc<crate::bus::SessionEventBus>,
     /// IM 绑定客户端（Some=启用绑定面板：gen_code/list/unbind 三命令）。
@@ -84,6 +86,7 @@ impl AgentApp {
             model_slot: None,
             model_config_dir: None,
             user_config_base: None,
+            providers_lock: Mutex::new(()),
             event_bus: Arc::new(crate::bus::SessionEventBus::new()),
             im_binding: None,
         }
@@ -339,44 +342,68 @@ impl AgentApp {
         self.model_config_dir.clone()
     }
 
-    /// B2：读取当前完整模型配置（api_key 脱敏），供前端配置面板填充表单。
-    pub fn get_model_config(&self) -> serde_json::Value {
-        let dir = self.effective_model_config_dir();
-        let cfg = cmx_agent_model::ModelProviderConfig::resolve(dir.as_deref());
-        match cfg {
-            Some(c) => {
-                let candidates: Vec<String> = c.candidate_models().iter().map(|s| s.to_string()).collect();
-                serde_json::json!({
-                    "configured": true,
-                    "base_url": c.base_url,
-                    "api_key_masked": c.masked_api_key(),
-                    "model": c.model,
-                    "temperature": c.temperature,
-                    "timeout_ms": c.timeout_ms,
-                    "candidates": candidates,
-                })
-            }
-            None => serde_json::json!({
-                "configured": false,
-                "base_url": "",
-                "api_key_masked": "",
-                "model": "",
-                "temperature": 0.2_f32,
-                "timeout_ms": 60000_u64,
-                "candidates": [],
-            }),
-        }
+    /// 读当前 providers.json（多 provider 配置）。必须在 `providers_lock` 持锁下调用。
+    /// None = 无配置目录（理论不可达，调用方兜底 BadRequest）。
+    fn load_providers(&self) -> Option<(std::path::PathBuf, cmx_agent_model::ProviderFile)> {
+        let dir = self.effective_model_config_dir()?;
+        Some((dir.clone(), cmx_agent_model::ProviderFile::load(&dir)))
     }
 
-    /// B2：保存完整模型配置并热换（前端配置面板「保存」按钮调用）。
+    /// 取一个命名 provider 的面板回填 JSON（掩码 key + 候选模型）。None = id 不存在。
+    fn provider_config_json(pf: &cmx_agent_model::ProviderFile, p: &cmx_agent_model::NamedProvider) -> serde_json::Value {
+        let candidates: Vec<String> = p.config.candidate_models().iter().map(|s| s.to_string()).collect();
+        serde_json::json!({
+            "configured": !p.config.api_key.is_empty() || !p.config.base_url.is_empty(),
+            "id": p.id,
+            "name": p.name,
+            "builtin": p.builtin,
+            "active": pf.active_id() == Some(p.id.as_str()),
+            "base_url": p.config.base_url,
+            "api_key_masked": p.config.masked_api_key(),
+            "model": p.config.model,
+            "temperature": p.config.temperature,
+            "timeout_ms": p.config.timeout_ms,
+            "candidates": candidates,
+        })
+    }
+
+    /// B2：读取完整模型配置（api_key 脱敏），供前端配置面板填充表单。
+    /// `id` 为空取当前激活 provider（旧行为兼容）；有 id 取指定条目（多 provider 面板）。
+    pub fn get_model_config(&self, id: Option<&str>) -> serde_json::Value {
+        let _g = self.providers_lock.lock().expect("providers lock");
+        if let Some((_, pf)) = self.load_providers() {
+            let target = id
+                .and_then(|i| pf.get(i))
+                .or_else(|| pf.active());
+            if let Some(p) = target {
+                return Self::provider_config_json(&pf, p);
+            }
+            if id.is_some() {
+                return serde_json::json!({ "configured": false, "error": "provider 不存在" });
+            }
+        }
+        // 无配置目录 / 无激活条目：空表单（demo 兜底，与旧未配置行为一致）。
+        serde_json::json!({
+            "configured": false,
+            "base_url": "",
+            "api_key_masked": "",
+            "model": "",
+            "temperature": 0.2_f32,
+            "timeout_ms": 60000_u64,
+            "candidates": [],
+        })
+    }
+
+    /// B2：保存模型配置（前端配置面板「保存」按钮调用）——**按 id upsert** 多 provider 条目。
     ///
     /// payload 字段：
-    /// - `base_url`：字符串（必填）
-    /// - `model`：字符串（必填）
-    /// - `temperature`：浮点（可选，缺省 0.2）
-    /// - `timeout_ms`：整数（可选，缺省 60000）
-    /// - `api_key_action`："keep"（保留现有 key）| "set"（使用 `api_key_value`）
-    /// - `api_key_value`：字符串（仅 action=="set" 时有意义）
+    /// - `id`：可选。缺省/空 = 新建（自动生成 `p-<nanos>`）；有值 = 更新该条目（不存在则报错）
+    /// - `name`：用户可见名称。新建必填非空且不得与其他条目重名；更新时空缺沿用旧名
+    /// - `base_url` / `model`：必填
+    /// - `temperature`：浮点（可选，缺省 0.2）；`timeout_ms`：整数（可选，缺省 60000）
+    /// - `api_key_action`："keep"（沿用该条目已存 key）| "set"（使用 `api_key_value`）
+    ///
+    /// 新建不自动激活；更新激活条目时热换模型槽立即生效。内置条目可编辑、不可由此删除。
     pub fn set_model_config(&self, payload: serde_json::Value) -> AppResult<serde_json::Value> {
         let get_str = |k: &str| payload.get(k).and_then(|v| v.as_str()).map(|s| s.trim().to_string());
         let base_url = get_str("base_url")
@@ -388,18 +415,39 @@ impl AgentApp {
         let temperature = payload.get("temperature").and_then(|v| v.as_f64()).map(|f| f as f32).unwrap_or(0.2);
         let timeout_ms = payload.get("timeout_ms").and_then(|v| v.as_u64()).unwrap_or(60_000);
         let action = get_str("api_key_action").unwrap_or_else(|| "keep".into());
+        let target_id = get_str("id").filter(|s| !s.is_empty());
+        let name_in = get_str("name").filter(|s| !s.is_empty());
 
-        let dir = self.effective_model_config_dir();
-        // 解析旧 api_key（keep 时沿用；set 时替换）
-        let api_key = if action == "set" {
-            get_str("api_key_value").unwrap_or_default()
-        } else {
-            // keep：从已有配置中取旧 key；若还没有配置则允许空（keyless 端点）
-            cmx_agent_model::ModelProviderConfig::resolve(dir.as_deref())
-                .map(|c| c.api_key.clone())
-                .unwrap_or_default()
+        let dir = self
+            .effective_model_config_dir()
+            .ok_or_else(|| AppError::BadRequest("模型配置目录不可用".into()))?;
+        let _g = self.providers_lock.lock().expect("providers lock");
+        let mut pf = cmx_agent_model::ProviderFile::load(&dir);
+
+        // 更新已有条目：沿用旧 name/key；新建：name 必填 + 重名校验、key 可空（keyless 端点）。
+        let (name, api_key, builtin, is_active) = match &target_id {
+            Some(id) => {
+                let p = pf
+                    .get(id)
+                    .ok_or_else(|| AppError::BadRequest("Provider 不存在（可能已被删除）".into()))?;
+                (
+                    name_in.unwrap_or_else(|| p.name.clone()),
+                    if action == "set" { get_str("api_key_value").unwrap_or_default() } else { p.config.api_key.clone() },
+                    p.builtin,
+                    pf.active_id() == Some(id.as_str()),
+                )
+            }
+            None => {
+                let name = name_in
+                    .ok_or_else(|| AppError::BadRequest("名称不能为空".into()))?;
+                if pf.name_taken(&name, None) {
+                    return Err(AppError::BadRequest(format!("名称「{name}」已存在，换一个")));
+                }
+                (name, get_str("api_key_value").unwrap_or_default(), false, false)
+            }
         };
 
+        let id = target_id.unwrap_or_else(cmx_agent_model::new_id);
         let cfg = cmx_agent_model::ModelProviderConfig {
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key,
@@ -407,21 +455,138 @@ impl AgentApp {
             temperature,
             timeout_ms,
         };
-
-        // 热换（若有模型槽）
-        if let Some(slot) = &self.model_slot {
+        pf.upsert(cmx_agent_model::NamedProvider { id: id.clone(), name: name.clone(), builtin, config: cfg.clone() });
+        let persisted = pf.save(&dir).is_ok();
+        // 仅激活条目热换（新建/非激活条目只落盘，切换由 set_active_provider 负责）。
+        if is_active && let Some(slot) = &self.model_slot {
             slot.swap(std::sync::Arc::new(cmx_agent_model::OpenAiCompatModel::new(cfg.clone())));
         }
-
-        // 持久化
-        let persisted = dir.as_ref().map(|d| cfg.save(d).is_ok()).unwrap_or(false);
-        let note = if persisted { "已保存并立即生效" } else { "已应用（本次会话；持久化失败）" };
+        let note = if !persisted {
+            "已应用（本次会话；持久化失败）"
+        } else if is_active {
+            "已保存并立即生效"
+        } else {
+            "已保存（切换到该 Provider 后生效）"
+        };
         Ok(serde_json::json!({
             "service": "cmx-model",
+            "id": id,
             "current": model,
-            "provider": provider_label(&cfg.base_url),
+            "provider": name,
             "persisted": persisted,
             "note": note,
+        }))
+    }
+
+    /// 多 provider：列出全部条目（模型菜单分组 + 配置面板左列共用）。
+    /// `active` 标出当前激活条目；`candidates` 为该 provider 的候选模型（自定义 URL 可能为空，仅显示当前模型）。
+    pub fn list_providers(&self) -> serde_json::Value {
+        let _g = self.providers_lock.lock().expect("providers lock");
+        let (dir, pf) = match self.load_providers() {
+            Some(x) => x,
+            None => return serde_json::json!({ "service": "cmx-model", "providers": [], "current": "demo" }),
+        };
+        let _ = dir;
+        let providers: Vec<serde_json::Value> = pf
+            .providers
+            .iter()
+            .map(|p| {
+                let candidates: Vec<String> =
+                    p.config.candidate_models().iter().map(|s| s.to_string()).collect();
+                let mut cands: Vec<serde_json::Value> = candidates
+                    .iter()
+                    .map(|m| serde_json::json!({ "model": m, "label": m }))
+                    .collect();
+                // 当前模型保证在候选里（自定义模型名/未知 provider 时）。
+                if !p.config.model.is_empty()
+                    && !candidates.iter().any(|m| m == &p.config.model)
+                {
+                    cands.insert(0, serde_json::json!({ "model": p.config.model, "label": p.config.model }));
+                }
+                serde_json::json!({
+                    "id": p.id,
+                    "name": p.name,
+                    "builtin": p.builtin,
+                    "active": pf.active_id() == Some(p.id.as_str()),
+                    "base_url": p.config.base_url,
+                    "api_key_masked": p.config.masked_api_key(),
+                    "configured_key": !p.config.api_key.is_empty(),
+                    "model": p.config.model,
+                    "candidates": cands,
+                })
+            })
+            .collect();
+        let current = pf
+            .active()
+            .map(|p| p.config.model.clone())
+            .unwrap_or_else(|| "demo".to_string());
+        serde_json::json!({ "service": "cmx-model", "current": current, "providers": providers })
+    }
+
+    /// 多 provider：删除一个自定义条目。内置条目不可删；删除激活条目时激活回落到剩余第一条
+    /// （无剩余则回 demo），并热换模型槽。
+    pub fn delete_provider(&self, id: &str) -> AppResult<serde_json::Value> {
+        let dir = self
+            .effective_model_config_dir()
+            .ok_or_else(|| AppError::BadRequest("模型配置目录不可用".into()))?;
+        let _g = self.providers_lock.lock().expect("providers lock");
+        let mut pf = cmx_agent_model::ProviderFile::load(&dir);
+        let p = pf
+            .get(id)
+            .ok_or_else(|| AppError::BadRequest("Provider 不存在".into()))?;
+        if p.builtin {
+            return Err(AppError::BadRequest("内置 Provider 不可删除".into()));
+        }
+        let was_active = pf.active_id() == Some(id);
+        pf.remove(id);
+        if was_active {
+            pf.active = pf.providers.first().map(|p| p.id.clone());
+        }
+        pf.save(&dir).map_err(|e| AppError::BadRequest(format!("持久化失败：{e}")))?;
+        // 热换：删除激活条目 → 换成新激活条目（或回 demo）。
+        if was_active && let Some(slot) = &self.model_slot {
+            let model = match pf.active().filter(|p| !p.config.base_url.is_empty()) {
+                Some(p) => std::sync::Arc::new(cmx_agent_model::OpenAiCompatModel::new(p.config.clone()))
+                    as std::sync::Arc<dyn cmx_agent_core::ModelSeam>,
+                None => std::sync::Arc::new(crate::DemoModel),
+            };
+            slot.swap(model);
+        }
+        let note = if was_active {
+            "已删除，激活已切换到剩余 Provider"
+        } else {
+            "已删除"
+        };
+        Ok(serde_json::json!({ "service": "cmx-model", "deleted": id, "active": pf.active, "note": note }))
+    }
+
+    /// 多 provider：整体切换激活条目（模型菜单按 provider 分组后的点击行为）。持久化 + 热换。
+    pub fn set_active_provider(&self, id: &str) -> AppResult<serde_json::Value> {
+        let dir = self
+            .effective_model_config_dir()
+            .ok_or_else(|| AppError::BadRequest("模型配置目录不可用".into()))?;
+        let _g = self.providers_lock.lock().expect("providers lock");
+        let mut pf = cmx_agent_model::ProviderFile::load(&dir);
+        let p = pf
+            .get(id)
+            .ok_or_else(|| AppError::BadRequest("Provider 不存在".into()))?;
+        let cfg = p.config.clone();
+        let name = p.name.clone();
+        pf.active = Some(id.to_string());
+        pf.save(&dir).map_err(|e| AppError::BadRequest(format!("持久化失败：{e}")))?;
+        if let Some(slot) = &self.model_slot {
+            if cfg.base_url.is_empty() {
+                slot.swap(std::sync::Arc::new(crate::DemoModel));
+            } else {
+                slot.swap(std::sync::Arc::new(cmx_agent_model::OpenAiCompatModel::new(cfg.clone())));
+            }
+        }
+        Ok(serde_json::json!({
+            "service": "cmx-model",
+            "active": id,
+            "current": cfg.model,
+            "provider": name,
+            "note": format!("已切换到「{name}」· {}", cfg.model),
         }))
     }
 
@@ -435,7 +600,7 @@ impl AgentApp {
     /// B2：列出可选模型（前门 list_models → 模型选择器）。
     /// `current` = 当前生效模型（真实 provider 的 model，或 demo）；`candidates` = 同 provider 候选 + demo。
     pub fn list_models(&self) -> serde_json::Value {
-        let cfg = cmx_agent_model::ModelProviderConfig::resolve(self.effective_model_config_dir().as_deref());
+        let cfg = cmx_agent_model::resolve_active(self.effective_model_config_dir().as_deref());
         let (current, provider, base_url) = match &cfg {
             Some(c) => (c.model.clone(), provider_label(&c.base_url), c.base_url.clone()),
             None => ("demo".to_string(), "离线演示".to_string(), String::new()),
@@ -462,8 +627,8 @@ impl AgentApp {
     }
 
     /// B2：切换模型（前门 set_model）。`model=="demo"` → 换 DemoModel（仅本进程，不持久化）；
-    /// 否则在当前 provider 上换模型名 → 热换 + 持久化 model.json（下次启动沿用）。
-    pub fn set_model(&self, model: &str) -> AppResult<serde_json::Value> {
+    /// 否则在指定（或当前激活）provider 条目上换模型名 → 热换 + 持久化 providers.json（下次启动沿用）。
+    pub fn set_model(&self, model: &str, provider_id: Option<&str>) -> AppResult<serde_json::Value> {
         let slot = self
             .model_slot
             .as_ref()
@@ -471,20 +636,31 @@ impl AgentApp {
         if model.eq_ignore_ascii_case("demo") {
             slot.swap(std::sync::Arc::new(crate::DemoModel));
             return Ok(serde_json::json!({ "service": "cmx-model", "current": "demo", "persisted": false,
-                "note": "已切到离线演示模型（本次会话；重启按 model.json）" }));
+                "note": "已切到离线演示模型（本次会话；重启按 providers.json）" }));
         }
-        let dir = self.effective_model_config_dir();
-        let mut cfg = cmx_agent_model::ModelProviderConfig::resolve(dir.as_deref())
-            .ok_or_else(|| AppError::BadRequest("未配置真实模型（无 model.json/env），只能用 demo".into()))?;
-        cfg.model = model.to_string();
-        slot.swap(std::sync::Arc::new(cmx_agent_model::OpenAiCompatModel::new(cfg.clone())));
-        // 持久化到 model.json（切换后重启沿用）。
-        let mut persisted = false;
-        if let Some(ref d) = dir {
-            persisted = cfg.save(d).is_ok();
+        let dir = self
+            .effective_model_config_dir()
+            .ok_or_else(|| AppError::BadRequest("模型配置目录不可用".into()))?;
+        let _g = self.providers_lock.lock().expect("providers lock");
+        let mut pf = cmx_agent_model::ProviderFile::load(&dir);
+        // 目标条目：显式 provider_id 优先；否则激活条目（多 provider 菜单在非激活 provider 下换模型时带 id）。
+        let id = provider_id
+            .map(|s| s.to_string())
+            .or_else(|| pf.active.clone())
+            .ok_or_else(|| AppError::BadRequest("未配置真实模型（无 providers.json/model.json/env），只能用 demo".into()))?;
+        let p = pf
+            .get_mut(&id)
+            .ok_or_else(|| AppError::BadRequest("Provider 不存在（可能已被删除）".into()))?;
+        p.config.model = model.to_string();
+        let cfg = p.config.clone();
+        let name = p.name.clone();
+        let is_active = pf.active_id() == Some(id.as_str());
+        let persisted = pf.save(&dir).is_ok();
+        if is_active {
+            slot.swap(std::sync::Arc::new(cmx_agent_model::OpenAiCompatModel::new(cfg.clone())));
         }
         let note = if persisted { "已切换并持久化，立即生效" } else { "已切换（本次会话；持久化失败）" };
-        Ok(serde_json::json!({ "service": "cmx-model", "current": model, "provider": provider_label(&cfg.base_url),
+        Ok(serde_json::json!({ "service": "cmx-model", "current": model, "provider": name,
             "persisted": persisted, "note": note }))
     }
 

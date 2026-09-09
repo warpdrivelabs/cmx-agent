@@ -8,9 +8,11 @@ use std::sync::Arc;
 
 use cmx_agent_core::ModelSeam;
 
-/// 装配当前应使用的模型缝。`config_dir` = 桌面壳数据目录（含 `model.json`）；`None` 则仅看 env。
+/// 装配当前应使用的模型缝。`config_dir` = 桌面壳数据目录（含 `providers.json` / `model.json`）；`None` 则仅看 env。
+///
+/// 解析链：env > providers.json(active) > model.json 兜底（见 `cmx_agent_model::resolve_active`）。
 pub fn select_model(config_dir: Option<&Path>) -> Arc<dyn ModelSeam> {
-    match cmx_agent_model::ModelProviderConfig::resolve(config_dir) {
+    match cmx_agent_model::resolve_active(config_dir) {
         Some(cfg) => {
             tracing::info!(
                 "cmx-agent 模型：OpenAI 兼容 provider · model={} · base={}",

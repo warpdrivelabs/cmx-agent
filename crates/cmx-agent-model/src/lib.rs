@@ -9,6 +9,8 @@
 
 pub mod config;
 pub mod openai;
+pub mod providers;
 
 pub use config::ModelProviderConfig;
 pub use openai::{OpenAiCompatModel, build_request_body, parse_response};
+pub use providers::{NamedProvider, ProviderFile, new_id, resolve_active};

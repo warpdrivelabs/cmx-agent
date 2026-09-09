@@ -4,7 +4,7 @@
 //! `from_env()` 返回 `None` 表示未配置（此时壳回退到离线 `DemoModel`）。
 
 /// 一个 OpenAI 兼容 provider 的连接配置。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ModelProviderConfig {
     /// 形如 `https://api.deepseek.com`（无尾斜杠，不含 `/chat/completions`）。
     pub base_url: String,
@@ -13,9 +13,19 @@ pub struct ModelProviderConfig {
     /// 模型名，如 `deepseek-chat` / `gpt-4o` / `qwen-max`。
     pub model: String,
     /// 采样温度（agent 场景偏低以稳定工具调用）。
+    #[serde(default = "default_temperature")]
     pub temperature: f32,
     /// 请求超时（毫秒）。
+    #[serde(default = "default_timeout_ms")]
     pub timeout_ms: u64,
+}
+
+fn default_temperature() -> f32 {
+    0.2
+}
+
+fn default_timeout_ms() -> u64 {
+    60_000
 }
 
 impl ModelProviderConfig {

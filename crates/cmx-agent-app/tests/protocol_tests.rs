@@ -247,3 +247,230 @@ async fn set_policy_roundtrips_and_rejects_invalid_values() {
     assert_eq!(v["error"]["code"], "bad_request");
     assert!(v["error"]["message"].as_str().unwrap().contains("on-request"));
 }
+
+// ── 多 provider 配置（providers.json）：播种 / 增删改 / 激活切换 / 掩码 ──────────────
+// 注意：以下测试假定运行环境未设 CMX_AGENT_MODEL_* / DEEPSEEK_API_KEY（CI 干净环境成立），
+// 否则 env 优先会盖过 providers.json（与生产桌面壳「点击启动无 env」不一致）。
+
+fn resp(v: serde_json::Value) -> serde_json::Value {
+    v
+}
+
+#[tokio::test]
+async fn list_providers_seeds_from_model_json() {
+    let tmp = TempDir::new("prov-seed");
+    std::fs::write(
+        tmp.path().join("model.json"),
+        r#"{"base_url":"https://api.deepseek.com","api_key":"sk-VIZBzFoeHvpS12kZhK6abcd","model":"deepseek-r1"}"#,
+    )
+    .unwrap();
+    let app = app_with(&tmp, MockModel::saying("hi"));
+    let v = resp(serde_json::from_str(
+        &dispatch_json(&app, r#"{"cmd":"list_providers"}"#).await,
+    )
+    .unwrap());
+    assert_eq!(v["ok"], true, "{v:?}");
+    let providers = v["data"]["providers"].as_array().unwrap();
+    assert!(providers.len() >= 3, "至少三个内置预设：{providers:?}");
+    let ds = providers
+        .iter()
+        .find(|p| p["id"] == "builtin-deepseek")
+        .expect("builtin-deepseek 应存在");
+    assert_eq!(ds["builtin"], true);
+    assert_eq!(ds["model"], "deepseek-r1", "model.json 的 model 应合入命中条目");
+    let masked = ds["api_key_masked"].as_str().unwrap();
+    assert!(masked.starts_with("sk-..."), "掩码格式：{masked}");
+    assert!(masked.ends_with("abcd"), "掩码保留末 4 位：{masked}");
+    assert!(!serde_json::to_string(&v).unwrap().contains("VIZBz"), "明文 key 不得泄漏");
+    // model.json 命中 base_url → active 指向它
+    assert_eq!(ds["active"], true);
+}
+
+#[tokio::test]
+async fn save_provider_creates_and_list_grows() {
+    let tmp = TempDir::new("prov-create");
+    let app = app_with(&tmp, MockModel::saying("hi"));
+    let v = resp(serde_json::from_str(
+        &dispatch_json(
+            &app,
+            r#"{"cmd":"set_model_config","name":"我的Kimi","base_url":"https://api.moonshot.cn/v1","model":"kimi-v1","api_key_action":"set","api_key_value":"sk-kimi-secret-x"}"#,
+        )
+        .await,
+    )
+    .unwrap());
+    assert_eq!(v["ok"], true, "{v:?}");
+    let id = v["data"]["id"].as_str().unwrap().to_string();
+    assert!(id.starts_with("p-"), "新建 id 应为 p- 前缀：{id}");
+
+    let v = resp(serde_json::from_str(
+        &dispatch_json(&app, r#"{"cmd":"list_providers"}"#).await,
+    )
+    .unwrap());
+    let providers = v["data"]["providers"].as_array().unwrap();
+    assert_eq!(providers.len(), 4, "三内置 + 一自定义：{providers:?}");
+    let kimi = providers.iter().find(|p| p["id"] == id.as_str()).unwrap();
+    assert_eq!(kimi["name"], "我的Kimi");
+    assert_eq!(kimi["active"], false, "新建不自动激活");
+    assert_eq!(kimi["configured_key"], true);
+
+    // 回读（掩码）
+    let req = serde_json::json!({"cmd":"get_model_config","id":id});
+    let v = resp(serde_json::from_str(&dispatch_json(&app, &req.to_string()).await).unwrap());
+    assert_eq!(v["data"]["name"], "我的Kimi");
+    let masked = v["data"]["api_key_masked"].as_str().unwrap();
+    assert!(masked.starts_with("sk-..."), "{masked}");
+    assert!(!serde_json::to_string(&v).unwrap().contains("kimi-secret"), "明文 key 不得回传");
+}
+
+#[tokio::test]
+async fn save_provider_rejects_duplicate_name() {
+    let tmp = TempDir::new("prov-dup");
+    let app = app_with(&tmp, MockModel::saying("hi"));
+    let body = r#"{"cmd":"set_model_config","name":"我的Kimi","base_url":"https://api.moonshot.cn/v1","model":"k1","api_key_action":"keep"}"#;
+    let v = resp(serde_json::from_str(&dispatch_json(&app, body).await).unwrap());
+    assert_eq!(v["ok"], true, "{v:?}");
+    // 同名新建 → bad_request
+    let v = resp(serde_json::from_str(&dispatch_json(&app, body).await).unwrap());
+    assert_eq!(v["ok"], false, "{v:?}");
+    assert_eq!(v["error"]["code"], "bad_request");
+    assert!(v["error"]["message"].as_str().unwrap().contains("已存在"));
+    // 缺 name 的新建 → bad_request
+    let v = resp(serde_json::from_str(
+        &dispatch_json(&app, r#"{"cmd":"set_model_config","base_url":"http://x","model":"m","api_key_action":"keep"}"#).await,
+    )
+    .unwrap());
+    assert_eq!(v["ok"], false);
+    assert!(v["error"]["message"].as_str().unwrap().contains("名称"));
+}
+
+#[tokio::test]
+async fn save_provider_keep_preserves_key() {
+    let tmp = TempDir::new("prov-keep");
+    let app = app_with(&tmp, MockModel::saying("hi"));
+    let v = resp(serde_json::from_str(
+        &dispatch_json(
+            &app,
+            r#"{"cmd":"set_model_config","name":"网关","base_url":"https://gw.example.com/v1","model":"m1","api_key_action":"set","api_key_value":"sk-keep-me-9999"}"#,
+        )
+        .await,
+    )
+    .unwrap());
+    let id = v["data"]["id"].as_str().unwrap().to_string();
+    // keep 更新：换模型，key 沿用
+    let req = serde_json::json!({"cmd":"set_model_config","id":id,"model":"m2","base_url":"https://gw.example.com/v1","api_key_action":"keep"});
+    let v = resp(serde_json::from_str(&dispatch_json(&app, &req.to_string()).await).unwrap());
+    assert_eq!(v["ok"], true, "{v:?}");
+    let req = serde_json::json!({"cmd":"get_model_config","id":id});
+    let v = resp(serde_json::from_str(&dispatch_json(&app, &req.to_string()).await).unwrap());
+    let masked = v["data"]["api_key_masked"].as_str().unwrap();
+    assert_eq!(masked, "sk-...9999", "keep 后 key 不变：{masked}");
+    assert_eq!(v["data"]["model"], "m2");
+}
+
+#[tokio::test]
+async fn delete_provider_rejects_builtin() {
+    let tmp = TempDir::new("prov-del-builtin");
+    let app = app_with(&tmp, MockModel::saying("hi"));
+    let v = resp(serde_json::from_str(
+        &dispatch_json(&app, r#"{"cmd":"delete_provider","id":"builtin-deepseek"}"#).await,
+    )
+    .unwrap());
+    assert_eq!(v["ok"], false, "{v:?}");
+    assert_eq!(v["error"]["code"], "bad_request");
+    assert!(v["error"]["message"].as_str().unwrap().contains("内置"));
+}
+
+#[tokio::test]
+async fn delete_provider_and_active_fallback() {
+    let tmp = TempDir::new("prov-del");
+    let app = app_with(&tmp, MockModel::saying("hi"));
+    // 建一个自定义条目
+    let v = resp(serde_json::from_str(
+        &dispatch_json(
+            &app,
+            r#"{"cmd":"set_model_config","name":"临时的","base_url":"https://t.example.com/v1","model":"t1","api_key_action":"keep"}"#,
+        )
+        .await,
+    )
+    .unwrap());
+    let id = v["data"]["id"].as_str().unwrap().to_string();
+    // 激活它再删它 → active 回落到剩余第一条（内置预设）
+    let req = serde_json::json!({"cmd":"set_active_provider","id":id});
+    let v = resp(serde_json::from_str(&dispatch_json(&app, &req.to_string()).await).unwrap());
+    assert_eq!(v["ok"], true, "{v:?}");
+    let req = serde_json::json!({"cmd":"delete_provider","id":id});
+    let v = resp(serde_json::from_str(&dispatch_json(&app, &req.to_string()).await).unwrap());
+    assert_eq!(v["ok"], true, "{v:?}");
+    assert!(v["data"]["active"].is_string(), "删除激活条目后 active 应回落：{v:?}");
+    let v = resp(serde_json::from_str(
+        &dispatch_json(&app, r#"{"cmd":"list_providers"}"#).await,
+    )
+    .unwrap());
+    let providers = v["data"]["providers"].as_array().unwrap();
+    assert_eq!(providers.len(), 3);
+    assert!(providers.iter().any(|p| p["active"] == true), "有剩余内置条目被激活");
+}
+
+#[tokio::test]
+async fn set_active_provider_swaps_and_persists() {
+    let tmp = TempDir::new("prov-active");
+    let app = app_with(&tmp, MockModel::saying("hi"));
+    let v = resp(serde_json::from_str(
+        &dispatch_json(
+            &app,
+            r#"{"cmd":"set_model_config","name":"Kimi","base_url":"https://api.moonshot.cn/v1","model":"kimi-v1","api_key_action":"keep"}"#,
+        )
+        .await,
+    )
+    .unwrap());
+    let id = v["data"]["id"].as_str().unwrap().to_string();
+    let req = serde_json::json!({"cmd":"set_active_provider","id":id});
+    let v = resp(serde_json::from_str(&dispatch_json(&app, &req.to_string()).await).unwrap());
+    assert_eq!(v["ok"], true, "{v:?}");
+    assert_eq!(v["data"]["current"], "kimi-v1");
+    // 落盘断言
+    let raw = std::fs::read_to_string(tmp.path().join("providers.json")).unwrap();
+    let pf: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(pf["active"], id.as_str());
+}
+
+#[tokio::test]
+async fn set_model_writes_active_provider_entry() {
+    let tmp = TempDir::new("prov-setmodel");
+    std::fs::write(
+        tmp.path().join("model.json"),
+        r#"{"base_url":"https://api.deepseek.com","api_key":"sk-x","model":"deepseek-chat"}"#,
+    )
+    .unwrap();
+    let app = app_with(&tmp, MockModel::saying("hi"));
+    let v = resp(serde_json::from_str(
+        &dispatch_json(&app, r#"{"cmd":"set_model","model":"deepseek-r1"}"#).await,
+    )
+    .unwrap());
+    assert_eq!(v["ok"], true, "{v:?}");
+    // providers.json 的激活条目 model 已更新
+    let raw = std::fs::read_to_string(tmp.path().join("providers.json")).unwrap();
+    let pf: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let active = pf["active"].as_str().unwrap();
+    let entry = pf["providers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == active)
+        .unwrap();
+    assert_eq!(entry["model"], "deepseek-r1");
+}
+
+#[tokio::test]
+async fn set_model_demo_not_persisted() {
+    let tmp = TempDir::new("prov-demo");
+    let app = app_with(&tmp, MockModel::saying("hi"));
+    let v = resp(serde_json::from_str(
+        &dispatch_json(&app, r#"{"cmd":"set_model","model":"demo"}"#).await,
+    )
+    .unwrap());
+    assert_eq!(v["ok"], true, "{v:?}");
+    assert_eq!(v["data"]["persisted"], false);
+    // demo 切换不应写出 providers.json 的激活变化（无激活条目）
+    assert!(v["data"]["current"] == "demo");
+}

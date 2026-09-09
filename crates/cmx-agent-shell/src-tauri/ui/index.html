@@ -8,6 +8,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TrueMate - 专注工作，真心搭档</title>
 <style>
   :root{
     --bg:#0d0d0d; --panel:#141414; --panel2:#1a1a19; --surface:#1e1e1d; --hover:#242423;
@@ -214,6 +215,24 @@
   .mcfg-actions button{padding:7px 18px;border-radius:8px;font-size:13px;cursor:pointer;border:1px solid var(--border2);background:var(--bg);color:var(--ink)}
   .mcfg-actions .mcfg-save{background:var(--aqua);border-color:var(--aqua);color:#000;font-weight:600}
   .mcfg-actions .mcfg-save:hover{opacity:.88}
+  /* 多 provider：列表+详情双栏（mcfg-wide 仅模型面板用，IM 设置面板保持单栏 480px） */
+  .mcfg-box.mcfg-wide{width:min(760px,94vw);max-height:82vh;display:flex;flex-direction:column}
+  .mcfg-body{display:flex;gap:16px;flex:1;min-height:0;overflow:hidden}
+  .mcfg-list{width:200px;flex:0 0 auto;overflow-y:auto;border:1px solid var(--border);border-radius:10px;padding:6px;display:flex;flex-direction:column;gap:4px}
+  .mcfg-list-item{padding:8px 10px;border-radius:8px;cursor:pointer;font-size:13px;display:flex;justify-content:space-between;align-items:center;gap:6px}
+  .mcfg-list-item:hover{background:var(--hover)}
+  .mcfg-list-item.on{background:var(--hover);color:var(--aqua);font-weight:600}
+  .mcfg-list-item .lp-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mcfg-list-item .lp-badge{font-size:10px;color:var(--muted);border:1px solid var(--border2);border-radius:4px;padding:1px 4px;flex:0 0 auto}
+  .mcfg-list-item .lp-dot{width:6px;height:6px;border-radius:50%;background:var(--aqua);flex:0 0 auto}
+  .mcfg-list-item .lp-sub{font-size:10.5px;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400}
+  .mcfg-list-new{margin-top:4px;border:1px dashed var(--border2);border-radius:8px;text-align:center;padding:7px 0;cursor:pointer;font-size:12.5px;color:var(--muted)}
+  .mcfg-list-new:hover{color:var(--aqua);border-color:var(--aqua)}
+  .mcfg-detail{flex:1;min-width:0;overflow-y:auto;padding-right:2px}
+  .mcfg-hint{font-size:11.5px;color:var(--muted);line-height:1.5;margin-top:2px}
+  .mcfg-actions .mcfg-danger{color:#e5484d;border-color:#e5484d;background:none}
+  .mcfg-actions .mcfg-danger:hover{background:rgba(229,72,77,.08)}
+  .mcfg-actions .mcfg-danger:disabled{opacity:.35;cursor:not-allowed}
 
   /* ── 主区 ── */
   main{flex:1;display:flex;flex-direction:column;min-width:0;position:relative}
@@ -282,6 +301,15 @@
   #tabviews.on{display:block}
   .tabview{display:none;height:100%;flex-direction:column;min-height:0}
   .tabview.active{display:flex}
+  .im-connecting{align-items:center;justify-content:center;gap:14px}
+  .im-center{display:flex;flex-direction:column;align-items:center;gap:14px}
+  .im-center .ico{width:64px;height:64px;border-radius:18px;display:flex;align-items:center;justify-content:center;
+    font-size:32px;background:linear-gradient(135deg,var(--aqua),var(--green));box-shadow:0 6px 24px rgba(31,177,130,.28)}
+  .im-center .txt{font-size:17px;font-weight:600;color:var(--ink);letter-spacing:.5px}
+  .im-center .sub{font-size:12.5px;color:var(--muted)}
+  .im-center .spin{width:18px;height:18px;border-radius:50%;border:2px solid var(--border2);border-top-color:var(--aqua);
+    animation:imspin 1s linear infinite}
+  @keyframes imspin{to{transform:rotate(360deg)}}
   .session-view{flex:1;display:flex;flex-direction:column;min-height:0}
   .log{flex:1;overflow:auto;padding:22px;display:flex;flex-direction:column;gap:11px}
   .row{display:flex;gap:10px}
@@ -503,6 +531,7 @@
        无交通灯可借，标题条改左对齐 + 右侧补最小化/最大化/关闭按钮（win-ctrls，initPlatformChrome 按平台显隐）。
        data-tauri-drag-region：Tauri 原生拖动；按钮不带该属性故可点。 -->
   <div class="titlebar" data-tauri-drag-region>
+    <span class="tb-title" data-tauri-drag-region>TrueMate - 专注工作，真心搭档</span>
     <div class="sp" data-tauri-drag-region></div>
     <div class="tb-ctrls">
       <button class="tb-btn" data-act="toggleSidebar" title="隐藏/显示左侧栏"><span class="ico" id="tb-side-ico">⇤</span></button>
@@ -575,53 +604,66 @@
     <div class="mi" data-act="toggleTheme"><span class="mi-i">☀</span> 切换主题</div>
     <div class="mi" data-act="checkUpdate"><span class="mi-i">⭮</span> 检查更新</div>
     <div class="mi-sep"></div>
+    <div class="mi" data-act="menuAbout"><span class="mi-i">ⓘ</span> 关于 TrueMate</div>
   </div>
   <!-- 模型选择弹层（点 composer 的 ◎ 模型按钮弹出；锚在按钮上方，点外部关闭）。 -->
   <div class="cmxmenu modelmenu" id="modelmenu"></div>
-  <!-- 模型配置面板（Modal）：可视化配置 base_url / api_key / model / temperature / timeout_ms -->
-  <div class="mcfg-overlay hidden" id="mcfg-overlay" onclick="if(event.target===this)closeModelConfig()">
-    <div class="mcfg-box">
-      <div class="mcfg-head">⚙ 模型配置 <button onclick="closeModelConfig()">✕</button></div>
-      <div class="mcfg-row">
-        <label>预设 Provider</label>
-        <select id="mcfg-preset" onchange="mcfgApplyPreset(this.value)">
-          <option value="">自定义</option>
-          <option value="mlamp">MLamp（llmgw-bz.mlamp.cn/v1）</option>
-          <option value="deepseek">DeepSeek（api.deepseek.com/v1）</option>
-          <option value="openai">OpenAI（api.openai.com/v1）</option>
-        </select>
-      </div>
-      <div class="mcfg-row">
-        <label>Base URL</label>
-        <input id="mcfg-base-url" type="text" placeholder="https://api.xxx.com/v1" oninput="mcfgRefreshCandidates()">
-      </div>
-      <div class="mcfg-row">
-        <label>API Key</label>
-        <div class="mcfg-key-wrap">
-          <input id="mcfg-api-key" type="password" placeholder="（脱敏；点 🔓 解锁编辑）" readonly>
-          <button id="mcfg-key-lock-btn" onclick="mcfgToggleKeyLock()" title="解锁/锁定 API Key">🔒</button>
+  <!-- 模型配置面板（Modal）：多 provider 列表+详情（内置预设不可删 + 自定义命名条目可增删）。
+       交互走 data-act 委托 + 显式 addEventListener（内联 onclick/onchange 被 Tauri 壳 CSP 拦截，勿用）。 -->
+  <div class="mcfg-overlay hidden" id="mcfg-overlay">
+    <div class="mcfg-box mcfg-wide">
+      <div class="mcfg-head">⚙ 模型配置 <button data-act="mcfgClose">✕</button></div>
+      <div class="mcfg-body">
+        <div class="mcfg-list" id="mcfg-list"></div>
+        <div class="mcfg-detail">
+          <div class="mcfg-row">
+            <label>名称</label>
+            <input id="mcfg-name" type="text" placeholder="如 我的Kimi / 公司网关">
+          </div>
+          <div class="mcfg-row">
+            <label>预设 Provider（新增时快速填充）</label>
+            <select id="mcfg-preset">
+              <option value="">自定义</option>
+              <option value="mlamp">MLamp（llmgw-bz.mlamp.cn/v1）</option>
+              <option value="deepseek">DeepSeek（api.deepseek.com/v1）</option>
+              <option value="openai">OpenAI（api.openai.com/v1）</option>
+            </select>
+          </div>
+          <div class="mcfg-row">
+            <label>Base URL</label>
+            <input id="mcfg-base-url" type="text" placeholder="https://api.xxx.com/v1">
+          </div>
+          <div class="mcfg-row">
+            <label>API Key</label>
+            <div class="mcfg-key-wrap">
+              <input id="mcfg-api-key" type="password" placeholder="（脱敏；点 🔓 解锁编辑）" readonly>
+              <button id="mcfg-key-lock-btn" data-act="mcfgKeyLock" title="解锁/锁定 API Key">🔒</button>
+            </div>
+          </div>
+          <div class="mcfg-row">
+            <label>模型</label>
+            <input id="mcfg-model" type="text" list="mcfg-model-list" placeholder="如 mlamp/deepseek-v4-flash">
+            <datalist id="mcfg-model-list"></datalist>
+          </div>
+          <div class="mcfg-row">
+            <label>Temperature</label>
+            <div class="mcfg-temp-row">
+              <input id="mcfg-temp" type="range" min="0" max="1" step="0.01" value="0.2">
+              <span class="mcfg-temp-val" id="mcfg-temp-val">0.20</span>
+            </div>
+          </div>
+          <div class="mcfg-row">
+            <label>超时 (ms)</label>
+            <input id="mcfg-timeout" type="number" min="5000" max="300000" step="1000" value="60000">
+          </div>
+          <div class="mcfg-hint" id="mcfg-hint"></div>
         </div>
-      </div>
-      <div class="mcfg-row">
-        <label>模型</label>
-        <input id="mcfg-model" type="text" list="mcfg-model-list" placeholder="如 mlamp/deepseek-v4-flash">
-        <datalist id="mcfg-model-list"></datalist>
-      </div>
-      <div class="mcfg-row">
-        <label>Temperature</label>
-        <div class="mcfg-temp-row">
-          <input id="mcfg-temp" type="range" min="0" max="1" step="0.01" value="0.2"
-            oninput="document.getElementById('mcfg-temp-val').textContent=parseFloat(this.value).toFixed(2)">
-          <span class="mcfg-temp-val" id="mcfg-temp-val">0.20</span>
-        </div>
-      </div>
-      <div class="mcfg-row">
-        <label>超时 (ms)</label>
-        <input id="mcfg-timeout" type="number" min="5000" max="300000" step="1000" value="60000">
       </div>
       <div class="mcfg-actions">
-        <button onclick="closeModelConfig()">取消</button>
-        <button class="mcfg-save" onclick="saveModelConfig()">保存</button>
+        <button data-act="mcfgDelete" id="mcfg-del-btn" class="mcfg-danger">删除</button>
+        <span style="flex:1"></span>
+        <button data-act="mcfgClose">取消</button>
+        <button class="mcfg-save" data-act="mcfgSave">保存</button>
       </div>
     </div>
   </div>
@@ -730,7 +772,7 @@
 
     <!-- 空态默认内容（无任何 tab 时显示，就像首页）-->
     <section id="home">
-      <div class="hero"><span class="g">cmx</span>，我帮你</div>
+      <div class="hero"><span class="g">TrueMate</span> - 专注工作，真心搭档</div>
       <div class="cats">
         <div class="cat active">☕ 日常办公</div>
         <div class="cat" title="占位">⌨ 代码开发</div>
@@ -1700,6 +1742,7 @@ async function imcfgSave(){
   if(r&&r.ok){ showToast("IM 配置："+((r.data&&r.data.note)||"已保存")); closeSettings(); }
   else { showToast("保存失败："+((r&&r.error&&r.error.message)||"未知")); }
 }
+function menuAbout(){ closeMenu(); alert("TrueMate - 专注工作，真心搭档\n版本 "+APP_VERSION+"\n\ncmx 企业桌面智能体 · 同核多壳架构\n形(前门) / 核(回合循环+守卫) / 体(cmx 引擎连接器)"); }
 
 // ── Windows/Linux 窗口控件（最小化/最大化/关闭）+ 无边框缩放 ──
 // macOS 用系统红绿灯（Overlay 标题栏），不建这些；仅非 macOS 且在 Tauri 壳内才生效（Web 壳无 __TAURI__.window）。
@@ -1784,11 +1827,11 @@ function showPanel(name){
     document.getElementById("panel-"+p).classList.toggle("on", p===name);
     document.getElementById("act-"+p).classList.toggle("active", p===name);
   });
-  if(name==="im") renderIM();
+  if(name==="im"){ renderIM(); openIM(); }
   if(name==="plugins") loadPluginSidebar();
 }
 
-// 即时通讯：Telegram 式会话列表（占位数据）
+// 即时通讯侧栏：Telegram 式会话列表（占位数据）
 const IM_DATA = [
   {nm:"财务审批群",     av:"💰", c:"#eb6834", msg:"李经理：付款单已提交，请审批", tm:"09:42", unread:3},
   {nm:"cmx-flow 助手",  av:"🔀", c:"#2a78d6", msg:"采购付款审批流程已完成", tm:"09:15", unread:0},
@@ -1807,6 +1850,20 @@ function renderIM(){
       <div class="r2"><span class="msg">${esc(m.msg)}</span>${m.unread?`<span class="unread">${m.unread}</span>`:""}</div></div>`;
     box.append(it);
   });
+}
+
+// 即时通讯：点活动栏 💬 在主内容区开 tab，正中显示联信连接提示（真实联信接入前的占位）
+function openIM(){
+  const t=openTab({id:"im", kind:"im", title:"即时通讯", ico:"💬"});
+  if(!t.view.dataset.built){
+    t.view.dataset.built="1";
+    t.view.className="tabview im-connecting";
+    t.view.innerHTML=`<div class="im-center">
+      <div class="ico">💬</div>
+      <div class="txt">智能版联信正在连接中...</div>
+    </div>`;
+  }
+  activateTab("im");
 }
 
 // 插件管理：VSCode 式已装/市场列表（占位数据）
@@ -2037,15 +2094,23 @@ async function openModelMenu(el){
   const menu=document.getElementById("modelmenu");
   if(menu.classList.contains("on")){ menu.classList.remove("on"); return; }
   closeMenu();
-  const r=await call({cmd:"list_models"});
+  const r=await call({cmd:"list_providers"});
   if(!r||!r.ok){ showToast("取模型列表失败"); return; }
-  const d=r.data; const cur=d.current;
-  const head=`<div class="mm-head">${esc(d.provider||"模型")}${d.baseUrl?` · <span class="mm-b">${esc(d.baseUrl.replace(/^https?:\/\//,""))}</span>`:""}</div>`;
-  const items=(d.candidates||[]).map(c=>{
-    const on=c.model===cur;
-    return `<div class="mi mm-item${on?' on':''}" data-act="setModelChoice" data-model="${esc(c.model)}"><span class="mm-ck">${on?'✓':''}</span> ${esc(c.label||c.model)}</div>`;
+  const d=r.data;
+  // 多 provider 分组：每个 provider 一行（点击整体切换），激活条目下缩进列候选模型（点击换模型）。
+  const parts=(d.providers||[]).map(p=>{
+    const on=!!p.active;
+    let html=`<div class="mi mm-head" data-act="setProviderChoice" data-id="${esc(p.id)}" style="cursor:pointer">`
+      +`<span>${on?'✓ ':'&nbsp;&nbsp;&nbsp;'}${esc(p.name||p.id)}</span>`
+      +`<span class="mm-b">${esc((p.model||"—")+(p.configured_key?"":" · 未填Key"))}</span></div>`;
+    if(on){
+      html+=(p.candidates||[]).map(c=>
+        `<div class="mi mm-item" style="padding-left:26px" data-act="setModelChoice" data-model="${esc(c.model)}" data-pid="${esc(p.id)}"><span class="mm-ck">${c.model===p.model?'✓':''}</span> ${esc(c.label||c.model)}</div>`
+      ).join("");
+    }
+    return html;
   }).join("");
-  menu.innerHTML=head+items+(d.configurable?"":`<div class="mm-note">未配置真实模型（model.json/env），仅 demo 可用</div>`)
+  menu.innerHTML=parts
     +`<div class="mi mm-item" style="margin-top:4px;border-top:1px solid var(--border);padding-top:6px" data-act="openModelConfig">⚙ 配置模型…</div>`;
   // 锚到按钮上方
   const rect=el.getBoundingClientRect();
@@ -2054,16 +2119,25 @@ async function openModelMenu(el){
   menu.style.top="auto";
   menu.classList.add("on");
 }
+async function setProviderChoice(el){
+  const id=el.dataset.id;
+  document.getElementById("modelmenu").classList.remove("on");
+  const r=await call({cmd:"set_active_provider", id});
+  if(r&&r.ok){ showToast((r.data&&r.data.note)||"已切换"); refreshModelLabel(); }
+  else { showToast("切换失败："+((r&&r.error&&r.error.message)||"未知")); }
+}
 async function setModelChoice(el){
-  const model=el.dataset.model;
+  const model=el.dataset.model, pid=el.dataset.pid;
   document.getElementById("modelmenu").classList.remove("on");
   setModelLabel(model);
-  const r=await call({cmd:"set_model", model});
+  const payload={cmd:"set_model", model};
+  if(pid) payload.provider_id=pid;
+  const r=await call(payload);
   if(r&&r.ok){ showToast("已切换模型 · "+((r.data&&r.data.note)||model)); }
   else { showToast("切换失败："+((r&&r.error&&r.error.message)||"未知")); refreshModelLabel(); }
 }
 
-// —— 模型配置面板 ——
+// —— 模型配置面板（多 provider：列表+详情）——
 const MCFG_PRESETS = {
   mlamp:    "https://llmgw-bz.mlamp.cn/v1",
   deepseek: "https://api.deepseek.com/v1",
@@ -2075,37 +2149,103 @@ const MCFG_CANDIDATES = {
   openai:   ["gpt-4o","gpt-4o-mini","o1","o1-mini"],
 };
 let _mcfgKeyUnlocked = false;
+let _mcfgProviders = [];      // list_providers 快照（面板期间）
+let _mcfgSelId = null;        // 当前选中条目 id；null = 新建态
+let _mcfgIsNew = false;       // 「＋ 新增」后为 true，保存前选中项视为新条目
 
-async function openModelConfig(){
-  closeMenu();
+function mcfgLockKey(){
   _mcfgKeyUnlocked = false;
   const keyInput = document.getElementById("mcfg-api-key");
   const lockBtn  = document.getElementById("mcfg-key-lock-btn");
   keyInput.readOnly = true; keyInput.type = "password";
   lockBtn.textContent = "🔒";
-  const r = await call({cmd:"get_model_config"});
+}
+async function openModelConfig(){
+  closeMenu();
+  mcfgLockKey();
+  const r = await call({cmd:"list_providers"});
   if(!r||!r.ok){ showToast("读取配置失败"); return; }
-  const d = r.data;
-  document.getElementById("mcfg-base-url").value  = d.base_url    || "";
-  keyInput.value                                   = d.api_key_masked || "";
-  document.getElementById("mcfg-model").value      = d.model       || "";
-  const temp = typeof d.temperature === "number" ? d.temperature : 0.2;
-  document.getElementById("mcfg-temp").value       = temp;
-  document.getElementById("mcfg-temp-val").textContent = temp.toFixed(2);
-  document.getElementById("mcfg-timeout").value    = d.timeout_ms  || 60000;
-  mcfgSetPreset(d.base_url || "");
-  mcfgUpdateCandidates(d.candidates || []);
+  _mcfgProviders = r.data.providers || [];
+  // 默认选中激活条目；无激活选第一个。
+  _mcfgSelId = (_mcfgProviders.find(p=>p.active) || _mcfgProviders[0] || {}).id || null;
+  _mcfgIsNew = false;
+  mcfgRenderList();
+  await mcfgFillDetail(_mcfgSelId);
   document.getElementById("mcfg-overlay").classList.remove("hidden");
 }
 function closeModelConfig(){
   document.getElementById("mcfg-overlay").classList.add("hidden");
 }
+// 左列渲染：provider 名 + （激活圆点 / 内置徽标）+ 当前模型副行；底部「＋ 新增」。
+function mcfgRenderList(){
+  const list=document.getElementById("mcfg-list");
+  const items=_mcfgProviders.map(p=>{
+    const on=p.id===_mcfgSelId && !_mcfgIsNew;
+    return `<div class="mcfg-list-item${on?' on':''}" data-act="providerSelect" data-id="${esc(p.id)}">`
+      +`<div style="min-width:0"><div class="lp-name">${esc(p.name||p.id)}</div>`
+      +`<div class="lp-sub">${esc(p.model||"—")}</div></div>`
+      +(p.active?'<span class="lp-dot" title="当前激活"></span>':"")
+      +(p.builtin?'<span class="lp-badge">内置</span>':"")
+      +`</div>`;
+  }).join("");
+  list.innerHTML=items+`<div class="mcfg-list-new" data-act="mcfgNew">＋ 新增 Provider</div>`;
+}
+// 右侧详情回填（切选中 / 重开面板共用）。id 为空 = 新建态清空表单。
+async function mcfgFillDetail(id){
+  mcfgLockKey();
+  const nameInput=document.getElementById("mcfg-name");
+  const hint=document.getElementById("mcfg-hint");
+  const delBtn=document.getElementById("mcfg-del-btn");
+  if(!id){
+    nameInput.value=""; document.getElementById("mcfg-base-url").value="";
+    document.getElementById("mcfg-api-key").value="";
+    document.getElementById("mcfg-model").value="";
+    document.getElementById("mcfg-temp").value=0.2;
+    document.getElementById("mcfg-temp-val").textContent="0.20";
+    document.getElementById("mcfg-timeout").value=60000;
+    document.getElementById("mcfg-preset").value="";
+    mcfgUpdateCandidates([]);
+    delBtn.disabled=true;
+    hint.textContent="新条目保存后不会自动激活，用上方 ◎ 菜单切换。";
+    return;
+  }
+  const r=await call({cmd:"get_model_config", id});
+  if(!r||!r.ok){ showToast("读取配置失败"); return; }
+  const d=r.data;
+  nameInput.value=d.name||"";
+  document.getElementById("mcfg-base-url").value  = d.base_url || "";
+  document.getElementById("mcfg-api-key").value    = d.api_key_masked || "";
+  document.getElementById("mcfg-model").value      = d.model || "";
+  const temp = typeof d.temperature === "number" ? d.temperature : 0.2;
+  document.getElementById("mcfg-temp").value       = temp;
+  document.getElementById("mcfg-temp-val").textContent = temp.toFixed(2);
+  document.getElementById("mcfg-timeout").value    = d.timeout_ms || 60000;
+  mcfgSetPreset(d.base_url || "");
+  mcfgUpdateCandidates(d.candidates || []);
+  delBtn.disabled = !!d.builtin;   // 内置不可删
+  hint.textContent = d.builtin ? "内置预设：可填 Key / 换模型，不可删除。"
+    : (d.active ? "当前激活。" : "未激活，保存后用 ◎ 菜单切换。");
+}
+// 切换左列选中：丢弃未保存的表单改动（与「取消」同语义，刻意不弹确认）。
+async function mcfgSelectProvider(el){
+  const id=el.dataset.id;
+  if(id===_mcfgSelId && !_mcfgIsNew) return;
+  _mcfgSelId=id; _mcfgIsNew=false;
+  mcfgRenderList();
+  await mcfgFillDetail(id);
+}
+// ＋ 新增：清空表单进入新建态（预设下拉可用于快速填充）。
+function mcfgNew(){
+  _mcfgIsNew=true; _mcfgSelId=null;
+  mcfgRenderList();
+  mcfgFillDetail(null);
+  document.getElementById("mcfg-name").focus();
+}
 function mcfgToggleKeyLock(){
   const input = document.getElementById("mcfg-api-key");
   const btn   = document.getElementById("mcfg-key-lock-btn");
   if(_mcfgKeyUnlocked){
-    input.readOnly = true; input.type = "password";
-    btn.textContent = "🔒"; _mcfgKeyUnlocked = false;
+    mcfgLockKey();
     input.value = ""; // 锁回后清空，防止明文残留
   } else {
     input.readOnly = false; input.type = "text"; input.value = "";
@@ -2133,13 +2273,17 @@ function mcfgUpdateCandidates(list){
   dl.innerHTML = list.map(m=>`<option value="${esc(m)}">`).join("");
 }
 async function saveModelConfig(){
-  const baseUrl  = document.getElementById("mcfg-base-url").value.trim();
-  const model    = document.getElementById("mcfg-model").value.trim();
-  const temp     = parseFloat(document.getElementById("mcfg-temp").value);
-  const timeout  = parseInt(document.getElementById("mcfg-timeout").value, 10);
+  const name    = document.getElementById("mcfg-name").value.trim();
+  const baseUrl = document.getElementById("mcfg-base-url").value.trim();
+  const model   = document.getElementById("mcfg-model").value.trim();
+  const temp    = parseFloat(document.getElementById("mcfg-temp").value);
+  const timeout = parseInt(document.getElementById("mcfg-timeout").value, 10);
+  if(_mcfgIsNew && !name){ showToast("名称不能为空"); return; }
   if(!baseUrl){ showToast("Base URL 不能为空"); return; }
   if(!model){   showToast("模型名不能为空");   return; }
   const payload = {cmd:"set_model_config", base_url:baseUrl, model, temperature:temp, timeout_ms:timeout};
+  if(_mcfgIsNew || name) payload.name = name;
+  if(!_mcfgIsNew && _mcfgSelId) payload.id = _mcfgSelId;
   if(_mcfgKeyUnlocked){
     const key = document.getElementById("mcfg-api-key").value.trim();
     payload.api_key_action = "set";
@@ -2151,9 +2295,33 @@ async function saveModelConfig(){
   if(r&&r.ok){
     showToast("已保存 · "+((r.data&&r.data.note)||model));
     refreshModelLabel();
-    closeModelConfig();
+    // 保存后回到该条目（新建则选中新 id），刷新列表。
+    _mcfgSelId = (r.data&&r.data.id) || _mcfgSelId;
+    _mcfgIsNew = false;
+    const lr = await call({cmd:"list_providers"});
+    if(lr&&lr.ok) _mcfgProviders = lr.data.providers || [];
+    mcfgRenderList();
+    await mcfgFillDetail(_mcfgSelId);
   } else {
     showToast("保存失败："+((r&&r.error&&r.error.message)||"未知"));
+  }
+}
+// 删除（仅自定义条目；内置按钮已禁用双保险）。
+async function deleteModelProvider(){
+  if(!_mcfgSelId || _mcfgIsNew) return;
+  const p=_mcfgProviders.find(x=>x.id===_mcfgSelId);
+  if(!p || p.builtin) return;
+  const r=await call({cmd:"delete_provider", id:_mcfgSelId});
+  if(r&&r.ok){
+    showToast((r.data&&r.data.note)||"已删除");
+    refreshModelLabel();
+    const lr=await call({cmd:"list_providers"});
+    if(lr&&lr.ok) _mcfgProviders = lr.data.providers || [];
+    _mcfgSelId = (_mcfgProviders.find(x=>x.active) || _mcfgProviders[0] || {}).id || null;
+    mcfgRenderList();
+    await mcfgFillDetail(_mcfgSelId);
+  } else {
+    showToast("删除失败："+((r&&r.error&&r.error.message)||"未知"));
   }
 }
 
@@ -2218,7 +2386,9 @@ function showToast(msg){
 // 内联 onclick 属性全被拦截。用委托（监听在 document 上，由 nonce'd 脚本注册）在两壳都工作。
 const ACTIONS = { newTask, openConnectors, startFromHome, toggleSidebar, toggleTheme, checkUpdate, applyUpdate, toggleMenu, menuSettings, menuAbout, toggleVoice, toggleUserMenu, userProfile, userSwitch, userWorkspace, userLogout,
   toggleTabOverflow, tabCtxClose, tabCtxCloseOthers, tabCtxCloseRight, tabCtxCloseAll, winMinimize, winToggleMaximize, winClose,
-  closeSettings, scfgSecretLock: scfgToggleSecretLock, scfgTgLock: scfgToggleTgLock, scfgQqLock: scfgToggleQqLock, imcfgSave };
+  closeSettings, scfgSecretLock: scfgToggleSecretLock, scfgTgLock: scfgToggleTgLock, scfgQqLock: scfgToggleQqLock, imcfgSave,
+  mcfgClose: closeModelConfig, mcfgKeyLock: mcfgToggleKeyLock, mcfgSave: saveModelConfig,
+  mcfgNew: mcfgNew, mcfgDelete: deleteModelProvider };
 document.addEventListener("click", e=>{
   const el = e.target.closest("[data-act]");
   if(!el){ closeMenu(); closeTabCtx(); document.getElementById("modelmenu").classList.remove("on"); document.getElementById("tab-dropdown").classList.remove("on"); return; }
@@ -2238,6 +2408,8 @@ document.addEventListener("click", e=>{
   } else if(act === "pluginToggle"){ pluginToggle(el);
   } else if(act === "openModelMenu"){ openModelMenu(el);
   } else if(act === "setModelChoice"){ setModelChoice(el);
+  } else if(act === "setProviderChoice"){ setProviderChoice(el);
+  } else if(act === "providerSelect"){ mcfgSelectProvider(el);
   } else if(act === "openModelConfig"){ closeMenu(); openModelConfig();
   } else if(act === "toggleVoice"){
     toggleVoice(el);
@@ -2254,6 +2426,17 @@ document.getElementById("scfg-kind").addEventListener("change", scfgSwitchKind);
 {
   const _scfgOverlay = document.getElementById("settings-overlay");
   _scfgOverlay.addEventListener("click", e => { if(e.target === _scfgOverlay) closeSettings(); });
+}
+// 模型面板：preset 下拉 / base-url 输入 / 温度滑杆的事件（内联 on* 被两壳 CSP 拦截，显式监听）；
+// 点遮罩空白处关闭（target 必须是遮罩自身，避免点进表单误关）。
+document.getElementById("mcfg-preset").addEventListener("change", e => mcfgApplyPreset(e.target.value));
+document.getElementById("mcfg-base-url").addEventListener("input", mcfgRefreshCandidates);
+document.getElementById("mcfg-temp").addEventListener("input", e => {
+  document.getElementById("mcfg-temp-val").textContent = parseFloat(e.target.value).toFixed(2);
+});
+{
+  const _mcfgOverlay = document.getElementById("mcfg-overlay");
+  _mcfgOverlay.addEventListener("click", e => { if(e.target === _mcfgOverlay) closeModelConfig(); });
 }
 
 // 初始化主题（读上次选择，缺省深色）

@@ -42,22 +42,42 @@ pub enum AppRequest {
     TogglePlugin { name: String, enabled: bool },
     /// B2 列出可选模型（模型选择器：当前 + 同 provider 候选 + demo）。
     ListModels,
-    /// B2 切换模型（热换 + 持久化 model.json；`model=="demo"` 换离线演示）。
-    SetModel { model: String },
+    /// B2 切换模型（热换 + 持久化 providers.json；`model=="demo"` 换离线演示）。
+    /// `provider_id` 缺省 = 激活条目；指定 = 在该 provider 条目上换模型（多 provider 菜单用）。
+    SetModel {
+        model: String,
+        #[serde(default)]
+        provider_id: Option<String>,
+    },
+    /// 多 provider：列出全部命名 provider 条目（模型菜单分组 + 配置面板左列共用）。
+    ListProviders,
+    /// 多 provider：删除一个自定义条目（内置不可删；删激活条目时激活回落）。
+    DeleteProvider { id: String },
+    /// 多 provider：整体切换激活条目（持久化 + 热换模型槽）。
+    SetActiveProvider { id: String },
     /// 运行时切换两旋钮（沙箱能力 × 审批许可；其余 Policy 项不动）。
     /// `sandbox`: `read-only|workspace-write|danger-full-access`；`approval`: `never|on-request|unless-trusted`。
     SetPolicy { sandbox: String, approval: String },
-    /// B2 读取当前完整模型配置（api_key 脱敏），供配置面板填充表单。
-    GetModelConfig,
-    /// B2 保存完整模型配置并热换（配置面板「保存」调用）。
+    /// B2 读取完整模型配置（api_key 脱敏），供配置面板填充表单。
+    /// `id` 缺省 = 激活 provider（旧行为兼容）；有值 = 指定条目（多 provider 面板）。
+    GetModelConfig {
+        #[serde(default)]
+        id: Option<String>,
+    },
+    /// B2 保存模型配置（配置面板「保存」调用）——按 id upsert 多 provider 条目。
+    /// `id` 缺省/空 = 新建（name 必填）；`name` 更新时空缺沿用旧名。
     SetModelConfig {
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        name: Option<String>,
         base_url: String,
         model: String,
         #[serde(default)]
         temperature: Option<f32>,
         #[serde(default)]
         timeout_ms: Option<u64>,
-        /// "keep" 保留现有 key；"set" 使用 api_key_value。
+        /// "keep" 保留该条目现有 key；"set" 使用 api_key_value。
         #[serde(default = "default_keep")]
         api_key_action: String,
         #[serde(default)]
@@ -202,7 +222,12 @@ async fn dispatch_inner(app: &AgentApp, req: AppRequest) -> Result<AppResponse, 
             Ok(AppResponse::ok(app.toggle_plugin(&name, enabled)?))
         }
         AppRequest::ListModels => Ok(AppResponse::ok(app.list_models())),
-        AppRequest::SetModel { model } => Ok(AppResponse::ok(app.set_model(&model)?)),
+        AppRequest::SetModel { model, provider_id } => {
+            Ok(AppResponse::ok(app.set_model(&model, provider_id.as_deref())?))
+        }
+        AppRequest::ListProviders => Ok(AppResponse::ok(app.list_providers())),
+        AppRequest::DeleteProvider { id } => Ok(AppResponse::ok(app.delete_provider(&id)?)),
+        AppRequest::SetActiveProvider { id } => Ok(AppResponse::ok(app.set_active_provider(&id)?)),
         AppRequest::SetPolicy { sandbox, approval } => {
             let s: cmx_agent_core::SandboxMode = parse_enum("sandbox", &sandbox)
                 .map_err(AppError::BadRequest)?;
@@ -210,13 +235,15 @@ async fn dispatch_inner(app: &AgentApp, req: AppRequest) -> Result<AppResponse, 
                 .map_err(AppError::BadRequest)?;
             Ok(AppResponse::ok(app.set_policy(s, a)?))
         }
-        AppRequest::GetModelConfig => Ok(AppResponse::ok(app.get_model_config())),
-        AppRequest::SetModelConfig { base_url, model, temperature, timeout_ms, api_key_action, api_key_value } => {
+        AppRequest::GetModelConfig { id } => Ok(AppResponse::ok(app.get_model_config(id.as_deref()))),
+        AppRequest::SetModelConfig { id, name, base_url, model, temperature, timeout_ms, api_key_action, api_key_value } => {
             let mut payload = serde_json::json!({
                 "base_url": base_url,
                 "model": model,
                 "api_key_action": api_key_action,
             });
+            if let Some(i) = id { payload["id"] = serde_json::json!(i); }
+            if let Some(n) = name { payload["name"] = serde_json::json!(n); }
             if let Some(t) = temperature { payload["temperature"] = serde_json::json!(t); }
             if let Some(ms) = timeout_ms { payload["timeout_ms"] = serde_json::json!(ms); }
             if let Some(k) = api_key_value { payload["api_key_value"] = serde_json::json!(k); }
