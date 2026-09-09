@@ -1,0 +1,62 @@
+{
+  "comment": "协议 fixture 快照（方案 §12 第 6 条）：样例抓自 Rust dispatch_json 真实输出，Phase 3 起按命令逐个补全。后端改字段而前端未跟随时，快照测试即红。",
+  "requests": {
+    "login": { "cmd": "login", "username": "u", "password": "p" },
+    "current_user": { "cmd": "current_user" },
+    "logout": { "cmd": "logout" },
+    "get_events_tail": { "cmd": "get_events", "session_id": "s1", "limit": 50 },
+    "get_events_before": {
+      "cmd": "get_events",
+      "session_id": "s1",
+      "limit": 50,
+      "before": 30
+    },
+    "set_policy": {
+      "cmd": "set_policy",
+      "sandbox": "read-only",
+      "approval": "on-request"
+    },
+    "approve": {
+      "cmd": "approve",
+      "call_id": "c1",
+      "approved": true,
+      "all": false,
+      "session_id": "s1"
+    }
+  },
+  "responses": {
+    "current_user": { "ok": true, "data": { "user": null } },
+    "get_events": {
+      "ok": true,
+      "data": {
+        "events": [
+          {
+            "seq": 1,
+            "ts": "2026-09-09T00:00:00Z",
+            "kind": { "kind": "turn_started", "turn": 1, "user_input": "hi" }
+          },
+          {
+            "seq": 2,
+            "ts": "2026-09-09T00:00:01Z",
+            "kind": { "kind": "user_message", "text": "hi" }
+          }
+        ],
+        "total": 2,
+        "start": 0,
+        "title": "hi"
+      }
+    },
+    "error_envelope": {
+      "ok": false,
+      "error": { "code": "bad_request", "message": "..." }
+    }
+  },
+  "bus_envelope": {
+    "session_id": "s1",
+    "event": {
+      "seq": 1,
+      "ts": "2026-09-09T02:56:18.713243Z",
+      "kind": { "kind": "turn_started", "turn": 1, "user_input": "只回答两个字：收到" }
+    }
+  }
+}

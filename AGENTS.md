@@ -64,6 +64,11 @@ echo '{"cmd":"send","session_id":"s1","text":"算 2+3"}' | \
    加新前门=加薄壳，不改核。同理**前端单份**：真源 = `crates/cmx-agent-web/ui/`（双壳通吃，桌面形态默认
    `display:none`），Tauri 壳 `src-tauri/ui/` 是仓根 `./sync-ui.sh` 的生成物勿手改；**数据根统一**：
    两壳共用 `cmx_agent_app::shared_data_dir()`（`CMX_AGENT_DATA_DIR` 可覆盖），model.json / 会话配一次双壳生效。
+   > **当前态（2026-09-09）**：生产 UI 已**回滚为旧 `ui/` 双 HTML**（用户要求先用旧版），
+   > 双窗口登录门照旧；新前端 `frontend/`（Vite + TS + Lit + UI5 WC，npm 管理禁 pnpm）
+   > **已就绪并保留**——Web 壳挂 `/next` 路由可随时体验，切回生产按方案 §19/Phase 6 切换点
+   > 执行（Web `/` 指内嵌资产表 + Tauri `frontendDist` 指 dist + 删三登录命令）。
+   > 改新前端见下方「前端开发规范」；改旧 UI 时 `sync-ui.sh` 同步 Tauri 侧照旧。
 7. **增量落库**：每回合只 append 新事件（`SessionStore::append_events`），绝不重写历史行——与
    append-only 内核日志同构。回合号从日志派生（`Session::next_turn_no`），故重启可续。
 8. **会话 id 即路径**：`FileSessionStore` 必须挡路径注入（`/`、`..`、`\0`）——`store_tests.rs` 守住。
@@ -86,3 +91,15 @@ M0 核 ✅ → M1 桌面壳(Tauri)+本地文件 → M2 工具平面(接 cmx-*)+�
 
 改内核后至少跑：`cargo test --offline` 全绿 + `cargo clippy --offline --all-targets` 零告警。
 新增能力必须带测试；安全相关（守卫/沙箱/审批）必须含"该拒被拒"的负例。
+
+## 前端开发规范（frontend/，agent 与开发者必读）
+
+1. **改任何 UI 前先跑**：`cd frontend && npm run check`——不过不许提交（tsc + eslint + prettier + stylelint）。
+2. **颜色 / 圆角 / 间距 / 字号 / 阴影**：只允许 `var(--cmx-agent-*)`；裸值只出现在 `src/styles/seed.css`。
+3. **禁止直接使用 `--sap*`**（只有 `src/styles/ui5-bridge.css` 可以）与 `--_ui5_*`（任何地方都不可以）。
+4. **新组件前三问**：UI5 有现成控件吗？已有骨架（panel-card / filter-list）能 slot 吗？和现有组件像吗？
+   复制已有组件改造 = 打回。
+5. UI5 有现成控件就用，**禁止写转发包装组件**。
+6. **状态只经 `platform/stores`**，组件不 import bridge 协议文件（call / stream / session-event）。
+7. **依赖方向单向**：`app → features → platform → protocol`；features 之间禁止互相 import。
+8. 全部命令走 `frontend/README.md`（dev / check / test / build）；构建产物 `dist/` 迁移期入库。

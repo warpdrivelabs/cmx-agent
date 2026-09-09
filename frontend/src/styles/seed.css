@@ -1,0 +1,144 @@
+/*
+ * 种子层：全工程唯一定义原始值的地方（stylelint 豁免文件）。
+ * 取值参照 Ant Design 默认主题（亮色）与 dark algorithm 值域（暗色）。
+ * tone 经 html[data-cmx-skin-tone] 属性切换（沿用工作区 Neo 约束属性）。
+ */
+
+:root,
+html[data-cmx-skin-tone="light"] {
+  /* 色板 */
+  --cmx-agent-seed-color-primary: #1677ff;
+  --cmx-agent-seed-color-success: #52c41a;
+  --cmx-agent-seed-color-warning: #faad14;
+  --cmx-agent-seed-color-error: #ff4d4f;
+  --cmx-agent-seed-color-info: #1677ff;
+
+  /* 文本（AntD 亮色梯度） */
+  --cmx-agent-seed-color-text: rgba(0, 0, 0, 0.88);
+  --cmx-agent-seed-color-text-secondary: rgba(0, 0, 0, 0.65);
+  --cmx-agent-seed-color-text-tertiary: rgba(0, 0, 0, 0.45);
+  --cmx-agent-seed-color-text-inverse: #fff;
+
+  /* 背景 */
+  --cmx-agent-seed-bg-container: #ffffff;
+  --cmx-agent-seed-bg-layout: #f5f5f5;
+  --cmx-agent-seed-bg-elevated: #ffffff;
+  --cmx-agent-seed-bg-hover: rgba(0, 0, 0, 0.04);
+
+  /* 边框 */
+  --cmx-agent-seed-color-border: #d9d9d9;
+  --cmx-agent-seed-color-border-secondary: #f0f0f0;
+
+  /* 品牌色梯度（hover / active / 弱背景） */
+  --cmx-agent-seed-color-primary-hover: #4096ff;
+  --cmx-agent-seed-color-primary-active: #0958d9;
+  --cmx-agent-seed-color-primary-bg: #e6f4ff;
+  --cmx-agent-seed-color-primary-bg-hover: #bae0ff;
+
+  /* 阴影（AntD boxShadow / boxShadowSecondary） */
+  --cmx-agent-seed-box-shadow:
+    0 6px 16px 0 rgba(0, 0, 0, 0.08), 0 3px 6px -4px rgba(0, 0, 0, 0.12),
+    0 9px 28px 8px rgba(0, 0, 0, 0.05);
+  --cmx-agent-seed-box-shadow-secondary:
+    0 6px 16px 0 rgba(0, 0, 0, 0.08), 0 3px 6px -4px rgba(0, 0, 0, 0.12),
+    0 9px 28px 8px rgba(0, 0, 0, 0.05);
+}
+
+html[data-cmx-skin-tone="dark"] {
+  /* 色板（暗色下 AntD 品牌色保持，背景与文本换梯度） */
+  --cmx-agent-seed-color-primary: #1677ff;
+  --cmx-agent-seed-color-success: #49aa19;
+  --cmx-agent-seed-color-warning: #d89614;
+  --cmx-agent-seed-color-error: #dc4446;
+  --cmx-agent-seed-color-info: #1677ff;
+
+  /* 文本（AntD dark 梯度） */
+  --cmx-agent-seed-color-text: rgba(255, 255, 255, 0.85);
+  --cmx-agent-seed-color-text-secondary: rgba(255, 255, 255, 0.65);
+  --cmx-agent-seed-color-text-tertiary: rgba(255, 255, 255, 0.45);
+  --cmx-agent-seed-color-text-inverse: rgba(0, 0, 0, 0.88);
+
+  /* 背景（AntD dark：container #141414 / layout #000） */
+  --cmx-agent-seed-bg-container: #141414;
+  --cmx-agent-seed-bg-layout: #000000;
+  --cmx-agent-seed-bg-elevated: #1f1f1f;
+  --cmx-agent-seed-bg-hover: rgba(255, 255, 255, 0.08);
+
+  /* 边框 */
+  --cmx-agent-seed-color-border: #424242;
+  --cmx-agent-seed-color-border-secondary: #303030;
+
+  /* 品牌色梯度（暗色） */
+  --cmx-agent-seed-color-primary-hover: #4096ff;
+  --cmx-agent-seed-color-primary-active: #0958d9;
+  --cmx-agent-seed-color-primary-bg: #111a2c;
+  --cmx-agent-seed-color-primary-bg-hover: #112545;
+}
+
+/* 尺寸 / 字号 / 圆角（tone 无关） */
+:root {
+  --cmx-agent-seed-border-radius: 6px;
+  --cmx-agent-seed-border-radius-lg: 8px;
+  --cmx-agent-seed-border-radius-sm: 4px;
+  --cmx-agent-seed-control-height: 32px;
+  --cmx-agent-seed-control-height-lg: 40px;
+  --cmx-agent-seed-control-height-sm: 24px;
+  --cmx-agent-seed-font-size: 14px;
+  --cmx-agent-seed-font-size-lg: 16px;
+  --cmx-agent-seed-font-size-sm: 12px;
+  --cmx-agent-seed-line-width: 1px;
+  --cmx-agent-seed-space-xs: 4px;
+  --cmx-agent-seed-space-sm: 8px;
+  --cmx-agent-seed-space-md: 12px;
+  --cmx-agent-seed-space-lg: 16px;
+  --cmx-agent-seed-space-xl: 24px;
+}
+
+/* Neo 皮肤质感变体（§13.3）：skin 只作用于 Lit 展示层，不驱动 UI5 主题。
+ * none = 无质感（扁平：去阴影/弱边框），plain = 默认质感。 */
+html[data-cmx-skin="none"] {
+  --cmx-agent-seed-box-shadow: none;
+  --cmx-agent-seed-box-shadow-secondary: none;
+  --cmx-agent-seed-color-border: var(--cmx-agent-seed-color-border-secondary);
+}
+
+/* ── 登录页品牌区（深空主题，还原旧 login.html 视觉；唯一裸值处=本文件）── */
+:root {
+  /* 品牌双色（青 + 绿渐变系） */
+  --cmx-agent-brand-cyan: #36cfc9;
+  --cmx-agent-brand-green: #1fb182;
+  --cmx-agent-brand-green-bright: #22c55e;
+  --cmx-agent-brand-green-hover: #34d399;
+
+  /* 深空背景渐变（brand panel） */
+  --cmx-agent-brand-space-1: #071018;
+  --cmx-agent-brand-space-2: #05100c;
+  --cmx-agent-brand-space-3: #050811;
+
+  /* 表单区背景渐变 */
+  --cmx-agent-brand-form-1: #0d121c;
+  --cmx-agent-brand-form-2: #080b12;
+  --cmx-agent-brand-form-tint: #0b0f18;
+
+  /* 表单文字与输入 */
+  --cmx-agent-brand-text: #e8edf5;
+  --cmx-agent-brand-text-sub: #8b95a8;
+  --cmx-agent-brand-input-bg: #121822;
+  --cmx-agent-brand-input-bg-hover: #151c28;
+  --cmx-agent-brand-input-border: #2f3a4d;
+  --cmx-agent-brand-input-placeholder: #6a7385;
+
+  /* 白色透明度梯度（星尘/玻璃卡片/文字） */
+  --cmx-agent-brand-white-95: rgba(255, 255, 255, 0.95);
+  --cmx-agent-brand-white-85: rgba(255, 255, 255, 0.85);
+  --cmx-agent-brand-white-55: rgba(255, 255, 255, 0.55);
+  --cmx-agent-brand-white-45: rgba(255, 255, 255, 0.45);
+  --cmx-agent-brand-white-35: rgba(255, 255, 255, 0.35);
+  --cmx-agent-brand-glass: rgba(255, 255, 255, 0.03);
+  --cmx-agent-brand-glass-border: rgba(255, 255, 255, 0.06);
+
+  /* 星光（青绿光晕） */
+  --cmx-agent-brand-star-glow: rgba(169, 255, 210, 0.45);
+  --cmx-agent-brand-star-glow-strong: rgba(169, 255, 210, 0.65);
+  --cmx-agent-brand-star-core: rgba(186, 255, 215, 0.95);
+}

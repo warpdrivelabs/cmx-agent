@@ -13,3 +13,7 @@
 /.env.*
 *.jsonback
 *.bak
+node_modules/
+# 迁移期 frontend/dist 入库（方案 §15.1：Rust-only 开发流程依赖 dist 存在，build.rs fail-fast）；
+# Phase 6 后交 CI 构建时再改为忽略。
+!frontend/dist/

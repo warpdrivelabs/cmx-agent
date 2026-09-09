@@ -1,0 +1,54 @@
+/*
+ * 别名层：组件唯一可消费的 token 层（命名对齐 AntD alias token）。
+ * 组件里禁止直接引用 seed（stylelint 层级规则守卫，Phase 0 起逐步收紧）。
+ */
+
+:root {
+  /* 语义色 */
+  --cmx-agent-color-primary: var(--cmx-agent-seed-color-primary);
+  --cmx-agent-color-primary-hover: var(--cmx-agent-seed-color-primary-hover);
+  --cmx-agent-color-primary-active: var(--cmx-agent-seed-color-primary-active);
+  --cmx-agent-color-primary-bg: var(--cmx-agent-seed-color-primary-bg);
+  --cmx-agent-color-primary-bg-hover: var(--cmx-agent-seed-color-primary-bg-hover);
+  --cmx-agent-color-success: var(--cmx-agent-seed-color-success);
+  --cmx-agent-color-warning: var(--cmx-agent-seed-color-warning);
+  --cmx-agent-color-error: var(--cmx-agent-seed-color-error);
+  --cmx-agent-color-info: var(--cmx-agent-seed-color-info);
+
+  /* 文本 */
+  --cmx-agent-color-text: var(--cmx-agent-seed-color-text);
+  --cmx-agent-color-text-secondary: var(--cmx-agent-seed-color-text-secondary);
+  --cmx-agent-color-text-tertiary: var(--cmx-agent-seed-color-text-tertiary);
+  --cmx-agent-color-text-inverse: var(--cmx-agent-seed-color-text-inverse);
+
+  /* 背景 */
+  --cmx-agent-bg-container: var(--cmx-agent-seed-bg-container);
+  --cmx-agent-bg-layout: var(--cmx-agent-seed-bg-layout);
+  --cmx-agent-bg-elevated: var(--cmx-agent-seed-bg-elevated);
+  --cmx-agent-bg-hover: var(--cmx-agent-seed-bg-hover);
+
+  /* 边框 */
+  --cmx-agent-color-border: var(--cmx-agent-seed-color-border);
+  --cmx-agent-color-border-secondary: var(--cmx-agent-seed-color-border-secondary);
+
+  /* 阴影 */
+  --cmx-agent-box-shadow: var(--cmx-agent-seed-box-shadow);
+  --cmx-agent-box-shadow-secondary: var(--cmx-agent-seed-box-shadow-secondary);
+
+  /* 密度 */
+  --cmx-agent-border-radius: var(--cmx-agent-seed-border-radius);
+  --cmx-agent-border-radius-lg: var(--cmx-agent-seed-border-radius-lg);
+  --cmx-agent-border-radius-sm: var(--cmx-agent-seed-border-radius-sm);
+  --cmx-agent-control-height: var(--cmx-agent-seed-control-height);
+  --cmx-agent-control-height-lg: var(--cmx-agent-seed-control-height-lg);
+  --cmx-agent-control-height-sm: var(--cmx-agent-seed-control-height-sm);
+  --cmx-agent-font-size: var(--cmx-agent-seed-font-size);
+  --cmx-agent-font-size-lg: var(--cmx-agent-seed-font-size-lg);
+  --cmx-agent-font-size-sm: var(--cmx-agent-seed-font-size-sm);
+  --cmx-agent-line-width: var(--cmx-agent-seed-line-width);
+  --cmx-agent-space-xs: var(--cmx-agent-seed-space-xs);
+  --cmx-agent-space-sm: var(--cmx-agent-space-sm);
+  --cmx-agent-space-md: var(--cmx-agent-seed-space-md);
+  --cmx-agent-space-lg: var(--cmx-agent-seed-space-lg);
+  --cmx-agent-space-xl: var(--cmx-agent-seed-space-xl);
+}

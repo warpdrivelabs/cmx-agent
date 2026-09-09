@@ -1,0 +1,71 @@
+/* 应用壳布局（根组件不使用 shadow DOM，样式经 main.ts 全局引入）。 */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--cmx-agent-space-sm) var(--cmx-agent-space-lg);
+  background: var(--cmx-agent-bg-container);
+  border-bottom: var(--cmx-agent-line-width) solid var(--cmx-agent-color-border);
+  -webkit-app-region: drag;
+}
+
+.app-title {
+  font-size: var(--cmx-agent-font-size-lg);
+  color: var(--cmx-agent-color-text);
+}
+
+.tone-toggle {
+  -webkit-app-region: no-drag;
+  padding: var(--cmx-agent-space-xs) var(--cmx-agent-space-md);
+  border: var(--cmx-agent-line-width) solid var(--cmx-agent-color-border);
+  border-radius: var(--cmx-agent-border-radius);
+  background: var(--cmx-agent-bg-container);
+  color: var(--cmx-agent-color-text-secondary);
+  cursor: pointer;
+}
+
+.app-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--cmx-agent-space-sm);
+}
+
+.hdr-btn {
+  -webkit-app-region: no-drag;
+  min-width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: var(--cmx-agent-border-radius);
+  background: transparent;
+  color: var(--cmx-agent-color-text-secondary);
+  cursor: pointer;
+  font-size: 15px;
+}
+
+.hdr-btn:hover {
+  background: var(--cmx-agent-bg-hover);
+  color: var(--cmx-agent-color-text);
+}
+
+.user {
+  color: var(--cmx-agent-color-text-secondary);
+  font-size: var(--cmx-agent-font-size-sm);
+  -webkit-app-region: no-drag;
+}
+
+.tone-toggle:hover {
+  color: var(--cmx-agent-color-primary-hover);
+  border-color: var(--cmx-agent-color-primary-hover);
+}
+
+.app-main {
+  flex: 1;
+  min-height: 0;
+}

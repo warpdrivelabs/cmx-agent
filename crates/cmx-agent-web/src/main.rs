@@ -11,15 +11,20 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::State;
+use axum::extract::Request;
 use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
 use cmx_agent_app::{AgentApp, DesktopAppBuilder, dispatch_json};
 
-/// 前端单页（内嵌，免额外静态文件依赖）。
+// 新前端内嵌资产表（build.rs 生成，方案 §10.2）。当前生产用旧 UI（用户要求先回旧版），
+// 新前端挂 /next 随时可切（build.rs fail-fast 同时保证 frontend/dist 不缺位）。
+include!(concat!(env!("OUT_DIR"), "/ui_assets.rs"));
+
+/// 旧前端单页（内嵌）：当前生产入口。
 const INDEX_HTML: &str = include_str!("../ui/index.html");
-/// 登录页（内嵌）。参照 CMXPortalManager 登录方式，对接门户 /api/auth。
+/// 旧登录页（内嵌）：双窗口登录门配套。
 const LOGIN_HTML: &str = include_str!("../ui/login.html");
-/// cmx 品牌图标（左下按钮）。从项目 images/ 内嵌。
+/// cmx 品牌图标。
 const CMX_PNG: &[u8] = include_bytes!("../../../images/cmx.png");
 
 #[derive(Clone)]
@@ -46,18 +51,22 @@ async fn main() {
     let state = AppState { app: Arc::new(app) };
 
     let router = Router::new()
-        .route("/", get(index))
-        .route("/login", get(login_page))
+        .route("/", get(old_index))
+        .route("/login", get(old_login_page))
         .route("/cmx.png", get(cmx_png))
         .route("/api", post(api))
         .route("/api/stream", post(api_stream))
+        .route("/api/subscribe", get(api_subscribe))
         .route("/health", get(|| async { "ok" }))
+        .route("/next", get(next_ui))
+        .fallback(next_assets)
         .with_state(state);
 
-    // 绑定随机可用端口（127.0.0.1，本机独占，不对外）。
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+    // 绑定地址：CMX_AGENT_WEB_BIND 指定固定地址（开发态 Vite proxy 用），未设随机端口（本机独占）。
+    let bind_addr = std::env::var("CMX_AGENT_WEB_BIND").unwrap_or_else(|_| "127.0.0.1:0".to_string());
+    let listener = tokio::net::TcpListener::bind(&bind_addr)
         .await
-        .expect("bind loopback");
+        .unwrap_or_else(|e| panic!("bind {bind_addr} 失败：{e}"));
     let addr: SocketAddr = listener.local_addr().expect("local addr");
     let url = format!("http://{addr}/");
     tracing::info!("cmx-agent 桌面界面已就绪：{url}");
@@ -102,16 +111,53 @@ async fn build_app(workdir: &std::path::Path, data_dir: &std::path::Path) -> Age
     app
 }
 
-async fn index() -> Html<&'static str> {
+async fn old_index() -> Html<&'static str> {
     Html(INDEX_HTML)
 }
 
-async fn login_page() -> Html<&'static str> {
+async fn old_login_page() -> Html<&'static str> {
     Html(LOGIN_HTML)
 }
 
 async fn cmx_png() -> impl IntoResponse {
     ([(axum::http::header::CONTENT_TYPE, "image/png")], CMX_PNG)
+}
+
+/// 新前端入口（/next，切回时改为 /）。
+async fn next_ui() -> impl IntoResponse {
+    serve_asset("index.html")
+}
+
+/// 新前端静态资产：/next/** 查内嵌表；其余 404（旧 UI 的 /cmx.png 等已显式路由）。
+async fn next_assets(req: Request<axum::body::Body>) -> axum::response::Response {
+    let path = req.uri().path();
+    let Some(rel) = path.strip_prefix("/next/") else {
+        return (
+            axum::http::StatusCode::NOT_FOUND,
+            [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            "not found".to_string(),
+        )
+            .into_response();
+    };
+    let rel = if rel.is_empty() { "index.html" } else { rel };
+    serve_asset(rel)
+}
+
+/// 查内嵌资产表返回（hash 文件名原样；命中失败 404）。
+fn serve_asset(rel: &str) -> axum::response::Response {
+    match UI_ASSETS.iter().find(|a| a.path == rel) {
+        Some(asset) => (
+            [(axum::http::header::CONTENT_TYPE, asset.mime)],
+            asset.bytes,
+        )
+            .into_response(),
+        None => (
+            axum::http::StatusCode::NOT_FOUND,
+            [(axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            format!("asset not found: {rel}"),
+        )
+            .into_response(),
+    }
 }
 
 /// 唯一 API：前端 POST 一段 JSON 命令，回一段 JSON 响应（= Tauri invoke 边界的 HTTP 版）。
@@ -161,6 +207,39 @@ async fn api_stream(
 
     let stream = UnboundedReceiverStream::new(rx)
         .map(|v| Ok::<Event, std::convert::Infallible>(Event::default().data(v.to_string())));
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+/// 被动实时通道（方案 §7.4）：订阅会话事件总线，任意来源（本地 / IM 桥 / 后续 webhook）
+/// 的会话事件按 SSE 推给前端——IM 遥控「飞书发消息实时显示」的 Web 侧通路。
+/// 固定资源段、只读长连接，符合新接口规范。断线由 EventSource 自动重连，前端重连后
+/// 以 GetEvents 对账兜底，不依赖总线回放。
+async fn api_subscribe(State(state): State<AppState>) -> impl IntoResponse {
+    use axum::response::sse::{Event, KeepAlive, Sse};
+    use tokio_stream::wrappers::UnboundedReceiverStream;
+    use tokio_stream::StreamExt;
+
+    // broadcast → mpsc 转发（tokio-stream 的 BroadcastStream 需 sync feature，未启用）：
+    // 每订阅者一个转发 task，断连即 drop。
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
+    let mut broadcast_rx = state.app.event_bus().subscribe();
+    tokio::spawn(async move {
+        loop {
+            match broadcast_rx.recv().await {
+                Ok(env) => {
+                    let data = serde_json::to_string(&env).unwrap_or_default();
+                    if tx.send(Event::default().data(data)).is_err() {
+                        break; // 订阅者断开
+                    }
+                }
+                // 广播 lagging：跳过（事件已落库，前端重连后 GetEvents 对账兜底）
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(_) => break, // 总线关闭
+            }
+        }
+    });
+    let stream = UnboundedReceiverStream::new(rx)
+        .map(Ok::<Event, std::convert::Infallible>);
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
