@@ -1,8 +1,8 @@
 //! 更新胶水层（方案 C6）：前端统一入口 `check_update` / `download_and_install` / `get_app_version`。
 //!
-//! 壳内薄胶水，零业务逻辑（不许下沉进 cmx-agent-app）。平台分叉约定（方案 §5.1）：
-//! Win/mac 全走 tauri-plugin-updater（本文件）；Linux 将来加 `#[cfg(target_os = "linux")]`
-//! 自研分支（update_linux.rs），分叉只集中在下面两个命令里，禁止散落。
+//! 壳内薄胶水，零业务逻辑（不许下沉进 cmx-agent-app）。平台分叉约定（方案 D1 终版）：
+//! **三平台全走 tauri-plugin-updater 插件**——deb 更新通路是插件内置的（minisign 验签 →
+//! `pkexec dpkg -i`），不存在也不需要 Linux 自研分支；分叉只集中在下面两个命令里，禁止散落。
 //!
 //! 关键认知（Tauri updater 固定用法）：
 //! - `Update` 对象不可序列化，必须进程内传递——`check_update` 把句柄存全局槽，
@@ -12,6 +12,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_updater::{Update, UpdaterExt};
@@ -36,8 +37,30 @@ pub fn get_app_version(app: AppHandle) -> String {
 /// 有更新时把 `Update` 句柄存 [`PENDING_UPDATE`] 槽，供 [`download_and_install`] 取用。
 #[tauri::command]
 pub async fn check_update(app: AppHandle) -> Result<String, String> {
-    let updater = app.updater().map_err(|e| e.to_string())?;
-    let update = updater.check().await.map_err(|e| e.to_string())?;
+    // D5：endpoint 运行时注入（tauri.conf.json 不再持有 endpoints），URL = 构建期烧录的
+    // portal_base() + 固定路径（方案 §7.1）。endpoints 收 Vec<Url> 且返回 Result。
+    let endpoint = url::Url::parse(&format!(
+        "{}/agent-updates/latest.json",
+        crate::portal_base()
+    ))
+    .map_err(|e| e.to_string())?;
+    let mut update = app
+        .updater_builder()
+        .endpoints(vec![endpoint])
+        .map_err(|e| e.to_string())?
+        // 10s 只对检查请求安全：builder 的 timeout 会流入 Update 并同样作用于下载请求
+        // （updater 2.11.0 updater.rs :388/:698），见下方入槽前的放宽。
+        .timeout(Duration::from_secs(10))
+        // check() 挂在 Updater 上（builder 先 build；2.11.0 updater.rs :365/:432）。
+        .build()
+        .map_err(|e| e.to_string())?
+        .check()
+        .await
+        .map_err(|e| e.to_string())?;
+    // 入槽前把下载超时放宽为裕量（600s 按最大包体积；插件 download 同样吃这个字段）。
+    if let Some(u) = update.as_mut() {
+        u.timeout = Some(Duration::from_secs(600));
+    }
     Ok(serde_json::json!({
         "ok": true,
         "data": match update {
