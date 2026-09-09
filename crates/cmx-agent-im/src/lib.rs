@@ -25,11 +25,16 @@ pub use cmx_agent_connectors::im_binding::BoundIdentity;
 mod telegram;
 mod feishu;
 mod config;
+mod remocon;
 pub mod binding;
 pub use telegram::TelegramProvider;
 pub use feishu::FeishuProvider;
 pub use config::{ImConfig, ImKind, parse_allow};
 pub use binding::{ImBindingResolver, MockBindingResolver, PortalBindingResolver};
+pub use remocon::{
+    FeishuCreds, ImRemoconConfig, ResolvedIm, TelegramCreds, env_active, im_config_path,
+    load_im_config, resolve, save_im_config, test_feishu,
+};
 
 /// 一条入站 IM 消息。
 #[derive(Debug, Clone)]

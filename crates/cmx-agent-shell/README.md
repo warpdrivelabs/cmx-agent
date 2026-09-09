@@ -15,9 +15,17 @@ cd crates/cmx-agent-shell/src-tauri
 cargo run                 # 弹出原生窗口（首次已联网拉过 tauri 依赖，之后可 --offline）
 ```
 
+IM 遥控配置两条路（优先级 **env > im.json**，与 model.json 同范式）：
+
+- **GUI（面向用户）**：设置 → IM 遥控面板，填平台/App ID/Secret（脱敏锁交互，照模型 API Key），
+  「测试连接」秒级预检飞书凭证（tenant_access_token + Stream endpoint），保存落
+  `<data_dir>/im.json`，**重启应用生效**。白名单留空 = 仅已绑定用户可对话（推荐）。
+- **env（开发联调）**：`CMX_AGENT_IM_KIND/_FEISHU_APP_ID/_FEISHU_APP_SECRET/_ALLOW` 等，
+  env 配齐时 GUI 保存的 im.json 不生效（面板会提示）。
+
 数据根与 Web 壳**统一**：`ProjectDirs("com","pansoft","cmx-agent")` 的 data_dir（Windows
 `%APPDATA%\pansoft\cmx-agent\data`，macOS `~/Library/Application Support/com.pansoft.cmx-agent`），
-`model.json` / `mcp.json` / sessions / workspace 两壳共享——模型配置一次、双壳生效。隔离测试用
+`model.json` / `im.json` / `mcp.json` / sessions / workspace 两壳共享——模型配置一次、双壳生效。隔离测试用
 `CMX_AGENT_DATA_DIR` 环境变量指向临时目录。
 
 ## 与 Web 壳的关系（同核多壳）

@@ -49,14 +49,10 @@
   .cmx-act img{width:30px;height:30px;border-radius:8px;object-fit:cover;display:block}
   .cmx-act:hover{background:var(--hover)}
   /* 活动栏底部用户头像按钮 */
-  .user-act{padding:0;position:relative}
+  .user-act{padding:0}
   .user-act .uic{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--aqua),var(--green));
     display:flex;align-items:center;justify-content:center;font-size:16px}
   .user-act:hover{background:var(--hover)}
-  /* 用户头像右上角 IM 绑定角标（绿点表示已绑定 IM） */
-  .user-act .uic[data-badge]::after{content:attr(data-badge);position:absolute;right:-3px;top:-3px;min-width:15px;height:15px;
-    padding:0 3px;border-radius:8px;background:var(--green,#22c55e);color:#06210f;font-size:9.5px;font-weight:700;
-    display:flex;align-items:center;justify-content:center;border:1.5px solid var(--bg,#15151c);line-height:1}
   /* 用户菜单头部 */
   .usermenu{min-width:220px;bottom:52px}
   .um-head{display:flex;align-items:center;gap:10px;padding:8px 9px}
@@ -64,9 +60,6 @@
     display:flex;align-items:center;justify-content:center;font-size:20px}
   .um-info{min-width:0}
   .um-name{font-weight:700;font-size:14px} .um-mail{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .um-im{font-size:11px;color:var(--green,#22c55e);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .cmxmenu .mi-badge{margin-left:auto;font-size:10.5px;line-height:1;padding:3px 7px;border-radius:10px;background:var(--green,#22c55e);color:#06210f;font-weight:700}
-  .cmxmenu .mi-badge.zero{background:transparent;color:var(--muted,#999);border:1px solid var(--border,#444);font-weight:400}
   .um-danger{color:var(--red)} .um-danger:hover{background:rgba(227,73,72,.12)}
   button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
   ::-webkit-scrollbar{width:8px;height:8px} ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:4px}
@@ -635,18 +628,73 @@
       </div>
     </div>
   </div>
+  <!-- 设置面板（Modal）：IM 遥控连接配置（飞书/Telegram 凭证 → 后端 im.json；重启生效）。
+       复用模型面板的 mcfg-* 样式；交互走 data-act 委托（内联 onclick 被两壳 CSP 拦截，勿用）；
+       密文走「锁」交互（面板只回显掩码，解锁才能改，保存 keep/set 语义同 API Key）。 -->
+  <div class="mcfg-overlay hidden" id="settings-overlay">
+    <div class="mcfg-box">
+      <div class="mcfg-head">⚙ 设置 <button data-act="closeSettings">✕</button></div>
+      <div class="mcfg-row">
+        <label>IM 遥控</label>
+        <div class="mcfg-temp-row">
+          <select id="scfg-kind" style="flex:1">
+            <option value="feishu">飞书 Feishu</option>
+            <option value="telegram">Telegram</option>
+          </select>
+          <label style="display:flex;align-items:center;gap:5px;font-weight:400;font-size:12.5px;color:var(--ink2);white-space:nowrap">
+            <input type="checkbox" id="scfg-enabled" checked> 启用
+          </label>
+        </div>
+      </div>
+      <div id="scfg-feishu-block">
+        <div class="mcfg-row">
+          <label>App ID</label>
+          <input id="scfg-app-id" type="text" placeholder="cli_…（飞书开放平台 · 凭证与基础信息）">
+        </div>
+        <div class="mcfg-row">
+          <label>App Secret</label>
+          <div class="mcfg-key-wrap">
+            <input id="scfg-app-secret" type="password" placeholder="（脱敏；点 🔓 解锁填写）" readonly>
+            <button id="scfg-secret-lock" data-act="scfgSecretLock" title="解锁/锁定 App Secret">🔒</button>
+          </div>
+        </div>
+        <div class="mcfg-row">
+          <label>区域</label>
+          <select id="scfg-base">
+            <option value="">飞书 · 国内（open.feishu.cn）</option>
+            <option value="https://open.larksuite.com">Lark · 海外（open.larksuite.com）</option>
+          </select>
+        </div>
+      </div>
+      <div id="scfg-telegram-block" style="display:none">
+        <div class="mcfg-row">
+          <label>Bot Token</label>
+          <div class="mcfg-key-wrap">
+            <input id="scfg-tg-token" type="password" placeholder="（脱敏；点 🔓 解锁填写）" readonly>
+            <button id="scfg-tg-lock" data-act="scfgTgLock" title="解锁/锁定 Bot Token">🔒</button>
+          </div>
+        </div>
+      </div>
+      <div class="mcfg-row">
+        <label>会话白名单（chat_id，可选）</label>
+        <input id="scfg-allow" type="text" placeholder="留空 = 仅已绑定用户可对话（推荐）">
+      </div>
+      <div id="scfg-note" style="font-size:11.5px;color:var(--muted);margin:2px 0 6px;line-height:1.5"></div>
+      <div class="mcfg-actions">
+        <button data-act="closeSettings">取消</button>
+        <button id="scfg-test-btn" data-act="imcfgTest">测试连接</button>
+        <button class="mcfg-save" data-act="imcfgSave">保存</button>
+      </div>
+    </div>
+  </div>
   <!-- 用户菜单（点活动栏底部用户头像弹出）：用户信息 + 常用功能 -->
   <div class="cmxmenu usermenu" id="usermenu">    <div class="um-head">
       <div class="um-av" id="um-av">🐷</div>
-      <div class="um-info">
-        <div class="um-name" id="um-name">未登录</div>
-        <div class="um-mail" id="um-mail">点此登录 cmx 门户</div>
-        <div class="um-im" id="um-im" style="display:none"></div>
-      </div>
+      <div class="um-info"><div class="um-name" id="um-name">未登录</div><div class="um-mail" id="um-mail">点此登录 cmx 门户</div></div>
     </div>
     <div class="mi-sep"></div>
     <div class="mi" data-act="userProfile"><span class="mi-i">👤</span> 账户信息</div>
-    <div class="mi" data-act="imBinding"><span class="mi-i">🔗</span> IM 绑定（飞书）<span class="mi-badge" id="mi-im-badge" style="display:none"></span></div>
+    <div class="mi" data-act="imBinding"><span class="mi-i">🔗</span> IM 绑定（飞书）</div>
     <div class="mi" data-act="userSwitch"><span class="mi-i">⇄</span> 切换账户</div>
     <div class="mi" data-act="userWorkspace"><span class="mi-i">🗂</span> 工作空间</div>
     <div class="mi-sep"></div>
@@ -1551,7 +1599,92 @@ async function checkUpdate(){
 // cmx 底部菜单：开合 / 设置 / 关于
 function toggleMenu(){ document.getElementById("usermenu").classList.remove("on"); document.getElementById("cmxmenu").classList.toggle("on"); }
 function closeMenu(){ document.getElementById("cmxmenu").classList.remove("on"); document.getElementById("usermenu").classList.remove("on"); }
-function menuSettings(){ closeMenu(); alert("设置\n\n（M2 占位：主题、工作空间、默认权限、连接器地址等设置项将在此配置。）"); }
+// ── 设置 → IM 遥控连接配置（后端 im.json；Tauri 壳 invoke("im_config")）──
+// 密文交互照模型面板：打开即锁定（只回显掩码），解锁才能改，保存 keep/set 二选一。
+let _scfgSecretUnlocked=false, _scfgTgUnlocked=false;
+async function menuSettings(){
+  closeMenu();
+  if(!(window.__TAURI__ && window.__TAURI__.core)){
+    alert("IM 遥控当前仅在桌面版（Tauri 壳）可配置：Web 壳未装配 IM 桥。\n\n其余设置项（主题/工作空间等）为 M3 占位。");
+    return;
+  }
+  scfgResetLocks();
+  let r=null;
+  try{ r = JSON.parse(await window.__TAURI__.core.invoke("im_config",{action:"get"})); }catch(e){ showToast("读取失败："+e); return; }
+  if(!r||!r.ok){ showToast("读取 IM 配置失败："+((r&&r.error&&r.error.message)||"未知")); return; }
+  const d=r.data;
+  document.getElementById("scfg-kind").value    = d.kind||"feishu";
+  document.getElementById("scfg-enabled").checked= d.enabled!==false;
+  document.getElementById("scfg-app-id").value  = d.app_id||"";
+  document.getElementById("scfg-app-secret").value = d.app_secret_masked||"";
+  document.getElementById("scfg-base").value    = d.base||"";
+  document.getElementById("scfg-tg-token").value= d.telegram_token_masked||"";
+  document.getElementById("scfg-allow").value   = d.allow||"";
+  const note=[];
+  if(d.bridge) note.push(d.bridge);
+  if(d.env_active) note.push("⚠ 检测到环境变量 CMX_AGENT_IM_*（开发模式）优先生效，此处保存的配置暂不生效。");
+  if(!d.configured) note.push("尚未配置：填入你的 IM 机器人凭证（飞书自建应用 App ID/Secret），保存并重启即启用遥控。");
+  document.getElementById("scfg-note").textContent = note.join("  ·  ");
+  scfgSwitchKind();
+  document.getElementById("settings-overlay").classList.remove("hidden");
+}
+function closeSettings(){ document.getElementById("settings-overlay").classList.add("hidden"); }
+function scfgResetLocks(){
+  _scfgSecretUnlocked=false; _scfgTgUnlocked=false;
+  const s=document.getElementById("scfg-app-secret"), sb=document.getElementById("scfg-secret-lock");
+  const t=document.getElementById("scfg-tg-token"),  tb=document.getElementById("scfg-tg-lock");
+  s.readOnly=true; s.type="password"; s.value=""; sb.textContent="🔒";
+  t.readOnly=true; t.type="password"; t.value=""; tb.textContent="🔒";
+}
+function scfgToggleSecretLock(){
+  const input=document.getElementById("scfg-app-secret"), btn=document.getElementById("scfg-secret-lock");
+  if(_scfgSecretUnlocked){ input.readOnly=true; input.type="password"; input.value=""; btn.textContent="🔒"; _scfgSecretUnlocked=false; }
+  else { input.readOnly=false; input.type="text"; input.value=""; btn.textContent="🔓"; _scfgSecretUnlocked=true; input.focus(); }
+}
+function scfgToggleTgLock(){
+  const input=document.getElementById("scfg-tg-token"), btn=document.getElementById("scfg-tg-lock");
+  if(_scfgTgUnlocked){ input.readOnly=true; input.type="password"; input.value=""; btn.textContent="🔒"; _scfgTgUnlocked=false; }
+  else { input.readOnly=false; input.type="text"; input.value=""; btn.textContent="🔓"; _scfgTgUnlocked=true; input.focus(); }
+}
+// 平台切换：只显示所选 provider 的凭证块；测试按钮仅飞书支持（Telegram 预检后续追加）。
+function scfgSwitchKind(){
+  const kind=document.getElementById("scfg-kind").value;
+  document.getElementById("scfg-feishu-block").style.display   = kind==="feishu"   ? "" : "none";
+  document.getElementById("scfg-telegram-block").style.display = kind==="telegram" ? "" : "none";
+  document.getElementById("scfg-test-btn").style.display       = kind==="feishu"   ? "" : "none";
+}
+async function imcfgTest(){
+  const note=document.getElementById("scfg-note");
+  const kind=document.getElementById("scfg-kind").value;
+  if(kind!=="feishu"){ showToast("测试连接暂仅支持飞书"); return; }
+  const payload={kind, app_id:document.getElementById("scfg-app-id").value.trim(),
+    base:document.getElementById("scfg-base").value};
+  if(_scfgSecretUnlocked){ payload.app_secret=document.getElementById("scfg-app-secret").value.trim(); }
+  note.textContent="测试中…";
+  let r=null;
+  try{ r=JSON.parse(await window.__TAURI__.core.invoke("im_config",{action:"test", payload:JSON.stringify(payload)})); }
+  catch(e){ note.textContent="测试失败："+e; return; }
+  if(r&&r.ok){ note.textContent=r.data.result||"通过"; }
+  else { note.textContent="✕ "+((r&&r.error&&r.error.message)||"未知错误"); }
+}
+async function imcfgSave(){
+  const payload={
+    kind:document.getElementById("scfg-kind").value,
+    enabled:document.getElementById("scfg-enabled").checked,
+    app_id:document.getElementById("scfg-app-id").value.trim(),
+    base:document.getElementById("scfg-base").value,
+    allow:document.getElementById("scfg-allow").value.trim(),
+    app_secret_action:_scfgSecretUnlocked?"set":"keep",
+    telegram_token_action:_scfgTgUnlocked?"set":"keep",
+  };
+  if(_scfgSecretUnlocked) payload.app_secret_value=document.getElementById("scfg-app-secret").value.trim();
+  if(_scfgTgUnlocked)     payload.telegram_token_value=document.getElementById("scfg-tg-token").value.trim();
+  let r=null;
+  try{ r=JSON.parse(await window.__TAURI__.core.invoke("im_config",{action:"set", payload:JSON.stringify(payload)})); }
+  catch(e){ showToast("保存失败："+e); return; }
+  if(r&&r.ok){ showToast("IM 配置："+((r.data&&r.data.note)||"已保存")); closeSettings(); }
+  else { showToast("保存失败："+((r&&r.error&&r.error.message)||"未知")); }
+}
 function menuAbout(){ closeMenu(); alert("cmx 企业桌面智能体\n版本 "+APP_VERSION+"\n\n复刻并超越 WorkBuddy · 同核多壳架构\n形(前门) / 核(回合循环+守卫) / 体(cmx 引擎连接器)"); }
 
 // ── Windows/Linux 窗口控件（最小化/最大化/关闭）+ 无边框缩放 ──
@@ -1593,41 +1726,6 @@ document.querySelectorAll(".resize-handle").forEach(h=>{
 
 // 用户菜单
 let CURRENT_USER = null;   // {user_id, username, nickname, roles} 或 null
-let IM_BINDINGS = [];      // 当前登录用户的 IM 绑定列表（刷新/绑定时更新；驱动头像角标 + 菜单徽标）
-
-// provider 标签 → 中文名（绑定列表里存的是 "feishu"/"telegram" 这类 kind）。
-const IM_PROVIDER_LABELS = { feishu:"飞书", telegram:"Telegram", wechat:"微信", dingtalk:"钉钉" };
-function imProviderLabel(p){ return IM_PROVIDER_LABELS[p] || p || "IM"; }
-
-// 把 IM_BINDINGS 渲染到用户菜单：头像角标 + 菜单项徽标 + um-im 行。
-function renderImBadge(){
-  const n = IM_BINDINGS.length;
-  const umIm = document.getElementById("um-im");
-  const miBadge = document.getElementById("mi-im-badge");
-  const uic = document.getElementById("uic");
-  if(n > 0){
-    const labels = IM_BINDINGS.map(b=>imProviderLabel(b.provider)).filter(Boolean);
-    const uniq = [...new Set(labels)];
-    if(umIm){ umIm.style.display=""; umIm.textContent = "🔗 已绑定 "+uniq.join("、"); }
-    if(miBadge){ miBadge.style.display=""; miBadge.textContent = String(n); miBadge.classList.remove("zero"); }
-    if(uic){ uic.dataset.badge = String(n); }
-  }else{
-    if(umIm){ umIm.style.display="none"; umIm.textContent = ""; }
-    if(miBadge){ miBadge.style.display=""; miBadge.textContent = "未绑定"; miBadge.classList.add("zero"); }
-    if(uic){ delete uic.dataset.badge; }
-  }
-}
-
-// 拉取当前登录用户的 IM 绑定（无鉴权命令；失败静默，徽标按「未知/未拉到」处理）。
-async function refreshImBindings(){
-  if(!CURRENT_USER){ IM_BINDINGS = []; renderImBadge(); return; }
-  try{
-    const r = await call({cmd:"im_list_bindings"});
-    IM_BINDINGS = (r.ok && r.data && r.data.items) || [];
-  }catch(e){ IM_BINDINGS = []; }
-  renderImBadge();
-}
-
 // 拉取当前登录用户（前门 current_user），填充活动栏头像 + 用户菜单。未登录则显示占位。
 async function refreshUser(){
   try{
@@ -1648,7 +1746,6 @@ async function refreshUser(){
   document.getElementById("um-mail").textContent = u
     ? ("@"+u.username + (u.roles && u.roles.length ? " · "+u.roles.join("/") : ""))
     : "点此登录 cmx 门户";
-  refreshImBindings(); // 登录态变化后同步绑定徽标
 }
 function toggleUserMenu(){ document.getElementById("cmxmenu").classList.remove("on"); document.getElementById("usermenu").classList.toggle("on"); }
 function userProfile(){ closeMenu();
@@ -1684,28 +1781,24 @@ async function imBinding(){
     <div id="imb-list" style="min-height:36px;margin-bottom:10px"></div>
     <div style="text-align:right"><button id="imb-close" style="padding:5px 14px;border-radius:8px;border:1px solid var(--border,#444);background:transparent;color:inherit;cursor:pointer">关闭</button></div>`;
   ov.append(box);
+  ov.onclick=(e)=>{ if(e.target===ov) ov.remove(); };
+  box.querySelector("#imb-close").onclick=()=>ov.remove();
   document.body.append(ov);
 
-  let lastCount = -1; // 轮询时对比：绑定数从 N 增长到 N+1 提示「绑定成功」
   const codeEl=box.querySelector("#imb-code"), hintEl=box.querySelector("#imb-hint"), listEl=box.querySelector("#imb-list");
   const refreshList=async()=>{
     listEl.textContent="加载中…";
     const r=await call({cmd:"im_list_bindings"});
     const items=(r.ok&&r.data&&r.data.items)||[];
     if(!r.ok){ listEl.textContent="查询失败："+((r.error&&r.error.message)||"未知"); return; }
-    IM_BINDINGS = items; renderImBadge(); // 同步全局徽标
-    if(lastCount>=0 && items.length>lastCount){ showToast("✅ 绑定成功"); stopPolling(); }
-    lastCount = items.length;
     if(!items.length){ listEl.innerHTML='<span style="color:var(--muted,#999)">（暂无绑定）</span>'; return; }
     listEl.innerHTML="";
     items.forEach(b=>{
       const row=document.createElement("div");
-      row.style.cssText="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border,#333)";
-      const label=imProviderLabel(b.provider);
-      const sub=(b.im_username&&b.im_username!==CURRENT_USER.username)?(" · "+esc(b.im_username)):"";
-      row.innerHTML=`<span style="min-width:0"><span class="imb-tag" style="display:inline-block;padding:1px 7px;border-radius:6px;background:var(--hover,#2a2a3a);font-size:11px">${esc(label)}</span> <span style="font-family:monospace;font-size:11px;color:var(--muted,#999)">${esc(String(b.open_id).slice(0,12))}…</span>${sub}</span>`;
+      row.style.cssText="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border,#333)";
+      row.innerHTML=`<span>${esc(b.provider)} · <span style="font-family:monospace">${esc(String(b.open_id).slice(0,14))}…</span></span>`;
       const del=document.createElement("button");
-      del.textContent="解绑"; del.style.cssText="flex:none;padding:3px 10px;border-radius:6px;border:1px solid var(--border,#444);background:transparent;color:#f66;cursor:pointer";
+      del.textContent="解绑"; del.style.cssText="padding:3px 10px;border-radius:6px;border:1px solid var(--border,#444);background:transparent;color:#f66;cursor:pointer";
       del.onclick=async()=>{
         const r2=await call({cmd:"im_unbind",provider:b.provider,open_id:b.open_id});
         if(r2.ok){ showToast("已解绑"); refreshList(); } else { showToast("解绑失败："+((r2.error&&r2.error.message)||"未知")); }
@@ -1713,10 +1806,6 @@ async function imBinding(){
       row.append(del); listEl.append(row);
     });
   };
-  // 验证码生成后轮询绑定列表：用户在飞书发码核销后，前端主动感知新绑定（而非一次性 3s 刷新）。
-  let pollTimer = null;
-  const startPolling=()=>{ if(pollTimer) return; let n=0; pollTimer=setInterval(()=>{ n++; refreshList(); if(n>=20){ stopPolling(); } }, 3000); };
-  const stopPolling=()=>{ if(pollTimer){ clearInterval(pollTimer); pollTimer=null; } };
   box.querySelector("#imb-gen").onclick=async(e)=>{
     e.target.disabled=true; e.target.textContent="生成中…";
     const r=await call({cmd:"im_bind_gen_code"});
@@ -1725,10 +1814,8 @@ async function imBinding(){
     const d=r.data||{};
     codeEl.textContent=d.code||"";
     hintEl.innerHTML="在<b>飞书</b>里给机器人发送这个验证码完成绑定（"+((d.expires_in||300)/60)+" 分钟内有效）。";
-    refreshList(); startPolling(); // 立即刷一次 + 开始轮询，发码后自动感知新绑定
+    setTimeout(refreshList, 3000); // 用户发码后稍等刷新列表
   };
-  box.querySelector("#imb-close").onclick=()=>{ stopPolling(); ov.remove(); };
-  ov.onclick=(e)=>{ if(e.target===ov){ stopPolling(); ov.remove(); } };
   refreshList();
 }
 async function userLogout(){ closeMenu();
@@ -2179,7 +2266,8 @@ function showToast(msg){
 
 // 内联 onclick 属性全被拦截。用委托（监听在 document 上，由 nonce'd 脚本注册）在两壳都工作。
 const ACTIONS = { newTask, openConnectors, startFromHome, toggleSidebar, toggleTheme, checkUpdate, applyUpdate, toggleMenu, menuSettings, menuAbout, toggleVoice, toggleUserMenu, userProfile, imBinding, userSwitch, userWorkspace, userLogout,
-  toggleTabOverflow, tabCtxClose, tabCtxCloseOthers, tabCtxCloseRight, tabCtxCloseAll, winMinimize, winToggleMaximize, winClose };
+  toggleTabOverflow, tabCtxClose, tabCtxCloseOthers, tabCtxCloseRight, tabCtxCloseAll, winMinimize, winToggleMaximize, winClose,
+  closeSettings, scfgSecretLock: scfgToggleSecretLock, scfgTgLock: scfgToggleTgLock, imcfgTest, imcfgSave };
 document.addEventListener("click", e=>{
   const el = e.target.closest("[data-act]");
   if(!el){ closeMenu(); closeTabCtx(); document.getElementById("modelmenu").classList.remove("on"); document.getElementById("tab-dropdown").classList.remove("on"); return; }
@@ -2208,6 +2296,14 @@ document.addEventListener("click", e=>{
     ACTIONS[act]();
   }
 });
+
+// 设置面板：平台下拉的 change 委托管不了（click-only）→ 显式监听；点遮罩空白处关闭（target
+// 必须是遮罩自身，避免点进表单误关）。同样绕开被拦的内联 on* 属性。
+document.getElementById("scfg-kind").addEventListener("change", scfgSwitchKind);
+{
+  const _scfgOverlay = document.getElementById("settings-overlay");
+  _scfgOverlay.addEventListener("click", e => { if(e.target === _scfgOverlay) closeSettings(); });
+}
 
 // 初始化主题（读上次选择，缺省深色）
 applyTheme((()=>{ try{ return localStorage.getItem("cmx-theme")||"dark"; }catch(e){ return "dark"; } })());
