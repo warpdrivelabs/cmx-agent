@@ -17,7 +17,7 @@ export class CmxAgentAboutPanel extends LitElement {
   render() {
     return html`
       <cmx-agent-panel-card heading="关于">
-        <p><strong>cmx 企业桌面智能体</strong> · WebComponents 版</p>
+        <p><strong>TrueMate</strong> · WebComponents 版</p>
         <p>壳：${this.platform} · 核心：cmx-agent-app（同核多壳）</p>
         <p>前端：Vite + TypeScript + Lit + UI5 WebComponents · 主题：AntD 风格 L2</p>
       </cmx-agent-panel-card>

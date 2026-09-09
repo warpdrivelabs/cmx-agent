@@ -24,8 +24,13 @@ import { sessionStore } from "../../src/platform/stores/session-store";
 import type { SessionEvent } from "../../src/protocol/session-event";
 import type { EventsWindow } from "../../src/protocol/events-window";
 
-function ev(seq: number, kind: SessionEvent["kind"]): SessionEvent {
-  return { seq, ts: "2026-09-09T00:00:00Z", kind };
+/** 扁平事件构造（对齐 serde tag="kind" 实际序列化）。 */
+function ev(
+  seq: number,
+  kind: SessionEvent["kind"],
+  props: Record<string, unknown> = {}
+): SessionEvent {
+  return { seq, ts: "2026-09-09T00:00:00Z", kind, ...props } as SessionEvent;
 }
 
 function windowOf(events: SessionEvent[], total: number, start: number): EventsWindow {
@@ -53,7 +58,7 @@ describe("session-store 8.0 契约", () => {
   });
 
   it("尾加载：打开会话带 limit，不退化为全量", async () => {
-    callMock.mockResolvedValueOnce(okData(windowOf([ev(1, { kind: "note", text: "x" })], 1, 0)));
+    callMock.mockResolvedValueOnce(okData(windowOf([ev(1, "note", { text: "x" })], 1, 0)));
     await sessionStore.selectSession("s1");
     expect(callMock).toHaveBeenCalledWith(
       expect.objectContaining({ cmd: "get_events", session_id: "s1", limit: 50 })
@@ -71,22 +76,22 @@ describe("session-store 8.0 契约", () => {
           resolveS1 = r;
         })
     );
-    callMock.mockResolvedValueOnce(okData(windowOf([ev(2, { kind: "note", text: "b" })], 1, 0)));
+    callMock.mockResolvedValueOnce(okData(windowOf([ev(2, "note", { text: "b" })], 1, 0)));
     const p1 = sessionStore.selectSession("s1");
     const p2 = sessionStore.selectSession("s2");
     await tick();
     // s1 的响应在 s2 之后到达：必须被丢弃
-    resolveS1(okData(windowOf([ev(9, { kind: "note", text: "a" })], 9, 0)));
+    resolveS1(okData(windowOf([ev(9, "note", { text: "a" })], 9, 0)));
     await Promise.all([p1, p2]);
     expect(sessionStore.getState().windowsBySession["s2"]?.events[0]?.seq).toBe(2);
     expect(sessionStore.getState().windowsBySession["s1"]?.loaded).toBeFalsy();
   });
 
   it("seq 去重：被动通道与主动流重复到达只保留一条", async () => {
-    callMock.mockResolvedValueOnce(okData(windowOf([ev(1, { kind: "note", text: "x" })], 1, 0)));
+    callMock.mockResolvedValueOnce(okData(windowOf([ev(1, "note", { text: "x" })], 1, 0)));
     await sessionStore.selectSession("s1");
-    sessionStore.appendEvent("s1", ev(2, { kind: "user_message", text: "hi" }));
-    sessionStore.appendEvent("s1", ev(2, { kind: "user_message", text: "hi" }));
+    sessionStore.appendEvent("s1", ev(2, "user_message", { text: "hi" }));
+    sessionStore.appendEvent("s1", ev(2, "user_message", { text: "hi" }));
     const win = sessionStore.getState().windowsBySession["s1"];
     expect(win?.events.filter((e) => e.seq === 2)).toHaveLength(1);
   });
@@ -99,9 +104,9 @@ describe("session-store 8.0 契约", () => {
         // 模拟：回合进行中，同一事件经被动总线也到达
         passiveHandler?.({
           session_id: "s1",
-          event: ev(5, { kind: "user_message", text: "dup" })
+          event: ev(5, "user_message", { text: "dup" })
         });
-        onEvent(ev(5, { kind: "user_message", text: "dup" }));
+        onEvent(ev(5, "user_message", { text: "dup" }));
       }
     );
     await sessionStore.sendMessage("s1", "dup");
@@ -114,9 +119,9 @@ describe("session-store 8.0 契约", () => {
       okData(
         windowOf(
           [
-            ev(1, { kind: "approval_requested", call_id: "c1", tool: "shell", reason: "r" }),
-            ev(2, { kind: "approval_resolved", call_id: "c2", approved: true, by: "me" }),
-            ev(3, { kind: "approval_requested", call_id: "c3", tool: "fs_write", reason: "r" })
+            ev(1, "approval_requested", { call_id: "c1", tool: "shell", reason: "r" }),
+            ev(2, "approval_resolved", { call_id: "c2", approved: true, by: "me" }),
+            ev(3, "approval_requested", { call_id: "c3", tool: "fs_write", reason: "r" })
           ],
           3,
           0

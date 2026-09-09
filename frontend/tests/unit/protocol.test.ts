@@ -13,14 +13,14 @@ describe("协议 fixture 快照", () => {
     expect(res.data?.events).toHaveLength(2);
     expect(res.data?.total).toBe(2);
     expect(res.data?.start).toBe(0);
-    expect(res.data?.events[0]?.kind.kind).toBe("turn_started");
+    expect(res.data?.events[0]?.kind).toBe("turn_started");
   });
 
   it("总线信封结构可安全窄化为 SessionEventEnvelope", () => {
     const env = fixtures.bus_envelope as SessionEventEnvelope;
     expect(env.session_id).toBe("s1");
     expect(env.event.seq).toBe(1);
-    expect(env.event.kind.kind).toBe("turn_started");
+    expect(env.event.kind).toBe("turn_started");
   });
 
   it("请求命令名合法（TS 联合编译期保证 + 运行时抽检）", () => {

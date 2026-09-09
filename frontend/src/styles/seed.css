@@ -142,3 +142,61 @@ html[data-cmx-skin="none"] {
   --cmx-agent-brand-star-glow-strong: rgba(169, 255, 210, 0.65);
   --cmx-agent-brand-star-core: rgba(186, 255, 215, 0.95);
 }
+
+/* ── 工作台主题（还原旧 index.html 变量体系，data-cmx-skin-tone 切换亮暗）── */
+:root,
+html[data-cmx-skin-tone="dark"] {
+  --bg: #0d0d0d;
+  --panel: #141414;
+  --panel2: #1a1a19;
+  --surface: #1e1e1d;
+  --hover: #242423;
+  --ink: #f2f1ec;
+  --ink2: #b8b7ae;
+  --muted: #7d7c76;
+  --border: #2a2a28;
+  --border2: #333330;
+  --blue: #3987e5;
+  --aqua: #1fb182;
+  --violet: #9085e9;
+  --magenta: #d55181;
+  --orange: #eb6834;
+  --green: #22c55e;
+  --red: #e5605f;
+  --accent: #1fb182;
+  --accent-soft: #17362b;
+  /* diff 红绿字色（旧 UI tdiff 同源，仅用于终端深底） */
+  --diff-add-ink: #7ee2b8;
+  --diff-del-ink: #f0a0a0;
+  --header-h: 36px;
+  --aside-w: 270px;
+}
+
+html[data-cmx-skin-tone="light"] {
+  --bg: #f4f4f2;
+  --panel: #ffffff;
+  --panel2: #f7f7f5;
+  --surface: #ffffff;
+  --hover: #ececea;
+  --ink: #0b0b0b;
+  --ink2: #52514e;
+  --muted: #898781;
+  --border: #e4e3dc;
+  --border2: #d6d5ce;
+  --blue: #2a78d6;
+  --aqua: #1baf7a;
+  --violet: #4a3aa7;
+  --magenta: #e87ba4;
+  --orange: #eb6834;
+  --green: #0ca30c;
+  --red: #e34948;
+  --accent: #1baf7a;
+  --accent-soft: #e3f5ee;
+  --diff-add-ink: #1c9e6e;
+  --diff-del-ink: #c2423f;
+  /* 终端风深底（工具卡输出区，旧 UI 同源） */
+  --term-bg: #0a0e14;
+  --term-ink: #c8d3e0;
+  --ws-white: #ffffff;
+  --ws-send-ink: #052;
+}

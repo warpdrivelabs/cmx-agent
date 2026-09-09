@@ -1,6 +1,5 @@
 import { LitElement, html, css } from "lit";
 import { customElement, property } from "lit/decorators.js";
-import "@ui5/webcomponents/dist/Button.js";
 
 /** 审批卡片（展示组件，§9.5.2）：按钮点击抛领域事件，容器（chat-view）调 store。 */
 @customElement("cmx-agent-approval-card")
@@ -12,17 +11,18 @@ export class CmxAgentApprovalCard extends LitElement {
   static styles = css`
     :host {
       display: block;
-      margin: var(--cmx-agent-space-sm) 0;
+      background: var(--panel2);
+      background-image: linear-gradient(180deg, rgba(217, 168, 78, 0.06), transparent);
+      border: 1px solid rgba(217, 168, 78, 0.55);
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 12.5px;
     }
     .card {
       display: flex;
       flex-wrap: wrap;
       align-items: center;
-      gap: var(--cmx-agent-space-md);
-      border: var(--cmx-agent-line-width) solid var(--cmx-agent-color-warning);
-      border-radius: var(--cmx-agent-border-radius);
-      background: var(--cmx-agent-bg-container);
-      padding: var(--cmx-agent-space-md);
+      gap: 12px;
     }
     .info {
       flex: 1;
@@ -30,15 +30,46 @@ export class CmxAgentApprovalCard extends LitElement {
     }
     .tool {
       font-weight: 600;
-      color: var(--cmx-agent-color-text);
+      color: rgba(217, 168, 78, 1);
     }
     .reason {
-      color: var(--cmx-agent-color-text-secondary);
-      font-size: var(--cmx-agent-font-size-sm);
+      color: var(--ink2);
+      margin-top: 4px;
     }
     .actions {
       display: flex;
-      gap: var(--cmx-agent-space-sm);
+      gap: 9px;
+    }
+    .apbtn {
+      flex: 0 0 auto;
+      padding: 7px 18px;
+      border-radius: 9px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid var(--border2);
+      background: var(--panel);
+      color: var(--ink2);
+      font-family: inherit;
+    }
+    .apbtn.allow {
+      background: linear-gradient(135deg, var(--aqua), var(--green));
+      color: var(--ws-white);
+      border-color: transparent;
+    }
+    .apbtn.allow:hover {
+      filter: brightness(1.08);
+    }
+    .apbtn.reject:hover {
+      border-color: var(--red);
+      color: var(--red);
+    }
+    .apbtn.allowall {
+      color: rgba(217, 168, 78, 1);
+    }
+    .apbtn.allowall:hover {
+      border-color: rgba(217, 168, 78, 0.8);
+      background: rgba(217, 168, 78, 0.1);
     }
   `;
 
@@ -60,9 +91,11 @@ export class CmxAgentApprovalCard extends LitElement {
           <div class="reason">${this.request.reason}</div>
         </div>
         <div class="actions">
-          <ui5-button design="Negative" @click=${() => this.decide(false, false)}>拒绝</ui5-button>
-          <ui5-button @click=${() => this.decide(true, true)}>本对话全部允许</ui5-button>
-          <ui5-button design="Emphasized" @click=${() => this.decide(true, false)}>允许</ui5-button>
+          <button class="apbtn reject" @click=${() => this.decide(false, false)}>拒绝</button>
+          <button class="apbtn allowall" @click=${() => this.decide(true, true)}>
+            本对话全部允许
+          </button>
+          <button class="apbtn allow" @click=${() => this.decide(true, false)}>允许</button>
         </div>
       </div>
     `;

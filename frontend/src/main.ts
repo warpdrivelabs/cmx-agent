@@ -2,6 +2,7 @@ import "./styles/seed.css";
 import "./styles/tokens.css";
 import "./styles/ui5-bridge.css";
 import "./styles/base.css";
+import "./styles/ws.css";
 import "./app/cmx-agent-app.css";
 import { bootstrapUi5 } from "./platform/ui5/bootstrap";
 import { themeStore } from "./platform/stores/theme-store";

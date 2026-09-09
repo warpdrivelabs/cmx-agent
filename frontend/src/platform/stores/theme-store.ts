@@ -77,7 +77,8 @@ class ThemeStore implements SelectableStore<ThemeState> {
     } catch {
       // 忽略损坏的持久化数据
     }
-    return { tone: "light", skin: "plain" };
+    // 旧 ui/index.html 默认深色（TrueMate 精修版视觉基准）；用户手动切换后持久化生效
+    return { tone: "dark", skin: "plain" };
   }
 
   private applyToDocument(state: ThemeState): void {

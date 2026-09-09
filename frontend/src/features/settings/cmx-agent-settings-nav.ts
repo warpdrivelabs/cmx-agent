@@ -9,18 +9,25 @@ export class CmxAgentSettingsNav extends LitElement {
 
   static styles = css`
     .item {
-      display: block;
-      padding: var(--cmx-agent-space-sm) var(--cmx-agent-space-md);
-      border-radius: var(--cmx-agent-border-radius);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 11px 14px;
+      margin: 2px 4px;
+      border-radius: 9px;
       cursor: pointer;
-      color: var(--cmx-agent-color-text-secondary);
+      color: var(--ink2);
+      font-size: 13.5px;
     }
     .item:hover {
-      background: var(--cmx-agent-bg-hover);
+      background: var(--hover);
+      color: var(--ink);
     }
     .item.active {
-      background: var(--cmx-agent-color-primary-bg);
-      color: var(--cmx-agent-color-primary);
+      background: var(--accent-soft);
+      color: var(--aqua);
+      font-weight: 600;
+      box-shadow: inset 3px 0 0 var(--aqua);
     }
   `;
 

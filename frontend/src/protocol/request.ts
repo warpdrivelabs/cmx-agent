@@ -10,15 +10,20 @@ export type AppRequest =
   | { cmd: "delete_session"; session_id: string }
   | { cmd: "list_connectors" }
   | { cmd: "list_plugins" }
+  | { cmd: "list_providers" }
+  | { cmd: "set_active_provider"; id: string }
+  | { cmd: "delete_provider"; id: string }
   | { cmd: "install_plugin"; manifest: unknown }
   | { cmd: "uninstall_plugin"; name: string }
   | { cmd: "toggle_plugin"; name: string; enabled: boolean }
   | { cmd: "list_models" }
-  | { cmd: "set_model"; model: string }
+  | { cmd: "set_model"; model: string; provider_id?: string }
   | { cmd: "set_policy"; sandbox: Policy["sandbox"]; approval: Policy["approval"] }
-  | { cmd: "get_model_config" }
+  | { cmd: "get_model_config"; id?: string }
   | {
       cmd: "set_model_config";
+      id?: string;
+      name?: string;
       base_url: string;
       model: string;
       temperature?: number;

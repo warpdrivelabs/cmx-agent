@@ -4,6 +4,22 @@
  */
 
 :root {
+  /* 新旧主题桥：别名层指向旧工作台变量（旧 UI 观感全域生效，§13.2 桥接原则的双向应用） */
+  --cmx-agent-bg-layout: var(--bg);
+  --cmx-agent-bg-container: var(--panel);
+  --cmx-agent-bg-elevated: var(--surface);
+  --cmx-agent-bg-hover: var(--hover);
+  --cmx-agent-color-text: var(--ink);
+  --cmx-agent-color-text-secondary: var(--ink2);
+  --cmx-agent-color-text-tertiary: var(--muted);
+  --cmx-agent-color-border: var(--border);
+  --cmx-agent-color-border-secondary: var(--border2);
+  --cmx-agent-color-primary: var(--accent);
+  --cmx-agent-color-primary-bg: var(--accent-soft);
+  --cmx-agent-color-success: var(--green);
+  --cmx-agent-color-error: var(--red);
+  --cmx-agent-color-warning: var(--orange);
+  --cmx-agent-color-info: var(--blue);
   /* 语义色 */
   --cmx-agent-color-primary: var(--cmx-agent-seed-color-primary);
   --cmx-agent-color-primary-hover: var(--cmx-agent-seed-color-primary-hover);

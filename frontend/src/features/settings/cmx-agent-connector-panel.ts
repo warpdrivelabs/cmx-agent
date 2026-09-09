@@ -60,7 +60,9 @@ export class CmxAgentConnectorPanel extends LitElement {
                   <div class="row">
                     <span class="name">${c.name}</span>
                     <span class="desc">${c.description ?? ""}</span>
-                    <span class="live ${c.live ? "" : "off"}">${c.live ? "在线" : "离线"}</span>
+                    <span class="live ${c.status?.online ? "" : "off"}"
+                      >${c.status?.online ? "在线" : "离线"}</span
+                    >
                   </div>
                 `
               )

@@ -715,11 +715,11 @@ export class CmxAgentLoginView extends LitElement {
           </header>
           <div class="brand-content">
             <div class="brand-eyebrow">
-              <span class="brand-eyebrow__dot"></span> DESKTOP INTELLIGENCE
+              <span class="brand-eyebrow__dot"></span> TRUE PARTNER · 专注工作
             </div>
             <h1 class="brand-title">
               <span class="brand-title__text"
-                >企业桌面<span class="brand-title__accent">智能体</span></span
+                >True<span class="brand-title__accent">Mate</span></span
               >
             </h1>
             <p class="brand-desc">
@@ -757,7 +757,7 @@ export class CmxAgentLoginView extends LitElement {
             <div class="form-card">
               <div class="form-card__head">
                 <h2 class="form-title">欢迎回来</h2>
-                <p class="form-subtitle">登录 cmx 企业桌面智能体，开启你的工作</p>
+                <p class="form-subtitle">登录 TrueMate，开启你的工作</p>
               </div>
               <form
                 class="login-form"

@@ -19,23 +19,28 @@ export class CmxAgentSettingsView extends LitElement {
       display: flex;
       height: 100%;
       min-height: 0;
-      background: var(--cmx-agent-bg-layout);
+      background: var(--bg);
     }
     nav {
-      width: 200px;
+      width: 220px;
       flex: none;
-      border-right: var(--cmx-agent-line-width) solid var(--cmx-agent-color-border);
-      background: var(--cmx-agent-bg-container);
-      padding: var(--cmx-agent-space-md) var(--cmx-agent-space-sm);
+      border-right: 1px solid var(--border);
+      background: var(--bg);
+      padding-top: var(--header-h);
     }
     article {
       flex: 1;
       min-width: 0;
       overflow-y: auto;
-      padding: var(--cmx-agent-space-lg);
+      padding: 22px;
     }
     .panel {
-      max-width: 720px;
+      max-width: 860px;
+      padding: var(--cmx-agent-space-lg);
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
     }
   `;
 

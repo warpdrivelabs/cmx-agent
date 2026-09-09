@@ -1,4 +1,4 @@
-/** 会话事件（对齐 cmx-agent-core event.rs：seq/ts + kind 联合，serde tag="kind" snake_case）。 */
+/** 会话事件（对齐 cmx-agent-core event.rs：seq/ts + kind 联合，serde tag="kind" 扁平序列化）。 */
 
 export interface ToolCall {
   id: string;
@@ -6,31 +6,30 @@ export interface ToolCall {
   arguments: Record<string, unknown>;
 }
 
-export type EventKind =
-  | { kind: "turn_started"; turn: number; user_input: string }
-  | { kind: "user_message"; text: string }
-  | { kind: "model_message"; text?: string | null; tool_calls?: ToolCall[] }
-  | { kind: "tool_invoked"; call: ToolCall }
-  | {
+interface EventBase {
+  seq: number;
+  ts: string;
+}
+
+export type SessionEvent =
+  | (EventBase & { kind: "turn_started"; turn: number; user_input: string })
+  | (EventBase & { kind: "user_message"; text: string })
+  | (EventBase & { kind: "model_message"; text?: string | null; tool_calls?: ToolCall[] })
+  | (EventBase & { kind: "tool_invoked"; call: ToolCall })
+  | (EventBase & {
       kind: "guard_decision";
       call_id: string;
       phase: string;
       guard: string;
       decision: Record<string, unknown>;
-    }
-  | { kind: "approval_requested"; call_id: string; tool: string; reason: string }
-  | { kind: "approval_resolved"; call_id: string; approved: boolean; by: string }
-  | { kind: "tool_result"; call_id: string; ok: boolean; output: unknown }
-  | { kind: "turn_ended"; turn: number; reason: StopReason; steps: number }
-  | { kind: "note"; text: string };
+    })
+  | (EventBase & { kind: "approval_requested"; call_id: string; tool: string; reason: string })
+  | (EventBase & { kind: "approval_resolved"; call_id: string; approved: boolean; by: string })
+  | (EventBase & { kind: "tool_result"; call_id: string; ok: boolean; output: unknown })
+  | (EventBase & { kind: "turn_ended"; turn: number; reason: StopReason; steps: number })
+  | (EventBase & { kind: "note"; text: string });
 
 export type StopReason = "completed" | "max_steps" | "stopped" | "error";
-
-export interface SessionEvent {
-  seq: number;
-  ts: string;
-  kind: EventKind;
-}
 
 /** 总线事件信封（对齐 bus.rs EventEnvelope）：订阅者据此按 session_id 分流。 */
 export interface SessionEventEnvelope {

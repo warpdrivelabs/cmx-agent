@@ -11,33 +11,33 @@ export class CmxAgentEventRenderer extends LitElement {
   @property() sessionId = "";
 
   render() {
-    const k = this.event?.kind;
-    if (!k) return html``;
-    switch (k.kind) {
+    const ev = this.event;
+    if (!ev) return html``;
+    switch (ev.kind) {
       case "tool_invoked":
         return html`<cmx-agent-tool-event-card
-          .call=${k.call}
+          .call=${ev.call}
           state="running"
         ></cmx-agent-tool-event-card>`;
       case "tool_result":
         return html`<cmx-agent-tool-event-card
-          .result=${{ call_id: k.call_id, ok: k.ok, output: k.output }}
+          .result=${{ call_id: ev.call_id, ok: ev.ok, output: ev.output }}
           state="done"
         ></cmx-agent-tool-event-card>`;
       case "guard_decision":
         return html`<cmx-agent-tool-event-card
-          .guard=${{ guard: k.guard, phase: k.phase, decision: k.decision }}
+          .guard=${{ guard: ev.guard, phase: ev.phase, decision: ev.decision }}
           state="guard"
         ></cmx-agent-tool-event-card>`;
       case "approval_requested":
         return html`<cmx-agent-approval-card
-          .request=${{ call_id: k.call_id, tool: k.tool, reason: k.reason, seq: this.event.seq }}
+          .request=${{ call_id: ev.call_id, tool: ev.tool, reason: ev.reason, seq: ev.seq }}
           .sessionId=${this.sessionId}
         ></cmx-agent-approval-card>`;
       case "approval_resolved":
         return html``;
       case "note":
-        return html`<div class="note">${k.text}</div>`;
+        return html`<div class="note">${ev.text}</div>`;
       default:
         return html``; // turn_started/ended/user/model 由 message-list 直接渲染
     }

@@ -3,8 +3,6 @@ import { customElement, property } from "lit/decorators.js";
 import "@ui5/webcomponents/dist/Button.js";
 import "@ui5/webcomponents/dist/Icon.js";
 import type { SessionMeta } from "../../protocol/events-window";
-import "../common/cmx-agent-filter-list";
-import "../common/cmx-agent-empty-state";
 
 /** 会话列表（展示组件）：属性进事件出；流式/未读标记（§8.2.6 等价性配套）。 */
 @customElement("cmx-agent-session-list")
@@ -13,27 +11,35 @@ export class CmxAgentSessionList extends LitElement {
   @property() currentSessionId: string | null = null;
   @property({ attribute: false }) streamingIds: ReadonlySet<string> = new Set();
   @property({ attribute: false }) unreadIds: ReadonlySet<string> = new Set();
-  @property() keyword = "";
 
   static styles = css`
     :host {
       display: block;
       height: 100%;
     }
+    /* 任务列表（旧 .tasklist / .task） */
+    .list {
+      flex: 1;
+      overflow: auto;
+      margin: 0 -2px;
+    }
     .item {
       display: flex;
       align-items: center;
-      gap: var(--cmx-agent-space-sm);
-      padding: var(--cmx-agent-space-sm) var(--cmx-agent-space-md);
-      border-radius: var(--cmx-agent-border-radius);
+      gap: 8px;
+      padding: 9px 12px;
+      border-radius: 8px;
       cursor: pointer;
-      color: var(--cmx-agent-color-text);
+      color: var(--ink2);
+      font-size: 13.5px;
     }
     .item:hover {
-      background: var(--cmx-agent-bg-hover);
+      background: var(--hover);
+      color: var(--ink);
     }
     .item.active {
-      background: var(--cmx-agent-color-primary-bg);
+      background: var(--surface);
+      color: var(--ink);
     }
     .title {
       flex: 1;
@@ -41,6 +47,11 @@ export class CmxAgentSessionList extends LitElement {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+    .when {
+      font-size: 11px;
+      color: var(--muted);
+      flex: 0 0 auto;
     }
     .badge {
       display: inline-flex;
@@ -58,7 +69,7 @@ export class CmxAgentSessionList extends LitElement {
       width: 8px;
       height: 8px;
       border-radius: 50%;
-      background: var(--cmx-agent-color-success);
+      background: var(--aqua);
       animation: pulse 1.2s infinite;
     }
     @keyframes pulse {
@@ -67,37 +78,47 @@ export class CmxAgentSessionList extends LitElement {
       }
     }
     .del {
-      display: none;
-      border: none;
+      opacity: 0;
+      color: var(--muted);
+      font-size: 14px;
+      padding: 0 2px;
       background: none;
-      color: var(--cmx-agent-color-text-tertiary);
+      border: none;
       cursor: pointer;
-      font-size: var(--cmx-agent-font-size-sm);
     }
     .item:hover .del {
-      display: inline;
+      opacity: 0.7;
+    }
+    .del:hover {
+      color: var(--red);
+      opacity: 1;
+    }
+    .empty-tasks {
+      color: var(--muted);
+      font-size: 12.5px;
+      padding: 10px 12px;
+      line-height: 1.7;
     }
   `;
 
-  private get filtered(): SessionMeta[] {
-    const kw = this.keyword.trim().toLowerCase();
-    if (!kw) return this.sessions;
-    return this.sessions.filter(
-      (s) => s.id.toLowerCase().includes(kw) || (s.title ?? "").toLowerCase().includes(kw)
-    );
+  /** updated_at → 相对时间（对齐旧 ago()：今天/昨天/N天前）。 */
+  private fmt(iso: string): string {
+    const days = (Date.now() - new Date(iso).getTime()) / 86400000;
+    if (days < 1) return "今天";
+    if (days < 2) return "昨天";
+    return `${Math.floor(days)}天前`;
   }
 
   render() {
     return html`
-      <cmx-agent-filter-list
-        placeholder="搜索会话"
-        @cmx-agent-filter=${(e: CustomEvent<{ keyword: string }>) =>
-          (this.keyword = e.detail.keyword)}
-      >
+      <div class="list">
         ${
-          this.filtered.length === 0
-            ? html`<cmx-agent-empty-state heading="暂无会话"></cmx-agent-empty-state>`
-            : this.filtered.map(
+          this.sessions.length === 0
+            ? html`<div class="empty-tasks">
+                还没有任务。<br />
+                点上方「新建任务」或在首页直接下达指令。
+              </div>`
+            : this.sessions.map(
                 (s) => html`
                   <div
                     class="item ${s.id === this.currentSessionId ? "active" : ""}"
@@ -110,12 +131,13 @@ export class CmxAgentSessionList extends LitElement {
                         })
                       )}
                   >
-                    ${this.streamingIds.has(s.id) ? html`<span class="dot"></span>` : html`<span>💬</span>`}
+                    ${this.streamingIds.has(s.id) ? html`<span class="dot"></span>` : ""}
                     <span class="title">${s.title || s.id}</span>
+                    <span class="when">${this.fmt(s.updated_at)}</span>
                     ${this.unreadIds.has(s.id) ? html`<span class="badge">新</span>` : ""}
                     <button
                       class="del"
-                      title="删除会话"
+                      title="删除"
                       @click=${(e: Event) => {
                         e.stopPropagation();
                         this.dispatchEvent(
@@ -133,7 +155,7 @@ export class CmxAgentSessionList extends LitElement {
                 `
               )
         }
-      </cmx-agent-filter-list>
+      </div>
     `;
   }
 }

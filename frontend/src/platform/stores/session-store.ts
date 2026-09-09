@@ -319,22 +319,22 @@ class SessionStore implements SelectableStore<SessionState> {
       loaded: true
     });
     const kind = event.kind;
-    if (kind.kind === "approval_requested") {
+    if (kind === "approval_requested") {
       this.set({
         pendingApprovals: [
-          ...this.state.pendingApprovals.filter((a) => a.callId !== kind.call_id),
+          ...this.state.pendingApprovals.filter((a) => a.callId !== event.call_id),
           {
-            callId: kind.call_id,
+            callId: event.call_id,
             sessionId,
-            tool: kind.tool,
-            reason: kind.reason,
+            tool: event.tool,
+            reason: event.reason,
             seq: event.seq
           }
         ]
       });
-    } else if (kind.kind === "approval_resolved") {
+    } else if (kind === "approval_resolved") {
       this.set({
-        pendingApprovals: this.state.pendingApprovals.filter((a) => a.callId !== kind.call_id)
+        pendingApprovals: this.state.pendingApprovals.filter((a) => a.callId !== event.call_id)
       });
     }
   }
@@ -342,23 +342,23 @@ class SessionStore implements SelectableStore<SessionState> {
   /** 断线重连 / 刷新后的审批恢复：扫描窗口内未 resolved 的 approval_requested（§8.0 恢复 5）。 */
   private rebuildPendingApprovals(sessionId: string, events: SessionEvent[]): void {
     const resolved = new Set(
-      events.flatMap((e) => (e.kind.kind === "approval_resolved" ? [e.kind.call_id] : []))
+      events.flatMap((e) => (e.kind === "approval_resolved" ? [e.call_id] : []))
     );
     const pending = events.flatMap((e) =>
-      e.kind.kind === "approval_requested" && !resolved.has(e.kind.call_id)
-        ? [{ kind: e.kind, seq: e.seq }]
+      e.kind === "approval_requested" && !resolved.has(e.call_id)
+        ? [{ call_id: e.call_id, tool: e.tool, reason: e.reason, seq: e.seq }]
         : []
     );
     const others = this.state.pendingApprovals.filter((a) => a.sessionId !== sessionId);
     this.set({
       pendingApprovals: [
         ...others,
-        ...pending.map(({ kind: k, seq }) => {
+        ...pending.map(({ call_id, tool, reason, seq }) => {
           return {
-            callId: k.call_id,
+            callId: call_id,
             sessionId,
-            tool: k.tool,
-            reason: k.reason,
+            tool,
+            reason,
             seq
           };
         })

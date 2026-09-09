@@ -42,14 +42,8 @@ export class CmxAgentApp extends CmxAgentElement {
     super.disconnectedCallback();
   }
 
-  private async logout(): Promise<void> {
-    await authStore.logout();
-    navigate("#/login");
-  }
-
   protected render() {
     const tone = this.theme.state.tone;
-    const user = this.auth.state.user;
     const view =
       this.route.name === "login" || !this.booted
         ? html`<cmx-agent-login-view></cmx-agent-login-view>`
@@ -64,31 +58,23 @@ export class CmxAgentApp extends CmxAgentElement {
           this.route.name !== "login" && this.booted
             ? html`<header class="app-header">
                 <span class="app-title" title="回到对话" @click=${() => navigate("#/chat")}
-                  >cmx 企业桌面智能体</span
+                  >TrueMate - 专注工作，真心搭档</span
                 >
                 <span class="app-actions">
-                  <button class="hdr-btn" title="设置" @click=${() => navigate("#/settings")}>
-                    ⚙
+                  <button
+                    class="hdr-btn"
+                    title="隐藏/显示左侧栏"
+                    @click=${() => window.dispatchEvent(new CustomEvent("cmx-agent-toggle-sidebar"))}
+                  >
+                    ⇤
                   </button>
                   <button
                     class="hdr-btn"
                     title="切换亮暗主题"
                     @click=${() => themeStore.toggleTone()}
                   >
-                    ${tone === "light" ? "🌙" : "☀️"}
+                    ${tone === "light" ? "☾" : "☀"}
                   </button>
-                  ${
-                    user
-                      ? html`<span class="user">${user.display_name ?? user.username ?? ""}</span>
-                          <button
-                            class="hdr-btn"
-                            title="退出登录"
-                            @click=${() => void this.logout()}
-                          >
-                            退出
-                          </button>`
-                      : nothing
-                  }
                 </span>
               </header>`
             : nothing

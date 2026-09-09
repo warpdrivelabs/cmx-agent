@@ -10,15 +10,19 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--cmx-agent-space-sm) var(--cmx-agent-space-lg);
-  background: var(--cmx-agent-bg-container);
-  border-bottom: var(--cmx-agent-line-width) solid var(--cmx-agent-color-border);
+  height: 32px;
+  flex: 0 0 32px;
+  padding: 0 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
   -webkit-app-region: drag;
+  user-select: none;
 }
 
 .app-title {
-  font-size: var(--cmx-agent-font-size-lg);
-  color: var(--cmx-agent-color-text);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink2);
 }
 
 .tone-toggle {
@@ -39,25 +43,60 @@
 
 .hdr-btn {
   -webkit-app-region: no-drag;
-  min-width: 32px;
-  height: 32px;
-  border: none;
-  border-radius: var(--cmx-agent-border-radius);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 7px;
+  border: 1px solid transparent;
   background: transparent;
-  color: var(--cmx-agent-color-text-secondary);
+  color: var(--ink2);
+  font-size: 12.5px;
   cursor: pointer;
-  font-size: 15px;
 }
 
 .hdr-btn:hover {
-  background: var(--cmx-agent-bg-hover);
-  color: var(--cmx-agent-color-text);
+  background: var(--hover);
+  color: var(--ink);
+  border-color: var(--border);
 }
 
 .user {
-  color: var(--cmx-agent-color-text-secondary);
-  font-size: var(--cmx-agent-font-size-sm);
+  color: var(--muted);
+  font-size: 12px;
   -webkit-app-region: no-drag;
+}
+
+/* 三键占位（最小化/最大化/关闭）：Web 壳视觉占位，Tauri 壳后续接窗口 API */
+.win-ctrls {
+  display: flex;
+  align-items: center;
+  margin-left: 4px;
+  -webkit-app-region: no-drag;
+}
+
+.win-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 32px;
+  color: var(--ink2);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+.win-btn:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.win-btn.win-close:hover {
+  background: var(--red);
+  color: var(--ws-white);
 }
 
 .tone-toggle:hover {

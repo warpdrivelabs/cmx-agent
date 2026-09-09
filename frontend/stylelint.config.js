@@ -6,6 +6,13 @@ export default {
   },
   overrides: [
     {
+      // 旧工作台主题定义层（--bg/--aqua 等变量本体，与 seed 同类豁免）
+      files: ["src/styles/ws.css"],
+      rules: {
+        "color-no-hex": null
+      }
+    },
+    {
       // 解析 Lit 组件内的 css`` 模板
       files: ["**/*.ts"],
       customSyntax: "postcss-lit",

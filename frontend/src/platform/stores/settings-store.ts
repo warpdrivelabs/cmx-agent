@@ -3,16 +3,26 @@ import { call } from "../bridge/call";
 import { storeBus } from "./bus";
 import type { SelectableStore } from "../store-controller";
 import type { ApprovalPolicy, Policy, SandboxMode } from "../../protocol/policy";
+import type {
+  Connector,
+  ListModelsData,
+  ModelConfigData,
+  PluginInfo,
+  ListProvidersData,
+  ProviderEntry,
+  ProviderConfigData
+} from "../../protocol/response";
 
 const POLICY_KEY = "cmx-agent.policy";
 
 export interface ModelConfig {
-  base_url: string;
-  model: string;
+  base_url?: string;
+  model?: string;
   temperature?: number;
   timeout_ms?: number;
   api_key_masked?: string;
   has_api_key?: boolean;
+  candidates?: string[];
 }
 
 export interface ImBinding {
@@ -21,33 +31,23 @@ export interface ImBinding {
   created_at?: string;
 }
 
-export interface PluginInfo {
-  name: string;
-  kind?: string;
-  version?: string;
-  description?: string;
-  enabled?: boolean;
-  installed?: boolean;
-  market?: boolean;
-  [key: string]: unknown;
-}
-
-export interface ConnectorCard {
-  name: string;
-  description?: string;
-  live?: boolean;
-  [key: string]: unknown;
-}
+/** 兼容别名（面板按 installed/market 合并列表消费）。 */
+export type { PluginInfo } from "../../protocol/response";
 
 export interface SettingsState {
   policy: Policy;
   models: string[];
   currentModel: string;
+  /** 完整模型信息（provider/候选/可配置），模型弹层用。 */
+  modelsInfo: ListModelsData | null;
   modelConfig: ModelConfig | null;
   imBindings: ImBinding[];
   imCode: string;
+  installedPlugins: PluginInfo[];
+  marketPlugins: PluginInfo[];
+  /** 已装 + 市场合并（旧插件面板兼容消费）。 */
   plugins: PluginInfo[];
-  connectors: ConnectorCard[];
+  connectors: Connector[];
   pending: boolean;
   error: string | null;
 }
@@ -62,7 +62,8 @@ function readPolicy(): Policy {
   } catch {
     // 损坏回落默认
   }
-  return { sandbox: "read-only", approval: "on-request" };
+  // 后端默认 workspace-write/on-request（旧 UI 同源）；显示默认档为「默认权限：工作区可写 · 按需审批」
+  return { sandbox: "workspace-write", approval: "on-request" };
 }
 
 class SettingsStore implements SelectableStore<SettingsState> {
@@ -70,9 +71,12 @@ class SettingsStore implements SelectableStore<SettingsState> {
     policy: readPolicy(),
     models: [],
     currentModel: "",
+    modelsInfo: null,
     modelConfig: null,
     imBindings: [],
     imCode: "",
+    installedPlugins: [],
+    marketPlugins: [],
     plugins: [],
     connectors: [],
     pending: false,
@@ -108,7 +112,7 @@ class SettingsStore implements SelectableStore<SettingsState> {
   /** 启动恢复：localStorage 记忆的两旋钮热切（对齐旧 UI 行为）。 */
   async init(): Promise<void> {
     const saved = readPolicy();
-    if (saved.sandbox !== "read-only" || saved.approval !== "on-request") {
+    if (saved.sandbox !== "workspace-write" || saved.approval !== "on-request") {
       await this.setPolicy(saved.sandbox, saved.approval);
     }
   }
@@ -131,15 +135,55 @@ class SettingsStore implements SelectableStore<SettingsState> {
     return true;
   }
 
-  async loadModels(): Promise<void> {
-    const res = await call<{ models: string[]; current?: string }>({ cmd: "list_models" });
+  async loadModels(): Promise<ListModelsData | null> {
+    const res = await call<ListModelsData>({ cmd: "list_models" });
     if (res.ok && res.data) {
-      this.set({ models: res.data.models ?? [], currentModel: res.data.current ?? "" });
+      const d = res.data;
+      this.set({
+        modelsInfo: d,
+        models: (d.candidates ?? []).map((c) => c.model),
+        currentModel: d.current ?? ""
+      });
+      return d;
     }
+    return null;
   }
 
-  async setModel(model: string): Promise<boolean> {
-    const res = await call<{ model: string }>({ cmd: "set_model", model });
+  /** 多 Provider 快照（旧 openModelMenu / mcfg 左列数据源）。 */
+  async listProviders(): Promise<ProviderEntry[]> {
+    const res = await call<ListProvidersData>({ cmd: "list_providers" });
+    if (res.ok && res.data) return res.data.providers ?? [];
+    return [];
+  }
+
+  async setActiveProvider(id: string): Promise<{ ok: boolean; note?: string; error?: string }> {
+    const res = await call({ cmd: "set_active_provider", id });
+    if (res.ok) {
+      return { ok: true, note: (res.data as { note?: string } | undefined)?.note };
+    }
+    return { ok: false, error: res.error?.message ?? "切换失败" };
+  }
+
+  async deleteProvider(id: string): Promise<{ ok: boolean; note?: string; error?: string }> {
+    const res = await call({ cmd: "delete_provider", id });
+    if (res.ok) {
+      return { ok: true, note: (res.data as { note?: string } | undefined)?.note };
+    }
+    return { ok: false, error: res.error?.message ?? "删除失败" };
+  }
+
+  async getProviderConfig(id: string): Promise<ProviderConfigData | null> {
+    const res = await call<ProviderConfigData>({ cmd: "get_model_config", id });
+    if (res.ok && res.data) return res.data;
+    return null;
+  }
+
+  async setModel(model: string, providerId?: string): Promise<boolean> {
+    const res = await call<{ model: string; note?: string }>({
+      cmd: "set_model",
+      model,
+      provider_id: providerId
+    });
     if (res.ok) {
       this.set({ currentModel: model });
       return true;
@@ -149,15 +193,15 @@ class SettingsStore implements SelectableStore<SettingsState> {
   }
 
   async loadModelConfig(): Promise<void> {
-    const res = await call<ModelConfig>({ cmd: "get_model_config" });
+    const res = await call<ModelConfigData>({ cmd: "get_model_config" });
     if (res.ok && res.data) this.set({ modelConfig: res.data });
   }
 
   async saveModelConfig(cfg: ModelConfig, apiKey?: string): Promise<boolean> {
     const res = await call({
       cmd: "set_model_config",
-      base_url: cfg.base_url,
-      model: cfg.model,
+      base_url: cfg.base_url ?? "",
+      model: cfg.model ?? "",
       temperature: cfg.temperature,
       timeout_ms: cfg.timeout_ms,
       api_key_action: apiKey ? "set" : "keep",
@@ -169,6 +213,35 @@ class SettingsStore implements SelectableStore<SettingsState> {
     }
     this.set({ error: res.error?.message ?? "保存失败" });
     return false;
+  }
+
+  /** 多 Provider 保存（旧 saveModelConfig 重制版：id 定位条目，name 支持自定义）。 */
+  async saveProviderConfig(p: {
+    id?: string;
+    name?: string;
+    base_url: string;
+    model: string;
+    temperature: number;
+    timeout_ms: number;
+    api_key_action: "keep" | "set";
+    api_key_value?: string;
+  }): Promise<{ ok: boolean; note?: string; id?: string; error?: string }> {
+    const res = await call({
+      cmd: "set_model_config",
+      id: p.id,
+      name: p.name,
+      base_url: p.base_url,
+      model: p.model,
+      temperature: p.temperature,
+      timeout_ms: p.timeout_ms,
+      api_key_action: p.api_key_action,
+      api_key_value: p.api_key_value
+    });
+    if (res.ok) {
+      const d = res.data as { note?: string; id?: string } | undefined;
+      return { ok: true, note: d?.note, id: d?.id };
+    }
+    return { ok: false, error: res.error?.message ?? "保存失败" };
   }
 
   async loadImBindings(): Promise<void> {
@@ -197,8 +270,18 @@ class SettingsStore implements SelectableStore<SettingsState> {
   }
 
   async loadPlugins(): Promise<void> {
-    const res = await call<{ plugins: PluginInfo[] }>({ cmd: "list_plugins" });
-    if (res.ok && res.data) this.set({ plugins: res.data.plugins ?? [] });
+    const res = await call<{ installed: PluginInfo[]; market: PluginInfo[] }>({
+      cmd: "list_plugins"
+    });
+    if (res.ok && res.data) {
+      const installed = res.data.installed ?? [];
+      const market = res.data.market ?? [];
+      this.set({
+        installedPlugins: installed,
+        marketPlugins: market,
+        plugins: [...installed, ...market.map((m) => ({ ...m, installed: false, market: true }))]
+      });
+    }
   }
 
   async installPlugin(manifest: unknown): Promise<boolean> {
@@ -231,9 +314,13 @@ class SettingsStore implements SelectableStore<SettingsState> {
     return false;
   }
 
-  async loadConnectors(): Promise<void> {
-    const res = await call<{ connectors: ConnectorCard[] }>({ cmd: "list_connectors" });
-    if (res.ok && res.data) this.set({ connectors: res.data.connectors ?? [] });
+  async loadConnectors(): Promise<Connector[]> {
+    const res = await call<{ connectors: Connector[] }>({ cmd: "list_connectors" });
+    if (res.ok && res.data) {
+      this.set({ connectors: res.data.connectors ?? [] });
+      return this.state.connectors;
+    }
+    return [];
   }
 }
 
