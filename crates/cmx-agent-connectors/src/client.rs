@@ -223,7 +223,7 @@ impl CmxServiceClient {
         }
     }
 
-    /// POST 一段 JSON body 到返回信封的端点，带 `Authorization: Bearer <token>`（如 /api/im/bindings/*）。
+    /// POST 一段 JSON body 到返回信封的端点，带 `Authorization: Bearer <token>`（如 /api/agent/bindings/*）。
     pub async fn post_data_bearer(
         &self,
         path: &str,

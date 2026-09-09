@@ -21,3 +21,4 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 
 [dev-dependencies]
 # 单测走离线（mock 信封解析 / spec 断言）；live 集成测试标 #[ignore]，需真服务时手动跑。
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

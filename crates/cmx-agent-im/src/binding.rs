@@ -2,7 +2,7 @@
 //!
 //! [`ImBindingResolver`] 是桥用的小 trait（`lookup` 查绑定 / `verify` 验证码建绑定），
 //! 两个实现：
-//! - [`PortalBindingResolver`]：真实现，调门户 `/api/im/bindings/*`（[`cmx_agent_connectors::ImBindingClient`]）。
+//! - [`PortalBindingResolver`]：真实现，调门户 `/api/agent/bindings/*`（[`cmx_agent_connectors::ImBindingClient`]）。
 //! - [`MockBindingResolver`]：内存实现，桥的绑定流程测试用。
 //!
 //! 语义约定（对齐门户契约）：
@@ -31,7 +31,7 @@ pub trait ImBindingResolver: Send + Sync {
     ) -> Result<Option<BoundIdentity>, String>;
 }
 
-/// 真实现：调门户 `/api/im/bindings/*`。`base_url` 指门户（默认 `http://127.0.0.1:8080`）。
+/// 真实现：调门户 `/api/agent/bindings/*`。`base_url` 指门户（默认 `http://127.0.0.1:8080`）。
 pub struct PortalBindingResolver {
     client: ImBindingClient,
 }

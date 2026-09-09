@@ -7,7 +7,7 @@
 //! 3. 之后每条 IM 消息，桥调 `lookup(provider, open_id)`（无鉴权）解析发送者身份，
 //!    以绑定用户跑回合（数据权限/守卫按此人判定）；未绑定 → 提示绑定。
 //!
-//! 端点（门户 `{base}/api/im/bindings/*`，`{code,msg,data}` 信封）：
+//! 端点（门户 `{base}/api/agent/bindings/*`，`{code,msg,data}` 信封）：
 //! - `POST code`（Bearer）：生成验证码。
 //! - `POST verify`（白名单）：核销验证码 + 建绑定 + 返回身份。
 //! - `GET lookup?provider=&open_id=`（白名单）：按 IM 身份查绑定（未绑定返回 Envelope 错误）。
@@ -40,7 +40,7 @@ pub struct BoundIdentity {
     pub roles: Vec<String>,
 }
 
-/// IM 绑定客户端（对门户 `/api/im/bindings/*`）。
+/// IM 绑定客户端（对门户 `/api/agent/bindings/*`）。
 #[derive(Debug, Clone)]
 pub struct ImBindingClient {
     client: CmxServiceClient,
@@ -57,7 +57,7 @@ impl ImBindingClient {
     pub async fn gen_code(&self, token: &str) -> Result<(String, u64), ClientError> {
         let data = self
             .client
-            .post_data_bearer("/api/im/bindings/code", json!({}), token)
+            .post_data_bearer("/api/agent/bindings/code", json!({}), token)
             .await?;
         let code = data
             .get("code")
@@ -78,7 +78,7 @@ impl ImBindingClient {
         let data = self
             .client
             .post_data(
-                "/api/im/bindings/verify",
+                "/api/agent/bindings/verify",
                 json!({ "provider": provider, "open_id": open_id, "code": code }),
             )
             .await?;
@@ -90,7 +90,7 @@ impl ImBindingClient {
         let data = self
             .client
             .get_data(&format!(
-                "/api/im/bindings/lookup?provider={provider}&open_id={open_id}"
+                "/api/agent/bindings/lookup?provider={provider}&open_id={open_id}"
             ))
             .await?;
         parse_identity(&data)
@@ -98,7 +98,7 @@ impl ImBindingClient {
 
     /// 列当前登录用户（Bearer）的绑定。
     pub async fn list(&self, token: &str) -> Result<Vec<ImBinding>, ClientError> {
-        let data = self.client.get_data_bearer("/api/im/bindings", token).await?;
+        let data = self.client.get_data_bearer("/api/agent/bindings", token).await?;
         let items = data
             .get("items")
             .or_else(|| data.get("bindings"))
@@ -122,7 +122,7 @@ impl ImBindingClient {
     /// 解绑（Bearer，仅本人）。
     pub async fn unbind(&self, token: &str, provider: &str, open_id: &str) -> Result<(), ClientError> {
         self.client
-            .delete_data_bearer(&format!("/api/im/bindings/{provider}/{open_id}"), token)
+            .delete_data_bearer(&format!("/api/agent/bindings/{provider}/{open_id}"), token)
             .await?;
         Ok(())
     }
@@ -212,5 +212,97 @@ mod tests {
         assert_eq!(bindings[1].im_username, "Bob");   // 回退 nickname
         assert_eq!(bindings[2].im_username, "");       // 都没有 → 空串
         assert_eq!(bindings[0].created_at, 1700000000000i64);
+    }
+
+    /// live 端到端联调：打真实门户 :8080，覆盖绑定全流程。
+    /// 标 `#[ignore]`：需 `cmx-portal-server` 运行 + 主库可达，手动跑：
+    ///   CMX_AGENT_PORTAL_BASE=http://127.0.0.1:8080 \
+    ///   CMX_AGENT_TEST_USER=admin CMX_AGENT_TEST_PASS=Admin@12345 \
+    ///   cargo test -p cmx-agent-connectors --test im_binding_live -- --ignored --nocapture
+    #[cfg(test)]
+    #[ignore = "需真实门户 + 主库，手动跑 live 联调"]
+    #[tokio::test]
+    async fn live_binding_roundtrip() {
+        use crate::auth::{AuthConfig, AuthProvider};
+
+        let base = std::env::var("CMX_AGENT_PORTAL_BASE")
+            .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string());
+        let user = std::env::var("CMX_AGENT_TEST_USER").unwrap_or_else(|_| "admin".into());
+        let pass = std::env::var("CMX_AGENT_TEST_PASS").unwrap_or_else(|_| "Admin@12345".into());
+
+        // 0. 登录取 token（桌面端视角，AuthProvider: login → access_token）
+        let auth = AuthProvider::new(AuthConfig { base_url: base.clone() });
+        let logged = auth.login(&user, &pass).await.expect("登录失败");
+        let token = &logged.access_token;
+        let expected_user_id = &logged.user_id;
+        assert!(!token.is_empty(), "token 为空");
+        assert!(!expected_user_id.is_empty(), "user_id 为空");
+
+        let client = ImBindingClient::new(&base);
+        let provider = "feishu";
+        let open_id = format!("ou_e2e_live_{}", std::process::id());
+
+        // 1. lookup 未绑定 → Envelope{code:40401}
+        match client.lookup(provider, &open_id).await {
+            Err(ClientError::Envelope { code: 40401, .. }) => {}
+            other => panic!("未绑定时应 Envelope(40401)，实际：{other:?}"),
+        }
+
+        // 2. gen_code（Bearer）→ 6 位码 + expires_in
+        let (code, expires_in) = client.gen_code(token).await.expect("取码失败");
+        assert_eq!(code.len(), 6, "验证码应 6 位：{code}");
+        assert_eq!(expires_in, 300, "TTL 应 300 秒");
+
+        // 3. verify 建绑定 → 返回身份（与登录者一致）
+        let id = client
+            .verify(provider, &open_id, &code)
+            .await
+            .expect("verify 失败");
+        assert_eq!(id.user_id, *expected_user_id, "user_id 不符");
+        assert_eq!(id.username, user, "username 不符");
+        assert!(!id.roles.is_empty(), "roles 为空");
+
+        // 4. 二次 verify 同码（单次有效）→ Envelope(40001)
+        match client.verify(provider, &open_id, &code).await {
+            Err(ClientError::Envelope { code: 40001, .. }) => {}
+            other => panic!("已核销码应 Envelope(40001)，实际：{other:?}"),
+        }
+
+        // 5. lookup 命中 → 同一身份
+        let id2 = client.lookup(provider, &open_id).await.expect("lookup 命中失败");
+        assert_eq!(id2.user_id, id.user_id);
+
+        // 6. list 含该绑定
+        let list = client.list(token).await.expect("list 失败");
+        assert!(
+            list.iter().any(|b| b.provider == provider && b.open_id == open_id),
+            "list 未包含刚绑定的记录：{list:?}"
+        );
+
+        // 7. 幂等：再取码对本人已绑 open_id verify → 幂等成功（不报 40002）
+        let (code2, _) = client.gen_code(token).await.expect("取码2失败");
+        let id3 = client
+            .verify(provider, &open_id, &code2)
+            .await
+            .expect("幂等 verify 失败");
+        assert_eq!(id3.user_id, *expected_user_id);
+
+        // 8. unbind → 成功
+        client
+            .unbind(token, provider, &open_id)
+            .await
+            .expect("解绑失败");
+
+        // 9. 解绑后 lookup → 40401
+        match client.lookup(provider, &open_id).await {
+            Err(ClientError::Envelope { code: 40401, .. }) => {}
+            other => panic!("解绑后应 Envelope(40401)，实际：{other:?}"),
+        }
+
+        // 10. 重复解绑本人名下已不存在 → 40401
+        match client.unbind(token, provider, &open_id).await {
+            Err(ClientError::Envelope { code: 40401, .. }) => {}
+            other => panic!("重复解绑应 Envelope(40401)，实际：{other:?}"),
+        }
     }
 }
