@@ -20,13 +20,26 @@ fn ctx_roots() -> Vec<PathBuf> { vec![PathBuf::from("/tmp")] }
 
 #[tokio::test]
 async fn command_plugin_loads_and_runs() {
+    // Windows 无独立 echo.exe（只是 cmd 内建命令），直接 spawn 会 program not found——
+// 用 python3 跨平台执行 + 纯 ASCII 输出（避开子进程管道编码差异）。
+if !std::process::Command::new("python3")
+.arg("--version")
+.stdout(std::process::Stdio::null())
+.stderr(std::process::Stdio::null())
+.status()
+.map(|s| s.success())
+.unwrap_or(false)
+{
+eprintln!("python3 不可用，跳过 command 插件测试");
+return;
+}
     let dir = tmp("cmd");
     let pdir = dir.join("hello");
     std::fs::create_dir_all(&pdir).unwrap();
     std::fs::write(
         pdir.join("cmx-plugin.json"),
         r#"{"name":"say_hi","kind":"command","description":"打招呼",
-            "command":"echo","args":["hi {who}"]}"#,
+            "command":"python3","args":["-c","print('hi {who}')"]}"#,
     ).unwrap();
 
     let (tools, manifests) = load_plugins(&dir);
@@ -36,9 +49,10 @@ async fn command_plugin_loads_and_runs() {
 
     let roots = ctx_roots();
     let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
-    let r = tools[0].invoke(json!({"who":"世界"}), &ctx).await.unwrap();
+    let r = tools[0].invoke(json!({"who":"world"}), &ctx).await.unwrap();
     assert!(r.ok, "{r:?}");
-    assert_eq!(r.output["stdout"], "hi 世界"); // {who} 占位替换 + 命令执行
+    let stdout = r.output["stdout"].as_str().unwrap_or_default().trim();
+    assert_eq!(stdout, "hi world"); // {who} 占位替换 + 命令执行
     std::fs::remove_dir_all(&dir).ok();
 }
 

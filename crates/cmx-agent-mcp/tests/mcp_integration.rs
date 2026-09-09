@@ -9,7 +9,11 @@ use cmx_agent_mcp::{McpServerConfig, connect_server};
 use serde_json::json;
 
 const MOCK_SERVER: &str = r#"
+# Windows 下 Python 子进程 stdio 默认跟随系统 ANSI 代码页（cp936/GBK），会把客户端写入的
+# UTF-8 JSON-RPC 误解码（"你好"→"浣犲ソ"）。MCP stdio 约定是 UTF-8——强制两端管道编码。
 import sys, json
+sys.stdin.reconfigure(encoding="utf-8")
+sys.stdout.reconfigure(encoding="utf-8")
 def send(o): sys.stdout.write(json.dumps(o)+"\n"); sys.stdout.flush()
 for line in sys.stdin:
     line=line.strip()
@@ -56,7 +60,8 @@ async fn mcp_end_to_end_via_mock_server() {
         label: "mock".into(),
         command: "python3".into(),
         args: vec!["-c".into(), MOCK_SERVER.into()],
-        env: vec![],
+        // 双保险：reconfigure 之外的兜底（覆盖 stdin 解码与 locale 相关默认）
+        env: vec![("PYTHONIOENCODING".into(), "utf-8".into())],
     };
     let tools = connect_server(&cfg).await.expect("连接 mock MCP server");
     // 两个工具，命名空间前缀 mcp_mock_*
