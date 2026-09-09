@@ -7,7 +7,7 @@
 name = "cmx-agent-shell"
 version = "0.1.0"
 edition = "2021"
-description = "cmx 企业桌面智能体 · 原生 Tauri 壳（同核多壳：复用 cmx-agent-app 的 dispatch_json）"
+description = "TrueMate · cmx 企业桌面智能体 · 原生 Tauri 壳（同核多壳：复用 cmx-agent-app 的 dispatch_json）"
 
 # 独立解析：本 crate 自成一个单成员 workspace，不向上并入 cmx-agent 离线 workspace。
 [workspace]

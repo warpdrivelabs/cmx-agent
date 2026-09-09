@@ -40,7 +40,7 @@ ${StrLoc}
 !define MANUFACTURER "{{manufacturer}}"
 !define PRODUCTNAME "{{product_name}}"
 ; 安装目录名固定用英文（避免中文路径）；显示名仍是 PRODUCTNAME。
-!define INSTALLDIRNAME "cmx-agent"
+!define INSTALLDIRNAME "TrueMate"
 !define VERSION "{{version}}"
 !define VERSIONWITHBUILD "{{version_with_build}}"
 !define HOMEPAGE "{{homepage}}"

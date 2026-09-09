@@ -3,8 +3,8 @@
 # release-build-and-sign.sh —— cmx-agent Tauri 桌面壳的「编译 → 签名 → 公证 → 装订 → 打 dmg」一条龙。
 #
 # 产物：
-#   src-tauri/target/release/bundle/macos/cmx 企业桌面智能体.app   （签名+公证+stapled）
-#   src-tauri/target/release/bundle/cmx-企业桌面智能体.dmg         （含 app + Applications 软链接）
+#   src-tauri/target/release/bundle/macos/TrueMate.app   （签名+公证+stapled）
+#   src-tauri/target/release/bundle/TrueMate.dmg         （含 app + Applications 软链接）
 #
 # 前置（一次性，本机已就绪；换机器需重做）：
 #   1) Developer ID Application 证书 + 私钥已导入登录钥匙串
@@ -27,7 +27,7 @@ set -euo pipefail
 IDENTITY="Developer ID Application: Pansoft Company Limited (W8H2ZU6LLY)"
 TEAM_ID="W8H2ZU6LLY"
 NOTARY_PROFILE="cmx-agent-notary"
-APP_NAME="cmx 企业桌面智能体"
+APP_NAME="TrueMate"
 BUNDLE_ID="com.pansoft.cmx-agent"
 TAURI_CLI="${TAURI_CLI:-/tmp/node_modules/.bin/tauri}"
 
@@ -36,7 +36,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SRC_TAURI="$SCRIPT_DIR/../crates/cmx-agent-shell/src-tauri"
 BUNDLE_DIR="$SRC_TAURI/target/release/bundle/macos"
 APP="$BUNDLE_DIR/$APP_NAME.app"
-DMG="$SRC_TAURI/target/release/bundle/cmx-企业桌面智能体.dmg"
+DMG="$SRC_TAURI/target/release/bundle/TrueMate.dmg"
 
 # ── 参数 ─────────────────────────────────────────────────────────
 DO_BUILD=1

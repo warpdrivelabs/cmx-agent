@@ -70,7 +70,7 @@ async fn main() {
     let addr: SocketAddr = listener.local_addr().expect("local addr");
     let url = format!("http://{addr}/");
     tracing::info!("cmx-agent 桌面界面已就绪：{url}");
-    println!("\n  cmx 企业桌面智能体 · Web 壳\n  ▶ {url}\n");
+    println!("\n  TrueMate · cmx 企业桌面智能体 Web 壳\n  ▶ {url}\n");
 
     if !no_open {
         open_desktop_window(&url);

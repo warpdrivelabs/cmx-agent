@@ -42,7 +42,7 @@ cd /Users/javier/Documents/workspace/rust/cmx-agent/scripts
 3. **公证**：`ditto -c -k --keepParent "<app>" /tmp/cmx-agent.zip` → `xcrun notarytool submit /tmp/cmx-agent.zip --keychain-profile cmx-agent-notary --wait`（等 `status: Accepted`）
 4. **装订**：`xcrun stapler staple "<app>"` + `xcrun stapler validate "<app>"`
 5. **Gatekeeper 终检**：`spctl --assess --verbose=4 "<app>"` 应 `accepted` / `source=Notarized Developer ID`
-6. **打 dmg**：staging 目录放 `.app` + `/Applications` 软链接 → `hdiutil create -volname "cmx 企业桌面智能体" -srcfolder <staging> -fs HFS+ -format UDBZ <out.dmg>`
+6. **打 dmg**：staging 目录放 `.app` + `/Applications` 软链接 → `hdiutil create -volname "TrueMate" -srcfolder <staging> -fs HFS+ -format UDBZ <out.dmg>`
 
 ## 常见坑（已踩并修进脚本，记录在此以防回退）
 

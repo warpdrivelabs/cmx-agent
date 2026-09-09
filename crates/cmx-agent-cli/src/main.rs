@@ -156,7 +156,7 @@ async fn demo(args: Vec<String>) -> anyhow::Result<()> {
         .build()?;
 
     let mut session = Session::new("cli-session")
-        .with_system("你是 cmx 企业桌面智能体。安全第一，能用工具就用工具。");
+        .with_system("你是 TrueMate（cmx 企业桌面智能体）。安全第一，能用工具就用工具。");
 
     let outcome = agent.run_turn(&mut session, instruction).await?;
 

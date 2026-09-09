@@ -287,7 +287,7 @@ fn guard_login(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), 
             "login",
             tauri::WebviewUrl::App("login.html".into()),
         )
-        .title("登录 · cmx 企业桌面智能体")
+        .title("登录 · TrueMate")
         .inner_size(980.0, 640.0)
         .resizable(false)
         .center()
@@ -357,7 +357,7 @@ async fn logout_to_login(app: tauri::AppHandle, state: State<'_, AppState>) -> R
             "login",
             tauri::WebviewUrl::App("login.html".into()),
         )
-        .title("登录 · cmx 企业桌面智能体")
+        .title("登录 · TrueMate")
         .inner_size(980.0, 640.0)
         .resizable(false)
         .center()

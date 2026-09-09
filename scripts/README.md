@@ -48,7 +48,7 @@ cd cmx-agent/scripts
 IDENTITY="Developer ID Application: Pansoft Company Limited (W8H2ZU6LLY)"
 TEAM_ID="W8H2ZU6LLY"
 NOTARY_PROFILE="cmx-agent-notary"
-APP_NAME="cmx 企业桌面智能体"
+APP_NAME="TrueMate"
 ```
 
 ### 流程拆解（脚本内部步骤）
