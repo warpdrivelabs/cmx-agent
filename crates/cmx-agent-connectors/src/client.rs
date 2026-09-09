@@ -240,21 +240,13 @@ impl CmxServiceClient {
             .send()
             .await
             .map_err(|e| ClientError::Transport(e.to_string()))?;
-        let status = resp.status();
         let parsed: Value = resp
             .json()
             .await
             .map_err(|e| ClientError::Decode(e.to_string()))?;
-        match unwrap_envelope(parsed) {
-            Ok(v) => Ok(v),
-            Err(e) => {
-                if status.is_success() {
-                    Err(e)
-                } else {
-                    Err(ClientError::Http(status.as_u16()))
-                }
-            }
-        }
+        // body 是信封则按 code 解——业务错误可能伴随 4xx 状态（如改密策略不符回 400），
+        // 此时 Envelope{msg}（中文提示）比裸 Http(status) 有用得多，故无条件优先信封。
+        unwrap_envelope(parsed)
     }
 
     /// DELETE 一个返回信封的端点，带 `Authorization: Bearer <token>`。

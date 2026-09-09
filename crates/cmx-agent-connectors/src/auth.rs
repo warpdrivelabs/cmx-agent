@@ -29,9 +29,20 @@ pub struct LoggedInUser {
     pub username: String,
     pub nickname: Option<String>,
     pub roles: Vec<String>,
+    /// 初始密码未修改标志（门户登录响应透出；true 时前端弹框提醒改密）。
+    pub must_change_password: bool,
     /// access_token（后端持有，用于后续带 Bearer 调 cmx 服务；`skip` 不进前端 JSON）。
     #[serde(skip)]
     pub access_token: String,
+    /// refresh_token（后端持有；会话落盘 + 到期续签用，`skip` 不进前端 JSON）。
+    #[serde(skip)]
+    pub refresh_token: String,
+    /// access_token 过期时间（Unix 秒；0 = 未知，仅落盘展示用）。
+    #[serde(skip)]
+    pub access_expires_at: i64,
+    /// refresh_token 过期时间（Unix 秒；0 = 未知）。
+    #[serde(skip)]
+    pub refresh_expires_at: i64,
 }
 
 impl LoggedInUser {
@@ -42,8 +53,18 @@ impl LoggedInUser {
             "username": self.username,
             "nickname": self.nickname,
             "roles": self.roles,
+            "must_change_password": self.must_change_password,
         })
     }
+}
+
+/// 刷新令牌返回的新令牌对（refresh 轮换：旧 refresh_token 一次性作废）。
+#[derive(Debug, Clone)]
+pub struct TokenPair {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub access_expires_at: i64,
+    pub refresh_expires_at: i64,
 }
 
 /// 认证提供者。
@@ -80,34 +101,95 @@ impl AuthProvider {
             .to_string();
 
         // 带 Bearer 取用户身份；失败不致命（至少已登录），用 username 兜底。
-        let me = self
-            .client
-            .get_data_bearer("/api/auth/me", &access_token)
-            .await
-            .unwrap_or(Value::Null);
+        let me = self.me(&access_token).await.unwrap_or(Value::Null);
+        let mut user = user_from_me(&me, username, access_token);
+        // 令牌与过期时间取自登录响应（me 不含）；初始密码标志以登录响应为准（me 已兜底）。
+        user.refresh_token = json_str(&data, "refresh_token");
+        user.access_expires_at = data
+            .get("access_expires_at")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        user.refresh_expires_at = data
+            .get("refresh_expires_at")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        if let Some(b) = json_bool(&data, "must_change_password") {
+            user.must_change_password = b;
+        }
+        Ok(user)
+    }
 
-        Ok(LoggedInUser {
-            user_id: json_str(&me, "user_id"),
-            username: me
-                .get("username")
-                .and_then(|v| v.as_str())
-                .unwrap_or(username)
-                .to_string(),
-            nickname: me
-                .get("nickname")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            roles: me
-                .get("roles")
-                .and_then(|v| v.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|r| r.as_str().map(|s| s.to_string()))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            access_token,
+    /// GET /api/auth/me（Bearer）→ 原始 data。
+    pub async fn me(&self, access_token: &str) -> Result<Value, ClientError> {
+        self.client.get_data_bearer("/api/auth/me", access_token).await
+    }
+
+    /// 刷新令牌：POST /api/auth/refresh `{refresh_token}` → 新令牌对（refresh 轮换，旧的一次性作废）。
+    pub async fn refresh(&self, refresh_token: &str) -> Result<TokenPair, ClientError> {
+        let data = self
+            .client
+            .post_data("/api/auth/refresh", json!({ "refresh_token": refresh_token }))
+            .await?;
+        Ok(TokenPair {
+            access_token: json_str(&data, "access_token"),
+            refresh_token: json_str(&data, "refresh_token"),
+            access_expires_at: data
+                .get("access_expires_at")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0),
+            refresh_expires_at: data
+                .get("refresh_expires_at")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0),
         })
+    }
+
+    /// 修改密码：POST /api/auth/change-password `{old_password,new_password}`（Bearer 当前 token）。
+    /// 门户改密成功即吊销该用户全部 token（含当前会话）——调用方随后必须重新登录。
+    pub async fn change_password(
+        &self,
+        access_token: &str,
+        old_password: &str,
+        new_password: &str,
+    ) -> Result<(), ClientError> {
+        let body = json!({
+            "old_password": old_password,
+            "new_password": new_password,
+        });
+        self.client
+            .post_data_bearer("/api/auth/change-password", body, access_token)
+            .await?;
+        Ok(())
+    }
+}
+
+/// 由 /api/auth/me 响应组装用户（token 由调用方附加；me 缺字段时回退 `fallback_username`）。
+pub fn user_from_me(me: &Value, fallback_username: &str, access_token: String) -> LoggedInUser {
+    LoggedInUser {
+        user_id: json_str(me, "user_id"),
+        username: me
+            .get("username")
+            .and_then(|v| v.as_str())
+            .unwrap_or(fallback_username)
+            .to_string(),
+        nickname: me
+            .get("nickname")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        roles: me
+            .get("roles")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|r| r.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        must_change_password: json_bool(me, "must_change_password").unwrap_or(false),
+        access_token,
+        refresh_token: String::new(),
+        access_expires_at: 0,
+        refresh_expires_at: 0,
     }
 }
 
@@ -117,6 +199,15 @@ fn json_str(v: &Value, key: &str) -> String {
         Some(Value::String(s)) => s.clone(),
         Some(Value::Number(n)) => n.to_string(),
         _ => String::new(),
+    }
+}
+
+/// 读一个 bool 字段（兼容 bool / 0|1 数字编码）。字段缺失返回 None。
+fn json_bool(v: &Value, key: &str) -> Option<bool> {
+    match v.get(key) {
+        Some(Value::Bool(b)) => Some(*b),
+        Some(Value::Number(n)) => Some(n.as_i64().unwrap_or(0) != 0),
+        _ => None,
     }
 }
 
@@ -145,11 +236,16 @@ mod tests {
             username: "admin".into(),
             nickname: Some("Super Admin".into()),
             roles: vec!["admin".into()],
+            must_change_password: true,
             access_token: "SECRET".into(),
+            refresh_token: "R-SECRET".into(),
+            access_expires_at: 0,
+            refresh_expires_at: 0,
         };
         let j = u.public_json();
         assert_eq!(j["username"], "admin");
         assert_eq!(j["user_id"], "123");
+        assert_eq!(j["must_change_password"], true);
         assert!(!j.to_string().contains("SECRET"));
     }
 
@@ -160,10 +256,29 @@ mod tests {
             username: "a".into(),
             nickname: None,
             roles: vec![],
+            must_change_password: false,
             access_token: "SECRET".into(),
+            refresh_token: "R-SECRET".into(),
+            access_expires_at: 0,
+            refresh_expires_at: 0,
         };
         let s = serde_json::to_string(&u).unwrap();
         assert!(!s.contains("SECRET"));
         assert!(!s.contains("access_token"));
+    }
+
+    #[test]
+    fn user_from_me_maps_fields() {
+        let me = json!({
+            "user_id": 42, "username": "u1", "nickname": "Nick",
+            "roles": ["r1", "r2"], "must_change_password": 1,
+        });
+        let u = user_from_me(&me, "fallback", "tok".into());
+        assert_eq!(u.user_id, "42");
+        assert_eq!(u.username, "u1");
+        assert_eq!(u.nickname.as_deref(), Some("Nick"));
+        assert_eq!(u.roles, vec!["r1".to_string(), "r2".to_string()]);
+        assert!(u.must_change_password);
+        assert_eq!(u.access_token, "tok");
     }
 }

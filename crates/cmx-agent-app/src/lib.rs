@@ -22,7 +22,7 @@ pub mod protocol;
 pub mod store;
 pub mod stream;
 
-pub use app::{AgentApp, SendOutcome};
+pub use app::{AgentApp, AuthSessionFile, SendOutcome, read_auth_session, write_auth_session};
 pub use approval::InteractiveApprover;
 pub use builder::DesktopAppBuilder;
 pub use bus::{BusSink, EventEnvelope, SessionEventBus};
@@ -38,5 +38,5 @@ pub use store::{FileSessionStore, SessionMeta, SessionStore};
 // 连接器类型 re-export，便于前门壳（web/tauri）无需直接依赖 cmx-agent-connectors 即可配置。
 pub use cmx_agent_connectors::{
     AuthConfig, BoundIdentity, ConnectorCard, ConnectorConfig, ConnectorRegistry, ImBinding,
-    ImBindingClient, LoggedInUser,
+    ImBindingClient, LoggedInUser, TokenPair, user_from_me,
 };

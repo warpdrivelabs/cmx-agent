@@ -14,7 +14,7 @@ pub mod health;
 pub mod im_binding;
 pub mod registry;
 
-pub use auth::{AuthConfig, AuthProvider, LoggedInUser};
+pub use auth::{AuthConfig, AuthProvider, LoggedInUser, TokenPair, user_from_me};
 pub use client::{ClientError, CmxServiceClient, TokenStore};
 pub use im_binding::{BoundIdentity, ImBinding, ImBindingClient};
 pub use connectors::{

@@ -474,3 +474,35 @@ async fn set_model_demo_not_persisted() {
     // demo 切换不应写出 providers.json 的激活变化（无激活条目）
     assert!(v["data"]["current"] == "demo");
 }
+
+#[tokio::test]
+async fn change_password_without_auth_service_is_auth_error() {
+    let tmp = TempDir::new("proto-pwd-noauth");
+    let app = app_with(&tmp, MockModel::saying("hi"));
+    let v = resp(serde_json::from_str(
+        &dispatch_json(
+            &app,
+            r#"{"cmd":"change_password","old_password":"a","new_password":"b"}"#,
+        )
+        .await,
+    )
+    .unwrap());
+    assert_eq!(v["ok"], false, "{v:?}");
+    assert_eq!(v["error"]["code"], "auth_error");
+}
+
+#[tokio::test]
+async fn change_password_rejects_same_or_empty_new_password() {
+    // 测试环境未启用 auth 服务，命令在任何参数校验前就返回 auth_error——
+    // 本用例锁定的是空/同值入参同样收敛为稳定信封码 auth_error（永不 panic、不触网）。
+    let tmp = TempDir::new("proto-pwd-args");
+    let app = app_with(&tmp, MockModel::saying("hi"));
+    for body in [
+        r#"{"cmd":"change_password","old_password":"","new_password":""}"#,
+        r#"{"cmd":"change_password","old_password":"x","new_password":"x"}"#,
+    ] {
+        let v = resp(serde_json::from_str(&dispatch_json(&app, body).await).unwrap());
+        assert_eq!(v["ok"], false, "{body} -> {v:?}");
+        assert_eq!(v["error"]["code"], "auth_error");
+    }
+}

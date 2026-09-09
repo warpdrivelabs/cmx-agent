@@ -86,7 +86,14 @@ pub enum AppRequest {
     /// 登录（对接门户 /api/auth/login）。成功后前门持有当前用户。
     Login { username: String, password: String },
     /// 取当前登录用户（前端启动时填充用户菜单；未登录 data.user=null）。
+    /// `user.must_change_password=true` 时前端应弹框提醒修改密码。
     CurrentUser,
+    /// 修改密码（对接门户 /api/auth/change-password）。门户改密成功即吊销全部 token，
+    /// 后端同步本地登出——前端收到 ok 后引导重新登录（`data.relogin=true`）。
+    ChangePassword {
+        old_password: String,
+        new_password: String,
+    },
     /// 登出（清当前用户）。
     Logout,
     /// 人在环审批决定（X4）：前端在审批卡片点「允许/拒绝」后发来，唤醒挂起的回合。
@@ -256,6 +263,9 @@ async fn dispatch_inner(app: &AgentApp, req: AppRequest) -> Result<AppResponse, 
         AppRequest::CurrentUser => Ok(AppResponse::ok(
             serde_json::json!({ "user": app.current_user() }),
         )),
+        AppRequest::ChangePassword { old_password, new_password } => {
+            Ok(AppResponse::ok(app.change_password(&old_password, &new_password).await?))
+        }
         AppRequest::Logout => {
             app.logout();
             Ok(AppResponse::ok(serde_json::json!({ "ok": true })))

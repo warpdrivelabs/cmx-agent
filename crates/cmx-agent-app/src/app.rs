@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use cmx_agent_connectors::{AuthProvider, ConnectorCard, ConnectorRegistry, LoggedInUser};
+use cmx_agent_connectors::{AuthProvider, ConnectorCard, ConnectorRegistry, LoggedInUser, user_from_me};
 use cmx_agent_core::event::StopReason;
 use cmx_agent_core::{Agent, Session};
 
@@ -65,6 +65,52 @@ pub struct AgentApp {
     event_bus: Arc<crate::bus::SessionEventBus>,
     /// IM 绑定客户端（Some=启用绑定面板：gen_code/list/unbind 三命令）。
     im_binding: Option<cmx_agent_connectors::ImBindingClient>,
+    /// 登录会话落盘路径（`<data_dir>/auth.json`，由 builder 在启用登录门时自动装配）。
+    /// None = 不持久化（CLI / 测试）。
+    auth_session_path: Option<std::path::PathBuf>,
+}
+
+/// 落盘的登录会话（`<data_dir>/auth.json`）：启动时经 /api/auth/me 校验回放，
+/// access 失效再用 refresh 续签——双壳共用同一份数据根，一次登录双壳免登。
+/// ⚠ 含明文令牌：与 model.json 同级保护（用户 profile 目录，不进仓库/不进日志）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AuthSessionFile {
+    pub user_id: String,
+    pub username: String,
+    #[serde(default)]
+    pub nickname: Option<String>,
+    #[serde(default)]
+    pub roles: Vec<String>,
+    #[serde(default)]
+    pub must_change_password: bool,
+    pub access_token: String,
+    #[serde(default)]
+    pub refresh_token: String,
+    #[serde(default)]
+    pub access_expires_at: i64,
+    #[serde(default)]
+    pub refresh_expires_at: i64,
+    /// 落盘时间（Unix 秒，诊断用）。
+    #[serde(default)]
+    pub saved_at: i64,
+}
+
+/// 读会话文件。损坏 / 缺失 → None。
+pub fn read_auth_session(path: &std::path::Path) -> Option<AuthSessionFile> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+/// 写会话文件（登录成功 / refresh 轮换后调用）。失败只打日志不阻断登录本身。
+pub fn write_auth_session(path: &std::path::Path, session: &AuthSessionFile) {
+    match serde_json::to_string_pretty(session) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(path, json) {
+                eprintln!("[auth] 会话落盘失败（{}）：{e}", path.display());
+            }
+        }
+        Err(e) => eprintln!("[auth] 会话序列化失败：{e}"),
+    }
 }
 
 impl AgentApp {
@@ -89,7 +135,14 @@ impl AgentApp {
             providers_lock: Mutex::new(()),
             event_bus: Arc::new(crate::bus::SessionEventBus::new()),
             im_binding: None,
+            auth_session_path: None,
         }
+    }
+
+    /// 注入登录会话落盘路径（由 DesktopAppBuilder 在启用登录门时调用；None = 不持久化）。
+    pub fn with_auth_session_path(mut self, path: std::path::PathBuf) -> Self {
+        self.auth_session_path = Some(path);
+        self
     }
 
     pub fn with_default_system(mut self, system: impl Into<String>) -> Self {
@@ -255,6 +308,67 @@ impl AgentApp {
             .await
             .map_err(|e| AppError::Auth(friendly_auth_error(e, auth.base_url())))?;
         let public = user.public_json();
+        // 会话落盘（下次启动回放免登录）；失败静默——持久化是优化，不是登录门。
+        self.persist_auth_session(&user);
+        self.apply_session(user).await;
+        Ok(public)
+    }
+
+    /// 启动会话回放：读 `<data_dir>/auth.json` → `/api/auth/me` 校验 → 有效则恢复登录态；
+    /// access 失效用 refresh_token 续签（轮换）后重试；确认失效 → 清落盘文件（回登录门）。
+    /// ⚠ 网络/服务不可达 ≠ 会话失效：此时**保留**落盘文件，下次启动再试（不能因断网把人登出）。
+    /// 返回是否恢复成功。
+    pub async fn try_restore_session(&self) -> bool {
+        let (Some(path), Some(auth)) = (&self.auth_session_path, &self.auth) else {
+            return false;
+        };
+        let Some(file) = read_auth_session(path) else { return false };
+        eprintln!("[auth] 会话回放：检测到本地登录态（{}），校验中…", file.username);
+        let mut access = file.access_token.clone();
+        let mut refresh_token = file.refresh_token.clone();
+        let mut access_exp = file.access_expires_at;
+        let mut refresh_exp = file.refresh_expires_at;
+        for attempt in 0..2 {
+            let me = match auth.me(&access).await {
+                Ok(me) => me,
+                Err(e) => {
+                    if is_auth_rejection(&e) && attempt == 0 && !refresh_token.is_empty() {
+                        // access 确认失效 → refresh 续签（refresh 轮换，须回写落盘）后重验。
+                        match auth.refresh(&refresh_token).await {
+                            Ok(pair) if !pair.access_token.is_empty() => {
+                                access = pair.access_token;
+                                refresh_token = pair.refresh_token;
+                                access_exp = pair.access_expires_at;
+                                refresh_exp = pair.refresh_expires_at;
+                                continue;
+                            }
+                            _ => break, // refresh 也被拒 / 响应异常：会话彻底失效
+                        }
+                    }
+                    if !is_auth_rejection(&e) {
+                        // 传输失败 / 响应解析异常：按网络问题处理，保留文件下次启动再试。
+                        eprintln!("[auth] 会话校验暂不可达（{e}），保留本地会话");
+                        return false;
+                    }
+                    break;
+                }
+            };
+            let mut user = user_from_me(&me, &file.username, access);
+            user.refresh_token = refresh_token;
+            user.access_expires_at = access_exp;
+            user.refresh_expires_at = refresh_exp;
+            self.apply_session(user.clone()).await;
+            self.persist_auth_session(&user); // refresh 轮换后回写；直接校验通过时为无害重写
+            eprintln!("[auth] 会话回放成功：{}，跳过登录门", user.username);
+            return true;
+        }
+        let _ = std::fs::remove_file(path);
+        eprintln!("[auth] 会话已失效，清除本地会话（回登录门）");
+        false
+    }
+
+    /// 把登录用户写进各共享槽（令牌槽 / PDP 主体 / current_user）。登录与回放共用。
+    async fn apply_session(&self, user: LoggedInUser) {
         // 把 access_token 写入共享令牌槽 → 之后连接器读写自动带 Bearer（auth=on 服务如 cmx-flow 必需）。
         if let Some(ts) = &self.token_store
             && let Ok(mut g) = ts.write() {
@@ -273,7 +387,24 @@ impl AgentApp {
             pep.prewarm(&subj, cmx_agent_connectors::ENFORCED_PERMS).await;
         }
         *self.current_user.lock().expect("current_user lock") = Some(user);
-        Ok(public)
+    }
+
+    /// 会话落盘（auth.json）。静默容错：落盘失败不阻断登录。
+    fn persist_auth_session(&self, user: &LoggedInUser) {
+        let Some(path) = &self.auth_session_path else { return };
+        let file = AuthSessionFile {
+            user_id: user.user_id.clone(),
+            username: user.username.clone(),
+            nickname: user.nickname.clone(),
+            roles: user.roles.clone(),
+            must_change_password: user.must_change_password,
+            access_token: user.access_token.clone(),
+            refresh_token: user.refresh_token.clone(),
+            access_expires_at: user.access_expires_at,
+            refresh_expires_at: user.refresh_expires_at,
+            saved_at: now_secs(),
+        };
+        write_auth_session(path, &file);
     }
 
     /// 当前登录用户（前端可见信息，不含令牌）。未登录返回 None。
@@ -283,6 +414,53 @@ impl AgentApp {
             .expect("current_user lock")
             .as_ref()
             .map(|u| u.public_json())
+    }
+
+    /// 修改密码（对接门户 /api/auth/change-password，Bearer 当前会话令牌）。
+    /// 门户改密成功即吊销该用户全部 token——这里同步本地登出（清用户 + 令牌槽 + PDP 主体），
+    /// 前端收到 ok 后引导重新登录。返回 `{"changed":true,"relogin":true}`。
+    pub async fn change_password(&self, old_password: &str, new_password: &str) -> AppResult<serde_json::Value> {
+        let auth = self
+            .auth
+            .as_ref()
+            .ok_or_else(|| AppError::Auth("未配置认证服务".into()))?;
+        let token = {
+            let guard = self.current_user.lock().expect("current_user lock");
+            guard
+                .as_ref()
+                .ok_or_else(|| AppError::Auth("尚未登录".into()))?
+                .access_token
+                .clone()
+        };
+        if old_password.is_empty() || new_password.is_empty() {
+            return Err(AppError::Auth("请输入旧密码和新密码".into()));
+        }
+        if old_password == new_password {
+            return Err(AppError::Auth("新密码不能与旧密码相同".into()));
+        }
+        // 镜像门户 PasswordPolicy（cmx-auth password/policy.rs）本地快速失败；门户仍为最终裁决。
+        if new_password.len() < 8 {
+            return Err(AppError::Auth("密码长度不能少于 8 位".into()));
+        }
+        if !new_password.chars().any(|c| c.is_ascii_uppercase()) {
+            return Err(AppError::Auth("密码必须包含大写字母".into()));
+        }
+        if !new_password.chars().any(|c| c.is_ascii_lowercase()) {
+            return Err(AppError::Auth("密码必须包含小写字母".into()));
+        }
+        if !new_password.chars().any(|c| c.is_ascii_digit()) {
+            return Err(AppError::Auth("密码必须包含数字".into()));
+        }
+        const PWD_SPECIAL: &str = "!@#$%^&*()_+-=[]{}|;':\",./<>?`~";
+        if !new_password.chars().any(|c| PWD_SPECIAL.contains(c)) {
+            return Err(AppError::Auth("密码必须包含特殊字符".into()));
+        }
+        auth.change_password(&token, old_password, new_password)
+            .await
+            .map_err(|e| AppError::Auth(friendly_auth_error(e, auth.base_url())))?;
+        // 改密成功：门户已全端吊销 token，本地立即登出（须重新登录）。
+        self.logout();
+        Ok(serde_json::json!({ "changed": true, "relogin": true }))
     }
 
     /// 当前登录用户的授权主体（userId+roles）。IM 个人模式用：桥直接以此身份
@@ -319,6 +497,10 @@ impl AgentApp {
             && let Ok(mut g) = identity.write() {
                 *g = cmx_agent_core::Subject::new("anon");
             }
+        // 会话文件同步删除 → 下次启动不回放（真登出，而非"重启还挂着旧会话"）。
+        if let Some(path) = &self.auth_session_path {
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     /// 列出连接器卡片（描述 + live 健康）。未启用连接器时返回空表。
@@ -1023,6 +1205,25 @@ fn provider_label(base_url: &str) -> String {
     } else {
         "OpenAI 兼容".into()
     }
+}
+
+/// 会话校验错误分类：服务端**明确拒绝**（401/403 或鉴权类业务码）才算会话失效；
+/// 传输/解析失败按网络问题处理（回放保留文件）。
+fn is_auth_rejection(e: &cmx_agent_connectors::ClientError) -> bool {
+    use cmx_agent_connectors::ClientError as C;
+    match e {
+        C::Http(c) => *c == 401 || *c == 403,
+        C::Envelope { code, .. } => *code == 401 || *code == 403,
+        _ => false,
+    }
+}
+
+/// Unix 秒（会话落盘时间戳用）。
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// 把连接器 [`ClientError`] 映射为面向用户的干净登录错误文案。

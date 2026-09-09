@@ -48,6 +48,12 @@ async fn main() {
     std::fs::create_dir_all(&workdir).expect("create workdir");
 
     let app = build_app(&workdir, &data_dir).await;
+    // 会话回放：本地 auth.json 有效则恢复登录态（浏览器打开即已登录，免每次访问先登录页）。
+    let restored = app.try_restore_session().await;
+    tracing::info!(
+        "会话回放：{}",
+        if restored { "成功，跳过登录页" } else { "无会话/已失效，走登录页" }
+    );
     let state = AppState { app: Arc::new(app) };
 
     let router = Router::new()
@@ -58,7 +64,9 @@ async fn main() {
         .route("/api/stream", post(api_stream))
         .route("/api/subscribe", get(api_subscribe))
         .route("/health", get(|| async { "ok" }))
-        .route("/next", get(next_ui))
+        // 无尾斜杠时相对路径 ./assets/* 会解析到根 /assets/*（404 白屏）——先重定向到 /next/
+        .route("/next", get(|| async { axum::response::Redirect::to("/next/") }))
+        .route("/next/", get(next_ui))
         .fallback(next_assets)
         .with_state(state);
 

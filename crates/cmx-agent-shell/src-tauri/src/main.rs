@@ -322,14 +322,14 @@ async fn login(
             .cloned()
             .unwrap_or(serde_json::Value::Null);
         eprintln!("[login] ok; revealing main window");
-        // 显示已存在的主窗口 + 关闭登录窗。通知主窗口刷新用户信息。
+        // 显示已存在的主窗口 + 隐藏登录窗（**不销毁**：登出直接 show 复用，避免每次跨线程重建 webview——曾致登出卡死）。通知主窗口刷新用户信息。
         if let Some(main) = app.get_webview_window("main") {
             let _ = main.show();
             let _ = main.set_focus();
             let _ = main.emit("logged-in", user.clone());
         }
         if let Some(login_win) = app.get_webview_window("login") {
-            let _ = login_win.close();
+            let _ = login_win.hide();
         }
         Ok(user.to_string())
     } else {
@@ -344,9 +344,13 @@ async fn login(
     }
 }
 
-/// 登出并回到登录窗（主窗口菜单「退出登录」调用）：清认证态 → 隐藏主窗 → 重建/显示登录窗。
+/// 登出并回到登录窗（主窗口菜单「退出登录」调用）：清认证态 → 隐藏主窗 → 显示/重建登录窗。
+///
+/// ⚠ 必须是 **sync 命令**（跑主线程）：`WebviewWindowBuilder::build()` 在 async 命令（异步运行时线程）
+/// 里跨线程建窗，Windows/WebView2 下偶发死锁——正是"退出登录经常卡死"的根因。登录窗常驻隐藏复用，
+/// 常规登出只剩 show/hide，不再建窗；build 分支仅作窗口意外丢失时的兜底（此时已安全在主线程）。
 #[tauri::command]
-async fn logout_to_login(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+fn logout_to_login(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     state.app.logout();
     if let Some(login_win) = app.get_webview_window("login") {
         let _ = login_win.show();
@@ -517,6 +521,21 @@ fn main() {
             let app_state = app.state::<AppState>();
             let app_ref = app_state.app.clone();
             let handle = app.handle().clone();
+            // 会话回放：本地 auth.json 有效（access 可用或 refresh 续签成功）→ 隐藏登录窗、
+            // 直进主窗，免每次启动登录；无效/无会话则保持登录门（conf 默认 login 可见）。
+            // 阻塞主线程跑一次短网络校验（/me 为 JWT 校验级延迟）换窗口状态首帧前确定，避免闪跳。
+            let restored = net_rt().block_on(app_ref.try_restore_session());
+            if restored {
+                if let Some(login_win) = app.get_webview_window("login") {
+                    let _ = login_win.hide();
+                }
+                if let Some(main) = app.get_webview_window("main") {
+                    let _ = main.show();
+                    let _ = main.set_focus();
+                    let user = app_ref.current_user().unwrap_or(serde_json::Value::Null);
+                    let _ = main.emit("logged-in", user);
+                }
+            }
             net_rt().spawn(async move {
                 let mut rx = app_ref.event_bus().subscribe();
                 while let Ok(env) = rx.recv().await {
@@ -532,13 +551,19 @@ fn main() {
             Ok(())
         })
         // 登录门守卫：未登录时关闭登录窗 = 退出应用（否则只剩隐藏的主窗，界面像卡死）。
+        // 主窗关闭 = 退出应用：登录窗现常驻隐藏复用（不再销毁），主窗 X 后若无此守卫，
+        // 隐藏的登录窗会让进程残留成"假死"。
         .on_window_event(|window, event| {
-            if window.label() == "login" {
-                if let tauri::WindowEvent::CloseRequested { .. } = event {
-                    let authed = window.state::<AppState>().app.is_authenticated();
-                    if !authed {
-                        window.app_handle().exit(0);
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                match window.label() {
+                    "login" => {
+                        let authed = window.state::<AppState>().app.is_authenticated();
+                        if !authed {
+                            window.app_handle().exit(0);
+                        }
                     }
+                    "main" => window.app_handle().exit(0),
+                    _ => {}
                 }
             }
         })

@@ -270,6 +270,8 @@ impl DesktopAppBuilder {
         // B2 模型选择器：把选定模型包进可热换的 ModelSlot（Agent 持 wrapper，app 经句柄换实现）。
         let model_slot = crate::ModelSlot::new(self.model);
         let model_config_dir = self.data_dir.clone();
+        // 登录会话落盘路径（data_dir 本体稍后 move 进 FileSessionStore，先克隆备用）。
+        let auth_session_path = self.data_dir.clone().join("auth.json");
 
         let agent = Agent::builder()
             .model(Arc::new(model_slot.clone()))
@@ -299,7 +301,10 @@ impl DesktopAppBuilder {
             app = app.with_connectors(cr);
         }
         if let Some(auth_cfg) = self.auth {
-            app = app.with_auth(Arc::new(AuthProvider::new(auth_cfg)));
+            // 启动回放免重复登录（双壳同一数据根共享同一份 auth.json）。
+            app = app
+                .with_auth(Arc::new(AuthProvider::new(auth_cfg)))
+                .with_auth_session_path(auth_session_path);
         }
         // U13：把 PEP + 共享 identity 交给 app——登录后按真实用户角色重热 PDP 判定（授权门接地）。
         if let Some((pep, identity)) = data_auth_wire {

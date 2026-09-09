@@ -11,6 +11,9 @@
 <title>TrueMate - 专注工作，真心搭档</title>
 <style>
   :root{
+    /* 原生控件（select/checkbox/滚动条）绘制通道声明：WebKitGTK/WebView2/WKWebView 据此画深色，
+       否则 Linux 按本机 GTK 亮色主题画成白底浅灰字（CSS background 管不到这个通道）。 */
+    color-scheme:dark;
     --bg:#0d0d0d; --panel:#141414; --panel2:#1a1a19; --surface:#1e1e1d; --hover:#242423;
     --ink:#f2f1ec; --ink2:#b8b7ae; --muted:#7d7c76; --border:#2a2a28; --border2:#333330;
     --blue:#3987e5; --aqua:#1fb182; --violet:#9085e9; --magenta:#d55181; --orange:#eb6834;
@@ -21,6 +24,7 @@
   }
   /* 浅色主题（dataviz light 令牌）——由标题栏主题开关切换 html[data-theme] */
   html[data-theme="light"]{
+    color-scheme:light; /* 原生控件随亮色主题转亮（见 :root 处注释） */
     --bg:#f4f4f2; --panel:#ffffff; --panel2:#f7f7f5; --surface:#ffffff; --hover:#ececea;
     --ink:#0b0b0b; --ink2:#52514e; --muted:#898781; --border:#e4e3dc; --border2:#d6d5ce;
     --blue:#2a78d6; --aqua:#1baf7a; --violet:#4a3aa7; --magenta:#e87ba4; --orange:#eb6834;
@@ -204,6 +208,11 @@
   .mcfg-row label{font-size:11.5px;color:var(--muted);font-weight:600}
   .mcfg-row input[type=text],.mcfg-row input[type=number],.mcfg-row select{background:var(--bg);border:1px solid var(--border2);border-radius:8px;padding:7px 10px;color:var(--ink);font-size:13px;width:100%;box-sizing:border-box}
   .mcfg-row input[type=text]:focus,.mcfg-row input[type=number]:focus,.mcfg-row select:focus{outline:none;border-color:var(--aqua)}
+  /* 修改密码弹框：密码输入框复用 mcfg 视觉；pwd-warn = 初始密码强制提醒条 */
+  .mcfg-row input[type=password]{background:var(--bg);border:1px solid var(--border2);border-radius:8px;padding:7px 10px;color:var(--ink);font-size:13px;width:100%;box-sizing:border-box}
+  .mcfg-row input[type=password]:focus{outline:none;border-color:var(--aqua)}
+  .pwd-warn{display:none;align-items:flex-start;gap:8px;background:rgba(255,180,0,.08);border:1px solid rgba(255,180,0,.35);border-radius:8px;padding:8px 10px;font-size:12px;color:var(--ink);line-height:1.5;margin-bottom:13px}
+  .pwd-err{display:none;background:rgba(229,72,77,.08);border:1px solid rgba(229,72,77,.4);border-radius:8px;padding:8px 10px;font-size:12px;color:#e5484d;line-height:1.5;margin-bottom:13px;word-break:break-all}
   .mcfg-key-wrap{display:flex;gap:6px;align-items:center}
   .mcfg-key-wrap input{flex:1}
   .mcfg-key-wrap button{background:var(--bg);border:1px solid var(--border2);border-radius:8px;padding:6px 10px;color:var(--muted);cursor:pointer;font-size:15px;flex:0 0 auto}
@@ -747,6 +756,46 @@
       </div>
     </div>
   </div>
+  <!-- 修改密码弹框（Modal）：登录后 must_change_password=true **强制弹出且不可关闭**（无 ✕ / 稍后再说，
+       唯一出口 =「退出登录」回登录页或关 app），改密前不能操作；用户菜单「修改密码」也走这里（可关闭）。
+       对接门户 /api/auth/change-password；成功后全端 token 吊销 → 返回登录页。交互走 data-act 委托（CSP 禁内联）。 -->
+  <div class="mcfg-overlay hidden" id="pwd-overlay">
+    <div class="mcfg-box">
+      <div class="mcfg-head">🔑 修改密码 <button id="pwd-x" data-act="pwdClose">✕</button></div>
+      <div class="pwd-warn" id="pwd-warn"><span>⚠️</span><span>检测到仍在使用<b>初始密码</b>，必须修改密码后才能使用；修改成功后将退出并返回登录页。</span></div>
+      <div class="mcfg-row">
+        <label>旧密码</label>
+        <input id="pwd-old" type="password" autocomplete="current-password" placeholder="请输入当前密码">
+      </div>
+      <div class="mcfg-row">
+        <label>新密码</label>
+        <input id="pwd-new" type="password" autocomplete="new-password" placeholder="≥8 位，须含大小写字母、数字和特殊字符">
+      </div>
+      <div class="mcfg-row">
+        <label>确认新密码</label>
+        <input id="pwd-confirm" type="password" autocomplete="new-password" placeholder="再次输入新密码">
+      </div>
+      <div class="pwd-err" id="pwd-err"></div>
+      <div class="mcfg-hint">修改成功后当前登录会话立即失效，需用新密码重新登录。</div>
+      <div class="mcfg-actions">
+        <button id="pwd-later" data-act="pwdClose">稍后再说</button>
+        <button id="pwd-exit" data-act="pwdExit" style="display:none">退出登录</button>
+        <button class="mcfg-save" data-act="pwdSave">确认修改</button>
+      </div>
+    </div>
+  </div>
+  <!-- 退出登录确认（自制弹框替代原生 confirm——与主题一致）：点遮罩/取消关框，确认走 logoutConfirm。
+       交互走 data-act 委托（CSP 禁内联）。 -->
+  <div class="mcfg-overlay hidden" id="logout-overlay">
+    <div class="mcfg-box" style="width:min(360px,92vw)">
+      <div class="mcfg-head">⎋ 退出登录</div>
+      <div style="color:var(--muted);font-size:13px;line-height:1.7">确定要退出当前账户吗？<br>退出后需重新登录才能继续使用。</div>
+      <div class="mcfg-actions">
+        <button data-act="logoutCancel">取消</button>
+        <button class="mcfg-danger" data-act="logoutConfirm">退出登录</button>
+      </div>
+    </div>
+  </div>
   <!-- 用户菜单（点活动栏底部用户头像弹出）：用户信息 + 常用功能 -->
   <div class="cmxmenu usermenu" id="usermenu">    <div class="um-head">
       <div class="um-av" id="um-av">🐷</div>
@@ -754,6 +803,7 @@
     </div>
     <div class="mi-sep"></div>
     <div class="mi" data-act="userProfile"><span class="mi-i">👤</span> 账户信息</div>
+    <div class="mi" data-act="userChangePassword"><span class="mi-i">🔑</span> 修改密码</div>
     <div class="mi" data-act="userSwitch"><span class="mi-i">⇄</span> 切换账户</div>
     <div class="mi" data-act="userWorkspace"><span class="mi-i">🗂</span> 工作空间</div>
     <div class="mi-sep"></div>
@@ -1742,7 +1792,7 @@ async function imcfgSave(){
   if(r&&r.ok){ showToast("IM 配置："+((r.data&&r.data.note)||"已保存")); closeSettings(); }
   else { showToast("保存失败："+((r&&r.error&&r.error.message)||"未知")); }
 }
-function menuAbout(){ closeMenu(); alert("TrueMate - 专注工作，真心搭档\n版本 "+APP_VERSION+"\n\ncmx 企业桌面智能体 · 同核多壳架构\n形(前门) / 核(回合循环+守卫) / 体(cmx 引擎连接器)"); }
+function menuAbout(){ closeMenu(); alert("TrueMate\n版本 "+APP_VERSION+"\n\n复刻并超越 WorkBuddy · 同核多壳架构\n形(前门) / 核(回合循环+守卫) / 体(cmx 引擎连接器)"); }
 
 // ── Windows/Linux 窗口控件（最小化/最大化/关闭）+ 无边框缩放 ──
 // macOS 用系统红绿灯（Overlay 标题栏），不建这些；仅非 macOS 且在 Tauri 壳内才生效（Web 壳无 __TAURI__.window）。
@@ -1792,6 +1842,8 @@ async function refreshUser(){
   // 原生壳未登录：隐藏主窗、聚焦登录窗（每次启动先见登录门，与登出行为对齐）。
   if(!CURRENT_USER && window.__TAURI__ && window.__TAURI__.core){
     try{ await window.__TAURI__.core.invoke("guard_login"); }catch(e){}
+  }else if(!CURRENT_USER && location.pathname === "/"){
+    window.location.href = "login"; // Web 壳无会话：回登录页
   }
   const u = CURRENT_USER;
   const name = u ? (u.nickname || u.username) : "未登录";
@@ -1803,6 +1855,13 @@ async function refreshUser(){
   document.getElementById("um-mail").textContent = u
     ? ("@"+u.username + (u.roles && u.roles.length ? " · "+u.roles.join("/") : ""))
     : "点此登录 cmx 门户";
+  // 初始密码强制改密：must_change_password=true 期间改密框常驻（无关闭入口），改密/退出前不能操作；
+  // 弹框若被意外关闭（正常没有入口）这里兜底再弹起。登出（u=null）解除强制态。
+  if(u && u.must_change_password){
+    _pwdForced = true;
+    if(document.getElementById("pwd-overlay").classList.contains("hidden")) openPwdDialog(true);
+  }
+  if(!u){ _pwdForced = false; }
 }
 function toggleUserMenu(){ document.getElementById("cmxmenu").classList.remove("on"); document.getElementById("usermenu").classList.toggle("on"); }
 function userProfile(){ closeMenu();
@@ -1812,13 +1871,96 @@ function userProfile(){ closeMenu();
 function userSwitch(){ closeMenu(); alert("切换账户\n\n退出后重新登录即可切换账户/租户。"); }
 function userWorkspace(){ closeMenu(); alert("工作空间（占位）\n\n管理沙箱工作区根目录与数据目录。"); }
 
-async function userLogout(){ closeMenu();
-  if(!confirm("确定退出登录？")) return;
+function userLogout(){ closeMenu();
+  // 自制确认框替代原生 confirm（与主题一致）：取消/点遮罩关闭，确认走 logoutConfirm。
+  document.getElementById("logout-overlay").classList.remove("hidden");
+}
+function logoutCancel(){ document.getElementById("logout-overlay").classList.add("hidden"); }
+async function logoutConfirm(){
+  logoutCancel();
   try{ await call({cmd:"logout"}); }catch(e){}
   CURRENT_USER = null;
-  // 原生壳：回到登录窗（关主窗、开登录窗）；Web 壳：跳登录页。
+  // 原生壳：回到登录窗（隐藏主窗、显示登录窗）；Web 壳：跳登录页。
   if(window.__TAURI__ && window.__TAURI__.core){ try{ await window.__TAURI__.core.invoke("logout_to_login"); return; }catch(e){} }
   window.location.href = "login";
+}
+
+// ── 修改密码（门户 /api/auth/change-password）：用户菜单入口 + 登录后 must_change_password 强制弹框 ──
+// 门户改密成功即吊销该用户全部 token（后端 change_password 已同步本地登出）→ 前端引导重新登录。
+let _pwdForced = false;     // 强制改密态：must_change_password=true 期间弹框不可关闭，唯一出口=「退出登录」（登出回登录页，或直接关 app）
+// 密码策略镜像门户 PasswordPolicy：≥8 位 + 大写 + 小写 + 数字 + 特殊字符。
+const PWD_SPECIAL = "!@#$%^&*()_+-=[]{}|;':\",./<>?`~";
+function pwdPolicyError(p){
+  if(p.length < 8) return "密码长度不能少于 8 位";
+  if(!/[A-Z]/.test(p)) return "密码必须包含大写字母";
+  if(!/[a-z]/.test(p)) return "密码必须包含小写字母";
+  if(!/[0-9]/.test(p)) return "密码必须包含数字";
+  if(![...p].some(c=>PWD_SPECIAL.includes(c))) return "密码必须包含特殊字符（如 !@#$%^&*）";
+  return "";
+}
+function pwdShowError(msg){
+  const box = document.getElementById("pwd-err");
+  box.textContent = msg; box.style.display = "block";
+  showToast(msg);
+}
+function openPwdDialog(forced){
+  document.getElementById("pwd-overlay").classList.remove("hidden");
+  document.getElementById("pwd-warn").style.display = forced ? "flex" : "none";
+  // 强制态摘掉所有关闭入口（✕ / 稍后再说），换成「退出登录」＝登出回登录页。
+  document.getElementById("pwd-x").style.display = forced ? "none" : "";
+  document.getElementById("pwd-later").style.display = forced ? "none" : "";
+  document.getElementById("pwd-exit").style.display = forced ? "" : "none";
+  document.getElementById("pwd-err").style.display = "none";
+  ["pwd-old","pwd-new","pwd-confirm"].forEach(id=>{ document.getElementById(id).value=""; });
+  setTimeout(()=>document.getElementById("pwd-old").focus(), 50);
+}
+function userChangePassword(){ closeMenu();
+  if(!CURRENT_USER){ showToast("尚未登录"); return; }
+  openPwdDialog(false);
+}
+function pwdHide(){ document.getElementById("pwd-overlay").classList.add("hidden"); }
+function pwdClose(){ if(_pwdForced) return; pwdHide(); } // 强制态无出口（按钮已隐藏，此处双保险）
+async function pwdExit(){
+  // 强制改密态点「退出登录」：本地登出（清会话+删 auth.json）→ 原生壳回登录窗（也可直接关 app）；Web 壳跳登录页。
+  pwdHide(); _pwdForced = false;
+  try{ await call({cmd:"logout"}); }catch(e){}
+  CURRENT_USER = null;
+  if(window.__TAURI__ && window.__TAURI__.core){ try{ await window.__TAURI__.core.invoke("logout_to_login"); return; }catch(e){} }
+  window.location.href = "login";
+}
+async function pwdSave(){
+  const btn = document.querySelector("#pwd-overlay .mcfg-save");
+  const errBox = document.getElementById("pwd-err");
+  errBox.style.display = "none";
+  const oldP = document.getElementById("pwd-old").value;
+  const newP = document.getElementById("pwd-new").value;
+  const conf = document.getElementById("pwd-confirm").value;
+  if(!oldP || !newP) return pwdShowError("请输入旧密码和新密码");
+  if(newP !== conf)  return pwdShowError("两次输入的新密码不一致");
+  const policyErr = pwdPolicyError(newP);
+  if(policyErr)      return pwdShowError(policyErr);
+  if(newP === oldP)  return pwdShowError("新密码不能与旧密码相同");
+  btn.disabled = true; btn.textContent = "提交中…";
+  try{
+    const r = await call({cmd:"change_password", old_password:oldP, new_password:newP});
+    if(r && r.ok){
+      pwdHide(); _pwdForced = false;
+      CURRENT_USER = null;
+      showToast("密码修改成功，请重新登录");
+      // 门户已吊销全部 token：原生壳回登录窗；Web 壳跳登录页。
+      if(window.__TAURI__ && window.__TAURI__.core){ try{ await window.__TAURI__.core.invoke("logout_to_login"); return; }catch(e){} }
+      window.location.href = "login";
+    } else {
+      // 门户业务错误（如策略不符 / 旧密码错误）：信封 msg 已透传到 error.message。
+      pwdShowError("修改失败："+((r && r.error && r.error.message) || "未知错误"));
+    }
+  }catch(e){
+    // invoke/fetch 层异常也不能静默——弹框内联 + toast 双通道提示，避免"无反馈卡死"。
+    console.error("change_password failed:", e);
+    pwdShowError("修改失败："+(e && e.message ? e.message : "请求异常"));
+  }finally{
+    btn.disabled = false; btn.textContent = "确认修改";
+  }
 }
 
 // ── 活动栏面板切换（Agent / 即时通讯 / 插件管理）：切换左侧操作面板；右侧为共享 tab 区 ──
@@ -2388,7 +2530,8 @@ const ACTIONS = { newTask, openConnectors, startFromHome, toggleSidebar, toggleT
   toggleTabOverflow, tabCtxClose, tabCtxCloseOthers, tabCtxCloseRight, tabCtxCloseAll, winMinimize, winToggleMaximize, winClose,
   closeSettings, scfgSecretLock: scfgToggleSecretLock, scfgTgLock: scfgToggleTgLock, scfgQqLock: scfgToggleQqLock, imcfgSave,
   mcfgClose: closeModelConfig, mcfgKeyLock: mcfgToggleKeyLock, mcfgSave: saveModelConfig,
-  mcfgNew: mcfgNew, mcfgDelete: deleteModelProvider };
+  mcfgNew: mcfgNew, mcfgDelete: deleteModelProvider,
+  userChangePassword, pwdClose, pwdExit, pwdSave, logoutCancel, logoutConfirm };
 document.addEventListener("click", e=>{
   const el = e.target.closest("[data-act]");
   if(!el){ closeMenu(); closeTabCtx(); document.getElementById("modelmenu").classList.remove("on"); document.getElementById("tab-dropdown").classList.remove("on"); return; }
@@ -2437,6 +2580,15 @@ document.getElementById("mcfg-temp").addEventListener("input", e => {
 {
   const _mcfgOverlay = document.getElementById("mcfg-overlay");
   _mcfgOverlay.addEventListener("click", e => { if(e.target === _mcfgOverlay) closeModelConfig(); });
+}
+// 修改密码框：三个输入框回车即提交（改密弹框不点遮罩关闭——强制提醒场景避免误关）。
+["pwd-old","pwd-new","pwd-confirm"].forEach(id=>document.getElementById(id).addEventListener("keydown", e=>{
+  if(e.key==="Enter") pwdSave();
+}));
+// 退出登录确认框：点遮罩 = 取消。
+{
+  const _lo = document.getElementById("logout-overlay");
+  _lo.addEventListener("click", e => { if(e.target === _lo) logoutCancel(); });
 }
 
 // 初始化主题（读上次选择，缺省深色）
