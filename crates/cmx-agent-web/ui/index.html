@@ -1681,29 +1681,71 @@ function toggleTheme(){
   const cur = document.documentElement.getAttribute("data-theme")==="light" ? "light" : "dark";
   applyTheme(cur === "light" ? "dark" : "light");
 }
-const APP_VERSION = "M2 · 0.1.0";
+let APP_VERSION = "M2 · 0.1.0";
+// 桌面壳：真实版本号从壳注入（get_app_version），覆盖静态兜底（关于菜单 / 更新提示共用）。
+(async()=>{
+  if(window.__TAURI__ && window.__TAURI__.core){
+    try{ APP_VERSION = "M2 · " + await window.__TAURI__.core.invoke("get_app_version"); }catch(e){}
+  }
+})();
 // ── 更新：标题栏「更新」按钮仅当检测到新版本时才显示 ──
-let UPDATE_INFO = null;   // {version} 或 null（无可用更新）
+let UPDATE_INFO = null;   // {version, notes, force} 或 null（无可用更新）
+let _updating = false;    // 防重入：下载安装进行中不再触发
 function renderUpdateBtn(){
   const btn=document.getElementById("tb-update-btn");
   if(UPDATE_INFO){ btn.style.display=""; document.getElementById("tb-update-label").textContent="更新 "+UPDATE_INFO.version; }
   else { btn.style.display="none"; }
 }
-// 供未来 Tauri updater / 调试注入：window.__cmxUpdate("0.2.0") 让按钮出现；__cmxUpdate(null) 隐藏。
+// 供 Tauri updater / 调试注入：window.__cmxUpdate("0.2.0") 让按钮出现；__cmxUpdate(null) 隐藏。
 window.__cmxUpdate=(version)=>{ UPDATE_INFO=version?{version}:null; renderUpdateBtn(); };
-// 点标题栏「更新」按钮 = 安装更新（占位）
+// 点标题栏「更新」按钮 = 下载 + 验签 + 安装 + 自动重启（Tauri updater 插件，壳内 update_common.rs）。
+// 进度：壳 emit 的 update_progress 事件（received/total 累计字节）→ 按钮内联百分比（不做弹窗）。
 function applyUpdate(){
-  if(!UPDATE_INFO) return;
-  alert("开始下载并安装更新 "+UPDATE_INFO.version+"…（占位）\n\n真实实现接 Tauri updater 插件：下载 → 校验签名 → 重启应用。");
+  if(!UPDATE_INFO || _updating) return;
+  _updating = true;
+  const label=document.getElementById("tb-update-label");
+  label.textContent="下载中…";
+  (async()=>{
+    let unlisten=null;
+    if(window.__TAURI__ && window.__TAURI__.event){
+      try{ unlisten = await window.__TAURI__.event.listen("update_progress", (e)=>{
+        const p=e.payload||{};
+        label.textContent = p.total ? "下载 "+Math.round(p.received/p.total*100)+"%"
+                                    : "下载 "+Math.round(p.received/1024)+"KB";
+      }); }catch(err){}
+    }
+    try{
+      await window.__TAURI__.core.invoke("download_and_install");
+      label.textContent="即将重启…";   // 壳内 install 后立刻 restart，通常见不到这一帧
+    }catch(err){
+      showToast("更新失败："+err);      // fail-closed：只 toast，主功能不受影响，可重试
+      _updating=false; if(unlisten) unlisten(); renderUpdateBtn();
+    }
+  })();
 }
-// 检查更新（cmx 菜单项）：占位无发布服务器 → 报告已最新；若真检测到则显示标题栏按钮
-async function checkUpdate(){
-  closeMenu();
-  await new Promise(r=>setTimeout(r,500));   // 真实实现：拉远端 manifest 比对版本
-  renderUpdateBtn();
-  if(UPDATE_INFO){ alert("发现新版本 "+UPDATE_INFO.version+"，点标题栏「更新」按钮安装。"); }
-  else { alert("当前已是最新版本（"+APP_VERSION+"）。\n\n自动更新将在接入发布服务器后启用。"); }
+// 检查更新（cmx 菜单项 / 启动静默检查）：有新版 → 标题栏按钮出现（不打扰，方案 D3）。
+// silent=true：静默检查（启动 5s 后），无提示不打扰；失败无感。
+async function checkUpdate(silent){
+  if(!silent) closeMenu();
+  if(!(window.__TAURI__ && window.__TAURI__.core)){ if(!silent) alert("Web 壳无需自动更新"); return; }
+  try{
+    const r = JSON.parse(await window.__TAURI__.core.invoke("check_update"));
+    if(r && r.ok && r.data && r.data.update_available){
+      UPDATE_INFO = {version:r.data.version, notes:r.data.notes, force:r.data.force};
+      renderUpdateBtn();
+      // force（强制更新）数据通路已通；P1 接入服务端 force 后在此弹不可关闭模态。
+      if(!silent) alert("发现新版本 "+UPDATE_INFO.version+"，点标题栏「更新」按钮安装。");
+    } else {
+      UPDATE_INFO = null; renderUpdateBtn();
+      if(!silent) alert("当前已是最新版本（"+APP_VERSION+"）。");
+    }
+  }catch(err){
+    UPDATE_INFO = null; renderUpdateBtn();
+    if(!silent) showToast("检查更新失败："+err);   // 静默检查失败：无感（fail-closed）
+  }
 }
+// 启动 5 秒后静默检查一次（D3：仅提示不弹窗，有新版才出现标题栏按钮）。
+setTimeout(()=>{ if(window.__TAURI__ && window.__TAURI__.core) checkUpdate(true); }, 5000);
 
 // cmx 底部菜单：开合 / 设置 / 关于
 function toggleMenu(){ document.getElementById("usermenu").classList.remove("on"); document.getElementById("cmxmenu").classList.toggle("on"); }

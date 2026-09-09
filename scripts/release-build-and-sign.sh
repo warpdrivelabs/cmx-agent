@@ -3,8 +3,9 @@
 # release-build-and-sign.sh —— cmx-agent Tauri 桌面壳的「编译 → 签名 → 公证 → 装订 → 打 dmg」一条龙。
 #
 # 产物：
-#   src-tauri/target/release/bundle/macos/TrueMate.app   （签名+公证+stapled）
-#   src-tauri/target/release/bundle/TrueMate.dmg         （含 app + Applications 软链接）
+#   src-tauri/target/release/bundle/macos/TrueMate.app        （签名+公证+stapled）
+#   src-tauri/target/release/bundle/macos/TrueMate.app.tar.gz （updater 产物：stapled .app 重打包 + minisign .sig）
+#   src-tauri/target/release/bundle/TrueMate.dmg              （含 app + Applications 软链接，首装分发）
 #
 # 前置（一次性，本机已就绪；换机器需重做）：
 #   1) Developer ID Application 证书 + 私钥已导入登录钥匙串
@@ -30,6 +31,9 @@ NOTARY_PROFILE="cmx-agent-notary"
 APP_NAME="TrueMate"
 BUNDLE_ID="com.pansoft.cmx-agent"
 TAURI_CLI="${TAURI_CLI:-/tmp/node_modules/.bin/tauri}"
+# 自动更新（方案 §6.1/§8）：minisign 私钥（仓库外！）+ 密码所在的钥匙串服务名。
+MINISIGN_KEY="${MINISIGN_KEY:-$HOME/.tauri/cmx-agent.key}"
+KEYCHAIN_SERVICE="cmx-agent-updater-key"
 
 # ── 路径 ─────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -37,6 +41,7 @@ SRC_TAURI="$SCRIPT_DIR/../crates/cmx-agent-shell/src-tauri"
 BUNDLE_DIR="$SRC_TAURI/target/release/bundle/macos"
 APP="$BUNDLE_DIR/$APP_NAME.app"
 DMG="$SRC_TAURI/target/release/bundle/TrueMate.dmg"
+TAR_GZ="$BUNDLE_DIR/$APP_NAME.app.tar.gz"   # updater 产物（重打包后的，见第 6 步）
 
 # ── 参数 ─────────────────────────────────────────────────────────
 DO_BUILD=1
@@ -69,11 +74,26 @@ echo "签名身份: OK"
 }
 
 # ── 2. 编译 ──────────────────────────────────────────────────────
+# updater 签名 env 先行：tauri.conf.json 开了 createUpdaterArtifacts，
+# 缺 TAURI_SIGNING_PRIVATE_KEY(_PATH) 时 `tauri build` 直接失败。
+# 密码从登录钥匙串取（生成时已存，见 scripts/README.md「自动更新密钥」节）。
+log "导出 updater 签名密钥（minisign）"
+[ -f "$MINISIGN_KEY" ] || die "minisign 私钥不存在：${MINISIGN_KEY}（用 tauri signer generate 生成，放仓库外）"
+# 注意：`tauri build` 打 updater 产物只认 TAURI_SIGNING_PRIVATE_KEY（密钥**内容**），
+# 不认 _PATH 变体（signer sign 子命令才认 -f/env _PATH），两个都导出兼容。
+export TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PATH TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+TAURI_SIGNING_PRIVATE_KEY="$(cat "$MINISIGN_KEY")"
+TAURI_SIGNING_PRIVATE_KEY_PATH="$MINISIGN_KEY"
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(security find-generic-password -s "$KEYCHAIN_SERVICE" -w)" \
+  || die "钥匙串取不到 ${KEYCHAIN_SERVICE}（security add-generic-password 补录，见 README）"
+echo "minisign 私钥: $MINISIGN_KEY"
 if [ "$DO_BUILD" -eq 1 ]; then
   log "tauri build（release，约几分钟）"
-  ( cd "$SRC_TAURI" && "$TAURI_CLI" build )
+  # cargo clean -p：UI 资产内嵌进壳二进制，增量编译不重嵌（既有坑）——每次发布强制重编壳 crate，
+  # 确保 src-tauri/ui/（sync-ui.sh 生成物）真的是打进 .app 的那份。
+  ( cd "$SRC_TAURI" && cargo clean -p cmx-agent-shell && "$TAURI_CLI" build )
 fi
-[ -d "$APP" ] || die "未找到产物: $APP（先去掉 --no-build 跑一次编译）"
+[ -d "$APP" ] || die "未找到产物: ${APP}（先去掉 --no-build 跑一次编译）"
 
 # ── 3. 签名 ──────────────────────────────────────────────────────
 log "codesign（deep + hardened runtime + timestamp）"
@@ -108,7 +128,24 @@ grep -q "accepted" /tmp/cmx-spctl.out \
   || die "Gatekeeper 未 accepted"
 echo "Gatekeeper: accepted"
 
-# ── 6. 打 dmg ────────────────────────────────────────────────────
+# ── 6. updater 产物（.app.tar.gz 重打包 + minisign） ─────────────
+# 为什么重打包：tauri build 自产的 .app.tar.gz 打包自**未经本脚本重签/公证的 .app**，
+# 直接分发会让更新后的应用被 Gatekeeper 拦（方案 §6.1 / R9）。正确产物 = 用走完
+# 签名→公证→staple 的最终 .app 重新打 tar.gz（staple 票据随 .app 走，离线可验），
+# 再用 minisign 签名（客户端 updater 验的就是这个 .sig，公钥在 tauri.conf.json）。
+log "重打包 updater 产物 TrueMate.app.tar.gz + minisign 签名"
+# COPYFILE_DISABLE=1：macOS bsdtar 默认会把扩展属性存成 ./_ AppleDouble 条目，
+# updater 解包时对「跳过首段后路径为空」的 ._ 条目直接 unpack 失败（实测踩坑）。
+# tauri bundler 原生（Rust tar crate）不产 ._ 条目，重打包必须对齐。
+( cd "$BUNDLE_DIR" && rm -f "$APP_NAME.app.tar.gz" "$APP_NAME.app.tar.gz.sig" \
+    && COPYFILE_DISABLE=1 tar -czf "$APP_NAME.app.tar.gz" "$APP_NAME.app" )
+# env -u：上面为 tauri build 导出了内容型 TAURI_SIGNING_PRIVATE_KEY（映射 -k），
+# 与这里的 -f 路径型互斥（clap 冲突报错），sign 前去掉，用 -f + 密码 env。
+env -u TAURI_SIGNING_PRIVATE_KEY "$TAURI_CLI" signer sign -f "$MINISIGN_KEY" "$TAR_GZ"
+[ -f "$TAR_GZ.sig" ] || die "minisign 签名未产出: $TAR_GZ.sig"
+echo "updater 产物: OK（stapled .app 重打包 + minisign）"
+
+# ── 7. 打 dmg ────────────────────────────────────────────────────
 log "hdiutil 打 dmg（含 Applications 软链接）"
 STAGING="$(mktemp -d)"
 # WORK 仅在公证分支赋值；此处统一清理，避免 set -u 报 unbound。
@@ -119,9 +156,10 @@ rm -f "$DMG"
 hdiutil create -volname "$APP_NAME" -srcfolder "$STAGING" \
   -fs HFS+ -format UDBZ "$DMG"
 
-# ── 7. 完成 ──────────────────────────────────────────────────────
+# ── 8. 完成 ──────────────────────────────────────────────────────
 log "完成 ✅"
 echo "  app: $APP"
-echo "  dmg: $DMG"
+echo "  dmg: ${DMG}（首装分发，门户下载页用）"
+echo "  updater: ${TAR_GZ}（+ .sig，进更新源；latest.json 的 signature 填 .sig 文件内容）"
 echo "  app 大小: $(du -sh "$APP" | awk '{print $1}')"
 echo "  dmg 大小: $(du -sh "$DMG" | awk '{print $1}')"

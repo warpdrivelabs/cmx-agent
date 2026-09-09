@@ -17,6 +17,8 @@ use std::sync::OnceLock;
 use cmx_agent_app::{AgentApp, AuthConfig, DesktopAppBuilder, dispatch_json};
 use tauri::{Emitter, Manager, State};
 
+mod update_common;
+
 /// 门户地址·构建期烧录（唯一来源）：build.rs 从仓库根 `.env` 的 CMX_AGENT_PORTAL_BASE 读取注入
 /// （CI 可用编译环境变量 CMX_AGENT_PORTAL_DEFAULT 覆盖）。[`portal_base`] 直接取值——
 /// 分发包零配置即连打包时配置的门户，运行期不可改；未注入退回 [`AuthConfig::default`]（团队门户）。
@@ -503,8 +505,12 @@ fn main() {
     start_im_if_configured(net_rt(), Arc::clone(&app));
 
     tauri::Builder::default()
+        // 自动更新（方案 C2）：updater 插件（check/download/验签/install）+ process 插件（relaunch 备用）。
+        // 前端统一走 update_common.rs 的命令入口，不直接调插件 JS API（Linux 支线将来同走命令入口）。
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(AppState { app })
-        .invoke_handler(tauri::generate_handler![agent, login, logout_to_login, guard_login, send_stream, platform, im_config])
+        .invoke_handler(tauri::generate_handler![agent, login, logout_to_login, guard_login, send_stream, platform, im_config, update_common::get_app_version, update_common::check_update, update_common::download_and_install])
         // U16：会话事件总线 → 前端实时通道。常驻 task 订阅 AgentApp 的 event_bus，把任意来源
         //（本地 / IM 桥 / 后续 webhook）的会话事件 emit 成全局 `session_event` Tauri 事件。
         // 前端 `index.html` 监听它，按 session_id 分流渲染——实现「飞书发消息实时显示到对话界面」，
