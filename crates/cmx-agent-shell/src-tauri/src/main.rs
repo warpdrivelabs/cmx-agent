@@ -4,8 +4,9 @@
 //! 业务全在已测的 cmx-agent-app（façade / JSONL 落库 / 前门协议 / 五层守卫 / 认证），与 Web 壳共用同一核。
 //! 前端 `ui/index.html` 里 `call()` 检测 `window.__TAURI__` 走 invoke，否则回退 HTTP。
 //!
-//! 登录门（参照 CMXPortalManager 的登录方式）：启动时**主窗口隐藏**、只显示 `login` 窗口；`login.html`
-//! 提交 → `invoke("login")` → 校验凭据（对接门户 /api/auth/login）→ **成功后显示已存在的主窗口并关闭登录窗**。
+//! 登录门（当前态：回滚用旧双窗口 UI——新前端 frontend/ 已就绪待切换，见方案 §19）：
+//! 启动时主窗口隐藏、只显示 `login` 窗口；登录成功后显示主窗并关闭登录窗。
+//! 新前端切回时将恢复单窗口 SPA（`#/login` 路由，方案 §11.4），届时删除本段与三命令。
 
 // Windows 发布版按"窗口程序"链接，双击不挂控制台终端；调试版保留终端看 eprintln 日志。
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -16,6 +17,15 @@ use std::sync::OnceLock;
 use cmx_agent_app::{AgentApp, AuthConfig, DesktopAppBuilder, dispatch_json};
 use tauri::{Emitter, Manager, State};
 
+/// 门户地址·构建期烧录默认：build.rs 从仓库根 `.env` 的 CMX_AGENT_PORTAL_BASE 读取注入
+/// （CI 可用编译环境变量 CMX_AGENT_PORTAL_DEFAULT 覆盖）。作为 [`portal_base`] 的兜底层——
+/// 分发包零配置即连打包时配置的门户；未注入退回本机 :8080。
+fn portal_packed_default() -> Option<String> {
+    option_env!("CMX_AGENT_PORTAL_DEFAULT")
+        .map(|s| s.to_string())
+        .filter(|s| !s.trim().is_empty())
+}
+
 /// IM 桥状态（启动日志/诊断）：启动结果一次性写入（改配置需重启，状态随进程不变）。
 static IM_STATUS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
@@ -24,7 +34,8 @@ fn set_im_status(s: String) {
 }
 
 /// 门户基址统一来源（登录门 / IM 绑定 client / IM 桥 resolver 三处共用）：
-/// env `CMX_AGENT_PORTAL_BASE` > `<data_dir>/portal.json` 的 `base_url` > 默认本机。
+/// env `CMX_AGENT_PORTAL_BASE` > `<data_dir>/portal.json` 的 `base_url`（设置面板写）>
+/// 构建期烧录默认（仓库根 `.env`，见 [`portal_packed_default`]）> 默认本机。
 /// 注意存的是 **API 根**（`http://host:8080`，API 挂 `/api/*`）；浏览器门户页的 `/portal`
 /// 后缀在保存时会被剥掉（那只是前端路由，不属于 API base）。
 fn portal_base() -> String {
@@ -45,7 +56,7 @@ fn portal_base() -> String {
             }
         }
     }
-    "http://127.0.0.1:8080".into()
+    portal_packed_default().unwrap_or_else(|| "http://127.0.0.1:8080".into())
 }
 
 /// 保存门户基址到 `<data_dir>/portal.json`（设置面板「门户服务器地址」）。
@@ -248,7 +259,6 @@ async fn agent(payload: String, state: State<'_, AppState>) -> Result<String, St
 fn platform() -> &'static str {
     std::env::consts::OS
 }
-
 /// 启动守卫（主窗口前端调用）：若当前**未认证**，则隐藏主窗口、显示并聚焦登录窗口。
 ///
 /// 登录门是「每次启动先见登录窗」的既定行为；但主窗口的 `index.html` 启动即渲染、不检查登录态，
@@ -352,6 +362,7 @@ async fn logout_to_login(app: tauri::AppHandle, state: State<'_, AppState>) -> R
     Ok(())
 }
 
+
 fn build_app() -> AgentApp {
     // 双壳统一数据根（与 Web 壳同一份：model.json / 会话共享；CMX_AGENT_DATA_DIR 可覆盖，隔离测试用）。
     let data_dir = cmx_agent_app::shared_data_dir();
@@ -373,11 +384,11 @@ fn build_app() -> AgentApp {
 
     let mut app = DesktopAppBuilder::new(workdir, data_dir.clone(), model)
         .connectors(cmx_agent_app::ConnectorConfig::default())
-        // 登录门：对接门户 /api/auth（基址统一走 portal_base()：env > portal.json > 默认本机）。
+        // 登录门：对接门户 /api/auth（基址统一走 portal_base()：env > portal.json > 烧录默认）。
         .auth(AuthConfig { base_url: portal_base() })
         .interactive_approval() // X4：shell 等需审批工具挂起等前端点按
         .mcp_tools(mcp_tools)   // U3：外部 MCP 工具
-        // U13：opt-in 数据权限接地——env CMX_AGENT_DATAAUTH_URL 指向 cmx-data-auth 即启用真 PEP。
+        // U13：opt-in 数据权限接地——CMX_AGENT_DATAAUTH_URL 指向 cmx-data-auth 即启用真 PEP。
         .maybe_data_auth(std::env::var("CMX_AGENT_DATAAUTH_URL").ok())
         .build()
         .expect("build agent app");
@@ -469,7 +480,7 @@ fn main() {
 
     // 预热专用运行时（在 Tauri 运行时启动前构建，确保不在任何 tokio 上下文内创建）。
     let _ = net_rt();
-    eprintln!("[main] net_rt ready; launching login window (main hidden until login)");
+    eprintln!("[main] net_rt ready; launching login window (main hidden until login)（登录在前端 #/login 路由，§11.4）");
 
     let app = Arc::new(app);
 
@@ -488,6 +499,13 @@ fn main() {
         // 且 IM 无关：微信/钉钉接入后走同一条路，零额外改动。
         // 同时设置 cmx 图标（Linux 任务栏/标题栏；bundle.icon 仅打包时生效）。
         .setup(|app| {
+            // Windows/Linux 关主窗系统装饰（前端自绘三键 + 缩放热区）；macOS 走 Overlay 交通灯。
+            // 平台差异运行时处理：平台 conf 只放 bundle.targets，避免 windows 数组整体替换导致三份配置重复。
+            if !cfg!(target_os = "macos") {
+                if let Some(main) = app.get_webview_window("main") {
+                    let _ = main.set_decorations(false);
+                }
+            }
             let app_state = app.state::<AppState>();
             let app_ref = app_state.app.clone();
             let handle = app.handle().clone();

@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "cmx 企业桌面智能体",
+  "productName": "cmx-agent",
   "version": "0.1.0",
   "identifier": "com.pansoft.cmx-agent",
   "build": {
@@ -47,6 +47,29 @@
       "icons/icon.icns",
       "icons/icon.ico",
       "icons/icon.png"
-    ]
+    ],
+    "publisher": "Pansoft",
+    "category": "Productivity",
+    "shortDescription": "cmx 企业桌面智能体（同核多壳：原生 / Web）",
+    "longDescription": "cmx 企业桌面智能体。复用已测的 cmx-agent-app 核（façade / JSONL 落库 / 前门协议 / 五层守卫），对接 cmx 门户统一认证，连接 cmx 各引擎连接器。本包为原生 Tauri 桌面壳。",
+    "copyright": "© 2026 Pansoft",
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      },
+      "nsis": {
+        "languages": ["SimpChinese", "English"],
+        "displayLanguageSelector": false,
+        "installMode": "both",
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "template": "./windows/installer.nsi"
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": ["libwebkit2gtk-4.1-0", "libgtk-3-0"]
+      }
+    }
   }
 }
