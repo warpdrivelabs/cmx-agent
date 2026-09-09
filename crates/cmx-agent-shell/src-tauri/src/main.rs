@@ -16,18 +16,54 @@ use std::sync::OnceLock;
 use cmx_agent_app::{AgentApp, AuthConfig, DesktopAppBuilder, dispatch_json};
 use tauri::{Emitter, Manager, State};
 
-/// IM 桥状态（设置面板显示）：启动结果一次性写入（改配置需重启，状态随进程不变）。
+/// IM 桥状态（启动日志/诊断）：启动结果一次性写入（改配置需重启，状态随进程不变）。
 static IM_STATUS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 fn set_im_status(s: String) {
     let _ = IM_STATUS.set(s);
 }
 
-fn im_status() -> String {
-    IM_STATUS
-        .get()
-        .cloned()
-        .unwrap_or_else(|| "未启动（未配置 IM 遥控）".into())
+/// 门户基址统一来源（登录门 / IM 绑定 client / IM 桥 resolver 三处共用）：
+/// env `CMX_AGENT_PORTAL_BASE` > `<data_dir>/portal.json` 的 `base_url` > 默认本机。
+/// 注意存的是 **API 根**（`http://host:8080`，API 挂 `/api/*`）；浏览器门户页的 `/portal`
+/// 后缀在保存时会被剥掉（那只是前端路由，不属于 API base）。
+fn portal_base() -> String {
+    if let Ok(v) = std::env::var("CMX_AGENT_PORTAL_BASE") {
+        let v = v.trim().to_string();
+        if !v.is_empty() {
+            return v;
+        }
+    }
+    let path = cmx_agent_app::shared_data_dir().join("portal.json");
+    if let Ok(text) = std::fs::read_to_string(&path) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+            if let Some(u) = v.get("base_url").and_then(|x| x.as_str()) {
+                let u = u.trim().to_string();
+                if !u.is_empty() {
+                    return u;
+                }
+            }
+        }
+    }
+    "http://127.0.0.1:8080".into()
+}
+
+/// 保存门户基址到 `<data_dir>/portal.json`（设置面板「门户服务器地址」）。
+fn save_portal_base(base: &str) -> Result<(), String> {
+    let dir = cmx_agent_app::shared_data_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建数据目录失败：{e}"))?;
+    let text = serde_json::json!({ "base_url": base }).to_string();
+    std::fs::write(dir.join("portal.json"), text).map_err(|e| format!("写入 portal.json 失败：{e}"))
+}
+
+/// 归一化门户地址：去空白、去尾 `/`、剥浏览器前端路由后缀 `/portal`（API 挂根 `/api`）。
+fn normalize_portal_base(raw: &str) -> String {
+    let mut s = raw.trim().trim_end_matches('/').to_string();
+    if s.ends_with("/portal") {
+        s.truncate(s.len() - "/portal".len());
+        s = s.trim_end_matches('/').to_string();
+    }
+    s
 }
 
 /// IM 遥控装配（U16）：读 `CMX_AGENT_IM_*` env（开发联调）或 `<data_dir>/im.json`（GUI 设置面板），
@@ -47,18 +83,18 @@ fn start_im_if_configured(rt: &'static tokio::runtime::Runtime, app: Arc<AgentAp
     };
     let kind_label = resolved.kind.label();
     let allow = resolved.allow;
-    // 用户绑定：门户可达即启用（按发送者 open_id 鉴权 + 以绑定用户身份跑回合）。
-    // 绑定模式下白名单 allow 退化为会话级二次过滤；未配白名单则全放行（门=已绑定身份）。
-    let portal_base = std::env::var("CMX_AGENT_PORTAL_BASE")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "http://127.0.0.1:8080".into());
+    // 个人模式：im.json `personal=true`（默认）= 所有 IM 消息直接以桌面壳当前登录用户身份
+    // 跑回合，无需验证码绑定；false = 绑定模式（按发送者 open_id 鉴权）。env 来源恒绑定模式。
+    let personal = resolved.personal;
+    // 绑定模式才需要绑定解析器（个人模式会被桥短路，但仍装配以防模式切换复用代码路径）。
+    let portal_base = portal_base();
     let bindings = cmx_agent_im::PortalBindingResolver::new(portal_base.clone());
+    let mode_label = if personal { "个人模式" } else { "绑定模式" };
     set_im_status(format!(
-        "运行中：provider={kind_label}（绑定模式，配置来源={}，portal={portal_base}）",
+        "运行中：provider={kind_label}（{mode_label}，配置来源={}，portal={portal_base}）",
         resolved.source
     ));
-    eprintln!("[im] 启动 IM 遥控（provider={kind_label}，绑定模式，配置来源={}，portal={portal_base}）", resolved.source);
+    eprintln!("[im] 启动 IM 遥控（provider={kind_label}，{mode_label}，配置来源={}，portal={portal_base}）", resolved.source);
     let provider = resolved.provider;
     rt.spawn(async move {
         // 飞书 Stream：起常驻后台 task；Telegram 长轮询：trait 默认 no-op。
@@ -66,38 +102,41 @@ fn start_im_if_configured(rt: &'static tokio::runtime::Runtime, app: Arc<AgentAp
             eprintln!("[im] provider.start 失败：{e}");
             return;
         }
-        let bridge =
-            cmx_agent_im::ImBridge::new(app, provider, kind_label, allow).with_bindings(std::sync::Arc::new(bindings));
+        let bridge = cmx_agent_im::ImBridge::new(app, provider, kind_label, allow)
+            .with_personal(personal)
+            .with_bindings(std::sync::Arc::new(bindings));
         bridge.run().await;
     });
 }
 
-/// IM 遥控配置（设置 → IM 遥控 面板）。`action` = `get`（脱敏读 im.json + 桥状态）/
-/// `set`（保存 im.json，重启生效）/ `test`（飞书凭证连通性预检，秒级不建长连接）。
+/// IM 遥控配置（设置 → IM 遥控 面板）。`action` = `get`（脱敏读 im.json）/
+/// `set`（保存 im.json，重启生效）。
 ///
 /// 返回与 `dispatch_json` 同形的 JSON 串（`{ok,data}` / `{ok:false,error:{message}}`），
 /// 前端按统一信封解析。配置 schema 见 `cmx_agent_im::ImRemoconConfig`（secret keep/set 语义
-/// 照模型配置面板：面板只回显掩码，不回传明文）。
+/// 照模型配置面板：面板只回显掩码，不回传明文）。身份模式固定个人（`personal=true`），
+/// 白名单不进面板（im.json 手工维护，GUI set 不触碰已有值）。
 #[tauri::command]
 async fn im_config(action: String, payload: Option<String>) -> Result<String, String> {
     let data_dir = cmx_agent_app::shared_data_dir();
     match action.as_str() {
         "get" => {
-            let mut data = cmx_agent_im::load_im_config(&data_dir)
+            let data = cmx_agent_im::load_im_config(&data_dir)
                 .map(|c| c.masked())
                 .unwrap_or_else(|| {
                     serde_json::json!({
                         "configured": false,
                         "enabled": true,
                         "kind": "feishu",
+                        "personal": true,
                         "app_id": "",
                         "app_secret_masked": "",
                         "base": "",
                         "telegram_token_masked": "",
-                        "allow": "",
                     })
                 });
-            data["bridge"] = serde_json::json!(im_status());
+            let mut data = data;
+            data["portal_base"] = serde_json::json!(portal_base());
             data["env_active"] = serde_json::json!(cmx_agent_im::env_active());
             Ok(serde_json::json!({ "ok": true, "data": data }).to_string())
         }
@@ -109,6 +148,7 @@ async fn im_config(action: String, payload: Option<String>) -> Result<String, St
             // 读旧配置（keep 语义沿用已存 secret；首次保存则从面板取 set 值）。
             let mut cfg = cmx_agent_im::load_im_config(&data_dir).unwrap_or_default();
             cfg.enabled = v.get("enabled").and_then(|x| x.as_bool()).unwrap_or(true);
+            cfg.personal = true; // 身份模式固定个人：消息以桌面登录账号身份跑回合。
             if let Some(kind) = get_str("kind").filter(|s| !s.is_empty()) {
                 cfg.kind = kind;
             }
@@ -125,15 +165,15 @@ async fn im_config(action: String, payload: Option<String>) -> Result<String, St
             if get_str("telegram_token_action").as_deref() == Some("set") {
                 cfg.telegram.token = get_str("telegram_token_value").unwrap_or_default();
             }
-            // 白名单：逗号分隔 chat_id；空 = 不限（绑定模式门 = 已绑定身份）。
-            cfg.allow = get_str("allow")
-                .map(|s| {
-                    s.split(',')
-                        .map(|x| x.trim().to_string())
-                        .filter(|x| !x.is_empty())
-                        .collect()
-                })
-                .unwrap_or_default();
+            // 白名单不进 GUI：GUI set 不触碰 cfg.allow（im.json 手工维护，已有值保留）。
+            // 门户服务器地址：非空则归一化（剥 `/portal` 前端后缀）后落 portal.json（登录门同源）。
+            if let Some(base) = get_str("portal_base").filter(|s| !s.is_empty()) {
+                let normalized = normalize_portal_base(&base);
+                if !normalized.starts_with("http://") && !normalized.starts_with("https://") {
+                    return Ok(err_json("bad_request", "门户地址须以 http:// 或 https:// 开头"));
+                }
+                save_portal_base(&normalized)?;
+            }
             // 启用态下按 provider 校验凭证齐备（禁用态允许存半成品）。
             if cfg.enabled {
                 let missing = match cfg.kind.trim() {
@@ -146,45 +186,13 @@ async fn im_config(action: String, payload: Option<String>) -> Result<String, St
                     return Ok(err_json("bad_request", &format!("{field} 不能为空")));
                 }
             }
-            cmx_agent_im::save_im_config(&data_dir, &cfg)?;            let note = if cmx_agent_im::env_active() {
+            cmx_agent_im::save_im_config(&data_dir, &cfg)?;
+            let note = if cmx_agent_im::env_active() {
                 "已保存。⚠ 检测到环境变量 CMX_AGENT_IM_*（开发模式）优先生效，im.json 暂不生效。"
             } else {
                 "已保存，重启应用后生效"
             };
             Ok(serde_json::json!({ "ok": true, "data": { "note": note } }).to_string())
-        }
-        "test" => {
-            let v: serde_json::Value = payload
-                .and_then(|p| serde_json::from_str(&p).ok())
-                .ok_or_else(|| "invalid payload".to_string())?;
-            let get_str = |k: &str| {
-                v.get(k)
-                    .and_then(|x| x.as_str())
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-            };
-            // 面板密文未解锁 → 用 im.json 已存 secret 测；解锁输入了新值 → 用新值测。
-            let saved = cmx_agent_im::load_im_config(&data_dir);
-            let app_id = get_str("app_id").or_else(|| {
-                saved.as_ref().map(|c| c.feishu.app_id.trim().to_string()).filter(|s| !s.is_empty())
-            });
-            let secret = get_str("app_secret").or_else(|| {
-                saved.as_ref().map(|c| c.feishu.app_secret.clone()).filter(|s| !s.trim().is_empty())
-            });
-            let base = get_str("base").or_else(|| {
-                saved.as_ref().map(|c| c.feishu.base.trim().to_string()).filter(|s| !s.is_empty())
-            });
-            let (Some(app_id), Some(secret)) = (app_id, secret) else {
-                return Ok(err_json("bad_request", "App ID / App Secret 不能为空（先填写或保存）"));
-            };
-            // 网络走专用 net_rt（与 dispatch_on_net 同范式，reqwest 不落在 Tauri 运行时上）。
-            let out = tauri::async_runtime::spawn_blocking(move || {
-                net_rt().block_on(cmx_agent_im::test_feishu(&app_id, &secret, base.as_deref()))
-            })
-            .await
-            .map_err(|e| e.to_string())?
-            .map_err(|e| e.to_string());
-            Ok(serde_json::json!({ "ok": true, "data": { "result": out } }).to_string())
         }
         other => Ok(err_json("bad_request", &format!("未知 action：{other}"))),
     }
@@ -365,7 +373,8 @@ fn build_app() -> AgentApp {
 
     let mut app = DesktopAppBuilder::new(workdir, data_dir.clone(), model)
         .connectors(cmx_agent_app::ConnectorConfig::default())
-        .auth(AuthConfig::default()) // 登录门：对接门户 :8080 /api/auth
+        // 登录门：对接门户 /api/auth（基址统一走 portal_base()：env > portal.json > 默认本机）。
+        .auth(AuthConfig { base_url: portal_base() })
         .interactive_approval() // X4：shell 等需审批工具挂起等前端点按
         .mcp_tools(mcp_tools)   // U3：外部 MCP 工具
         // U13：opt-in 数据权限接地——env CMX_AGENT_DATAAUTH_URL 指向 cmx-data-auth 即启用真 PEP。
@@ -373,13 +382,9 @@ fn build_app() -> AgentApp {
         .build()
         .expect("build agent app");
 
-    // IM 绑定面板（设置 → IM 绑定）：gen_code/list/unbind 三命令（经 dispatch_json）。
-    // 门户基址与登录门同源（AuthConfig::default().base_url），CMX_AGENT_PORTAL_BASE 可覆盖。
-    let portal_base = std::env::var("CMX_AGENT_PORTAL_BASE")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| AuthConfig::default().base_url);
-    app = app.with_im_binding(cmx_agent_app::ImBindingClient::new(portal_base));
+    // IM 绑定 client（个人模式不调用，绑定模式走它调门户 /api/agent/bindings/*）。
+    // 门户基址与登录门同源（portal_base()）。
+    app = app.with_im_binding(cmx_agent_app::ImBindingClient::new(portal_base()));
 
     app
 }

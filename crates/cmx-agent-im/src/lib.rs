@@ -86,6 +86,11 @@ pub struct ImBridge {
     allow: Option<HashSet<String>>,
     /// 用户绑定解析（Some=绑定模式：按 sender 鉴权 + 以绑定用户身份跑回合；None=白名单模式）。
     bindings: Option<Arc<dyn ImBindingResolver>>,
+    /// 个人模式（personal）：**忽略 bindings/白名单 sender 鉴权**，所有消息直接以桌面壳
+    /// 当前登录用户的身份跑回合（`current_subject()`）。场景 = 自己私聊自己的机器人遥控
+    /// 自己的桌面，App ID/Secret 配好 + 登录即用，无需验证码绑定。⚠ 任何能发消息给机器人
+    /// 的人都会被当作登录人——安全靠 chat_id 白名单或私聊兜底。
+    personal: bool,
     /// open_id → (身份, 缓存时刻) 正缓存（TTL 见 `BINDING_TTL`；解绑后最多 TTL 内失效）。
     binding_cache: Mutex<HashMap<String, (BoundIdentity, Instant)>>,
     offset: AtomicI64,
@@ -109,6 +114,7 @@ impl ImBridge {
             kind: kind.into(),
             allow,
             bindings: None,
+            personal: false,
             binding_cache: Mutex::new(HashMap::new()),
             offset: AtomicI64::new(0),
             sessions: Mutex::new(HashMap::new()),
@@ -119,6 +125,13 @@ impl ImBridge {
     /// 未绑定回绑定提示，消息恰为有效验证码则完成绑定。白名单退化为可选的会话级二次过滤。
     pub fn with_bindings(mut self, resolver: Arc<dyn ImBindingResolver>) -> Self {
         self.bindings = Some(resolver);
+        self
+    }
+
+    /// 个人模式：所有 IM 消息直接以桌面壳当前登录用户身份跑回合，跳过绑定/验证码
+    /// （`with_bindings` 的绑定解析被短路）。未登录时回提示引导先登录桌面端。
+    pub fn with_personal(mut self, on: bool) -> Self {
+        self.personal = on;
         self
     }
 
@@ -216,8 +229,30 @@ impl ImBridge {
                     .await;
                 continue;
             }
-            // 绑定模式：先解析发送者身份（未配 resolver = 白名单模式，直接跑）。
-            let identity = match &self.bindings {
+            // 个人模式：所有消息直接以桌面壳当前登录用户身份跑回合（跳过绑定/验证码）。
+            // 未登录 → 提示先登录（fail-closed：没有身份就不跑）。
+            let identity = if self.personal {
+                match self.app.current_subject() {
+                    Some(s) => Some(BoundIdentity {
+                        user_id: s.user.clone(),
+                        username: s.user.clone(),
+                        roles: s.roles.clone(),
+                    }),
+                    None => {
+                        tracing::warn!("IM 个人模式未登录 provider={}", self.kind);
+                        let _ = self
+                            .provider
+                            .send(
+                                &m.chat_id,
+                                "🔒 桌面端尚未登录：请先在桌面应用登录门户账号，IM 消息将以该账号身份对话。",
+                            )
+                            .await;
+                        continue;
+                    }
+                }
+            } else {
+                // 绑定模式：先解析发送者身份（未配 resolver = 白名单模式，直接跑）。
+                match &self.bindings {
                 Some(resolver) => match self.resolve_sender(resolver, &m).await {
                     SenderResolution::Bound(id) => Some(id),
                     SenderResolution::JustBound(id) => {
@@ -254,6 +289,7 @@ impl ImBridge {
                     }
                 },
                 None => None,
+                }
             };
             let sid = self.session_for(&m.chat_id);
             let _ = self.app.create_session(&sid);

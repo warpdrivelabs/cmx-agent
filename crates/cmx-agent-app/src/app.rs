@@ -282,6 +282,19 @@ impl AgentApp {
             .map(|u| u.public_json())
     }
 
+    /// 当前登录用户的授权主体（userId+roles）。IM 个人模式用：桥直接以此身份
+    /// `send_as` 跑回合（数据权限按桌面登录人判定），不经绑定验证码。未登录 None。
+    pub fn current_subject(&self) -> Option<cmx_agent_core::Subject> {
+        let u = self
+            .current_user
+            .lock()
+            .expect("current_user lock")
+            .clone()?;
+        let mut s = cmx_agent_core::Subject::new(u.user_id);
+        s.roles = u.roles;
+        Some(s)
+    }
+
     /// 是否已登录。
     pub fn is_authenticated(&self) -> bool {
         self.current_user

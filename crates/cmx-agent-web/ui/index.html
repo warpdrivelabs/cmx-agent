@@ -629,11 +629,16 @@
     </div>
   </div>
   <!-- 设置面板（Modal）：IM 遥控连接配置（飞书/Telegram 凭证 → 后端 im.json；重启生效）。
-       复用模型面板的 mcfg-* 样式；交互走 data-act 委托（内联 onclick 被两壳 CSP 拦截，勿用）；
-       密文走「锁」交互（面板只回显掩码，解锁才能改，保存 keep/set 语义同 API Key）。 -->
+       个人模式固定（消息以桌面登录账号身份跑回合，无验证码绑定）。复用模型面板的 mcfg-*
+       样式；交互走 data-act 委托（内联 onclick 被两壳 CSP 拦截，勿用）；密文走「锁」交互
+       （面板只回显掩码，解锁才能改，保存 keep/set 语义同 API Key）。 -->
   <div class="mcfg-overlay hidden" id="settings-overlay">
     <div class="mcfg-box">
       <div class="mcfg-head">⚙ 设置 <button data-act="closeSettings">✕</button></div>
+      <div class="mcfg-row">
+        <label>门户服务器地址</label>
+        <input id="scfg-portal" type="text" placeholder="http://192.168.x.x:8080（企业门户部署地址；改动后重启生效）">
+      </div>
       <div class="mcfg-row">
         <label>IM 遥控</label>
         <div class="mcfg-temp-row">
@@ -675,14 +680,9 @@
           </div>
         </div>
       </div>
-      <div class="mcfg-row">
-        <label>会话白名单（chat_id，可选）</label>
-        <input id="scfg-allow" type="text" placeholder="留空 = 仅已绑定用户可对话（推荐）">
-      </div>
       <div id="scfg-note" style="font-size:11.5px;color:var(--muted);margin:2px 0 6px;line-height:1.5"></div>
       <div class="mcfg-actions">
         <button data-act="closeSettings">取消</button>
-        <button id="scfg-test-btn" data-act="imcfgTest">测试连接</button>
         <button class="mcfg-save" data-act="imcfgSave">保存</button>
       </div>
     </div>
@@ -694,7 +694,6 @@
     </div>
     <div class="mi-sep"></div>
     <div class="mi" data-act="userProfile"><span class="mi-i">👤</span> 账户信息</div>
-    <div class="mi" data-act="imBinding"><span class="mi-i">🔗</span> IM 绑定（飞书）</div>
     <div class="mi" data-act="userSwitch"><span class="mi-i">⇄</span> 切换账户</div>
     <div class="mi" data-act="userWorkspace"><span class="mi-i">🗂</span> 工作空间</div>
     <div class="mi-sep"></div>
@@ -1613,17 +1612,16 @@ async function menuSettings(){
   try{ r = JSON.parse(await window.__TAURI__.core.invoke("im_config",{action:"get"})); }catch(e){ showToast("读取失败："+e); return; }
   if(!r||!r.ok){ showToast("读取 IM 配置失败："+((r&&r.error&&r.error.message)||"未知")); return; }
   const d=r.data;
+  document.getElementById("scfg-portal").value = d.portal_base||"";
   document.getElementById("scfg-kind").value    = d.kind||"feishu";
   document.getElementById("scfg-enabled").checked= d.enabled!==false;
   document.getElementById("scfg-app-id").value  = d.app_id||"";
   document.getElementById("scfg-app-secret").value = d.app_secret_masked||"";
   document.getElementById("scfg-base").value    = d.base||"";
   document.getElementById("scfg-tg-token").value= d.telegram_token_masked||"";
-  document.getElementById("scfg-allow").value   = d.allow||"";
   const note=[];
-  if(d.bridge) note.push(d.bridge);
   if(d.env_active) note.push("⚠ 检测到环境变量 CMX_AGENT_IM_*（开发模式）优先生效，此处保存的配置暂不生效。");
-  if(!d.configured) note.push("尚未配置：填入你的 IM 机器人凭证（飞书自建应用 App ID/Secret），保存并重启即启用遥控。");
+  if(!d.configured) note.push("尚未配置：填入你的 IM 机器人凭证（飞书自建应用 App ID/Secret），保存并重启即启用遥控。保存后，你在飞书给机器人发消息即以当前登录账号对话。");
   document.getElementById("scfg-note").textContent = note.join("  ·  ");
   scfgSwitchKind();
   document.getElementById("settings-overlay").classList.remove("hidden");
@@ -1646,34 +1644,20 @@ function scfgToggleTgLock(){
   if(_scfgTgUnlocked){ input.readOnly=true; input.type="password"; input.value=""; btn.textContent="🔒"; _scfgTgUnlocked=false; }
   else { input.readOnly=false; input.type="text"; input.value=""; btn.textContent="🔓"; _scfgTgUnlocked=true; input.focus(); }
 }
-// 平台切换：只显示所选 provider 的凭证块；测试按钮仅飞书支持（Telegram 预检后续追加）。
+// 平台切换：只显示所选 provider 的凭证块。
 function scfgSwitchKind(){
   const kind=document.getElementById("scfg-kind").value;
   document.getElementById("scfg-feishu-block").style.display   = kind==="feishu"   ? "" : "none";
   document.getElementById("scfg-telegram-block").style.display = kind==="telegram" ? "" : "none";
-  document.getElementById("scfg-test-btn").style.display       = kind==="feishu"   ? "" : "none";
-}
-async function imcfgTest(){
-  const note=document.getElementById("scfg-note");
-  const kind=document.getElementById("scfg-kind").value;
-  if(kind!=="feishu"){ showToast("测试连接暂仅支持飞书"); return; }
-  const payload={kind, app_id:document.getElementById("scfg-app-id").value.trim(),
-    base:document.getElementById("scfg-base").value};
-  if(_scfgSecretUnlocked){ payload.app_secret=document.getElementById("scfg-app-secret").value.trim(); }
-  note.textContent="测试中…";
-  let r=null;
-  try{ r=JSON.parse(await window.__TAURI__.core.invoke("im_config",{action:"test", payload:JSON.stringify(payload)})); }
-  catch(e){ note.textContent="测试失败："+e; return; }
-  if(r&&r.ok){ note.textContent=r.data.result||"通过"; }
-  else { note.textContent="✕ "+((r&&r.error&&r.error.message)||"未知错误"); }
 }
 async function imcfgSave(){
   const payload={
+    portal_base:document.getElementById("scfg-portal").value.trim(),
     kind:document.getElementById("scfg-kind").value,
     enabled:document.getElementById("scfg-enabled").checked,
+    personal:true,
     app_id:document.getElementById("scfg-app-id").value.trim(),
     base:document.getElementById("scfg-base").value,
-    allow:document.getElementById("scfg-allow").value.trim(),
     app_secret_action:_scfgSecretUnlocked?"set":"keep",
     telegram_token_action:_scfgTgUnlocked?"set":"keep",
   };
@@ -1755,69 +1739,6 @@ function userProfile(){ closeMenu();
 function userSwitch(){ closeMenu(); alert("切换账户\n\n退出后重新登录即可切换账户/租户。"); }
 function userWorkspace(){ closeMenu(); alert("工作空间（占位）\n\n管理沙箱工作区根目录与数据目录。"); }
 
-// ── IM 绑定（飞书 ↔ 门户账号）──
-// 验证码模式：点「获取验证码」→ 把码发到飞书机器人 → 机器人侧核销并建立绑定。
-// 之后飞书消息按绑定用户身份跑 agent（数据权限按此人）。
-async function imBinding(){
-  closeMenu();
-  if(!CURRENT_USER){ showToast("请先登录"); return; }
-  // 弹层（点遮罩关闭）
-  const ov=document.createElement("div");
-  ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center";
-  const box=document.createElement("div");
-  box.style.cssText="width:400px;max-width:90vw;background:var(--panel,#1e1e2e);border:1px solid var(--border,#333);border-radius:12px;padding:18px 20px;color:var(--fg,#ddd);font-size:13px";
-  box.innerHTML=`
-    <div style="font-weight:700;font-size:15px;margin-bottom:10px">🔗 IM 绑定</div>
-    <div style="color:var(--muted,#999);margin-bottom:12px;line-height:1.6">
-      把你的飞书账号绑定到当前登录账号。绑定后，你在飞书给机器人发消息，
-      智能体将<b>以你的身份</b>运行（数据权限按你的账号判定）。
-    </div>
-    <div id="imb-code-row" style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
-      <button id="imb-gen" style="flex:none;padding:6px 12px;border-radius:8px;border:1px solid var(--border,#444);background:var(--accent,#4f46e5);color:#fff;cursor:pointer">获取验证码</button>
-      <span id="imb-code" style="font-family:monospace;font-size:20px;letter-spacing:3px;font-weight:700"></span>
-    </div>
-    <div id="imb-hint" style="color:var(--muted,#999);margin-bottom:12px;line-height:1.5"></div>
-    <div style="font-weight:600;margin-bottom:6px">已绑定账号</div>
-    <div id="imb-list" style="min-height:36px;margin-bottom:10px"></div>
-    <div style="text-align:right"><button id="imb-close" style="padding:5px 14px;border-radius:8px;border:1px solid var(--border,#444);background:transparent;color:inherit;cursor:pointer">关闭</button></div>`;
-  ov.append(box);
-  ov.onclick=(e)=>{ if(e.target===ov) ov.remove(); };
-  box.querySelector("#imb-close").onclick=()=>ov.remove();
-  document.body.append(ov);
-
-  const codeEl=box.querySelector("#imb-code"), hintEl=box.querySelector("#imb-hint"), listEl=box.querySelector("#imb-list");
-  const refreshList=async()=>{
-    listEl.textContent="加载中…";
-    const r=await call({cmd:"im_list_bindings"});
-    const items=(r.ok&&r.data&&r.data.items)||[];
-    if(!r.ok){ listEl.textContent="查询失败："+((r.error&&r.error.message)||"未知"); return; }
-    if(!items.length){ listEl.innerHTML='<span style="color:var(--muted,#999)">（暂无绑定）</span>'; return; }
-    listEl.innerHTML="";
-    items.forEach(b=>{
-      const row=document.createElement("div");
-      row.style.cssText="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border,#333)";
-      row.innerHTML=`<span>${esc(b.provider)} · <span style="font-family:monospace">${esc(String(b.open_id).slice(0,14))}…</span></span>`;
-      const del=document.createElement("button");
-      del.textContent="解绑"; del.style.cssText="padding:3px 10px;border-radius:6px;border:1px solid var(--border,#444);background:transparent;color:#f66;cursor:pointer";
-      del.onclick=async()=>{
-        const r2=await call({cmd:"im_unbind",provider:b.provider,open_id:b.open_id});
-        if(r2.ok){ showToast("已解绑"); refreshList(); } else { showToast("解绑失败："+((r2.error&&r2.error.message)||"未知")); }
-      };
-      row.append(del); listEl.append(row);
-    });
-  };
-  box.querySelector("#imb-gen").onclick=async(e)=>{
-    e.target.disabled=true; e.target.textContent="生成中…";
-    const r=await call({cmd:"im_bind_gen_code"});
-    e.target.disabled=false; e.target.textContent="重新获取";
-    if(!r.ok){ hintEl.textContent="❌ "+((r.error&&r.error.message)||"生成失败"); return; }
-    const d=r.data||{};
-    codeEl.textContent=d.code||"";
-    hintEl.innerHTML="在<b>飞书</b>里给机器人发送这个验证码完成绑定（"+((d.expires_in||300)/60)+" 分钟内有效）。";
-    setTimeout(refreshList, 3000); // 用户发码后稍等刷新列表
-  };
-  refreshList();
-}
 async function userLogout(){ closeMenu();
   if(!confirm("确定退出登录？")) return;
   try{ await call({cmd:"logout"}); }catch(e){}
@@ -2265,9 +2186,9 @@ function showToast(msg){
 }
 
 // 内联 onclick 属性全被拦截。用委托（监听在 document 上，由 nonce'd 脚本注册）在两壳都工作。
-const ACTIONS = { newTask, openConnectors, startFromHome, toggleSidebar, toggleTheme, checkUpdate, applyUpdate, toggleMenu, menuSettings, menuAbout, toggleVoice, toggleUserMenu, userProfile, imBinding, userSwitch, userWorkspace, userLogout,
+const ACTIONS = { newTask, openConnectors, startFromHome, toggleSidebar, toggleTheme, checkUpdate, applyUpdate, toggleMenu, menuSettings, menuAbout, toggleVoice, toggleUserMenu, userProfile, userSwitch, userWorkspace, userLogout,
   toggleTabOverflow, tabCtxClose, tabCtxCloseOthers, tabCtxCloseRight, tabCtxCloseAll, winMinimize, winToggleMaximize, winClose,
-  closeSettings, scfgSecretLock: scfgToggleSecretLock, scfgTgLock: scfgToggleTgLock, imcfgTest, imcfgSave };
+  closeSettings, scfgSecretLock: scfgToggleSecretLock, scfgTgLock: scfgToggleTgLock, imcfgSave };
 document.addEventListener("click", e=>{
   const el = e.target.closest("[data-act]");
   if(!el){ closeMenu(); closeTabCtx(); document.getElementById("modelmenu").classList.remove("on"); document.getElementById("tab-dropdown").classList.remove("on"); return; }

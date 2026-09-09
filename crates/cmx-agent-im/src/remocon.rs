@@ -29,11 +29,17 @@ pub struct ImRemoconConfig {
     /// provider 类型：`feishu` / `telegram`。
     #[serde(default)]
     pub kind: String,
+    /// 个人模式（默认 true）：所有 IM 消息直接以桌面壳当前登录用户身份跑回合，
+    /// 无需验证码绑定（自己私聊自己的机器人）。false = 绑定模式（按发送者 open_id
+    /// 鉴权，群聊多用户用，需在桌面端取码完成绑定）。
+    #[serde(default = "default_true")]
+    pub personal: bool,
     #[serde(default)]
     pub feishu: FeishuCreds,
     #[serde(default)]
     pub telegram: TelegramCreds,
-    /// chat_id 白名单；**空 = 不限**（绑定模式的门 = 已绑定身份，推荐普通用户留空）。
+    /// chat_id 白名单；**空 = 不限**。个人模式下这是唯一的安全门（任何能发消息给
+    /// 机器人的会话都会以登录人身份跑 agent）——群机器人建议配置。
     #[serde(default)]
     pub allow: Vec<String>,
 }
@@ -86,6 +92,7 @@ impl Default for ImRemoconConfig {
         Self {
             enabled: true,
             kind: "feishu".into(),
+            personal: true,
             feishu: FeishuCreds::default(),
             telegram: TelegramCreds::default(),
             allow: Vec::new(),
@@ -100,6 +107,7 @@ impl ImRemoconConfig {
             "configured": true,
             "enabled": self.enabled,
             "kind": self.kind,
+            "personal": self.personal,
             "app_id": self.feishu.app_id,
             "app_secret_masked": mask_secret(&self.feishu.app_secret),
             "base": self.feishu.base,
@@ -139,16 +147,18 @@ impl ImRemoconConfig {
                 Arc::new(TelegramProvider::new(t.token.trim(), non_empty(&t.base)))
             }
         };
-        Ok(ResolvedIm { kind, allow, provider, source: "im.json" })
+        Ok(ResolvedIm { kind, allow, provider, personal: self.personal, source: "im.json" })
     }
 }
 
 /// 壳启动装好的 IM 遥控：provider + 白名单 + 来源标签（日志/面板提示用）。
 pub struct ResolvedIm {
     pub kind: ImKind,
-    /// `None` = 不限（绑定模式门 = 已绑定身份）。
+    /// `None` = 不限（个人模式建议配白名单；绑定模式门 = 已绑定身份）。
     pub allow: Option<HashSet<String>>,
     pub provider: Arc<dyn ImProvider>,
+    /// 个人模式（im.json 来源读 `personal`；env 来源恒 false = 绑定模式，env 语义不变）。
+    pub personal: bool,
     /// `"env"`（开发联调）或 `"im.json"`（GUI 面板）。
     pub source: &'static str,
 }
@@ -166,6 +176,7 @@ pub fn resolve(data_dir: Option<&Path>) -> Result<ResolvedIm, String> {
             kind: cfg.kind,
             allow: cfg.allow,
             provider,
+            personal: false,
             source: "env",
         });
     }
@@ -290,6 +301,7 @@ mod tests {
         let cfg = ImRemoconConfig {
             enabled: true,
             kind: "feishu".into(),
+            personal: true,
             feishu: FeishuCreds {
                 app_id: "cli_x".into(),
                 app_secret: "sec-secret-secret".into(),
