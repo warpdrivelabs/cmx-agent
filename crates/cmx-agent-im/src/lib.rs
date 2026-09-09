@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use cmx_agent_app::AgentApp;
+use tokio::sync::watch;
 pub use cmx_agent_connectors::im_binding::BoundIdentity;
 
 mod telegram;
@@ -60,6 +61,9 @@ pub trait ImProvider: Send + Sync {
     async fn start(&self) -> Result<(), String> {
         Ok(())
     }
+    /// 热重载：请求停止常驻接收链（断开长连接、退出后台 task）。
+    /// 有常驻 task 的 provider 覆盖实现；轮询型默认 no-op。
+    fn stop(&self) {}
 }
 
 /// 绑定模式下一条入站消息的发送者解析结果（决定 tick 对它的处理方式）。
@@ -316,18 +320,40 @@ impl ImBridge {
     }
 
     /// 长轮询/收件主循环（出错退避重试；无消息时节流，避免空转）。
-    pub async fn run(&self) {
+    /// 热重载：`stop` watch 置 true → 主循环干净退出（桥任务结束，壳侧起新桥）。
+    pub async fn run(&self, stop: watch::Receiver<bool>) {
         tracing::info!("cmx-agent IM 桥启动，开始轮询…");
+        let mut stop = stop.clone();
         loop {
-            match self.tick().await {
-                Ok(0) => {
-                    // 无消息：短歇，避免空转吃 CPU（长轮询 provider 自带阻塞；Stream provider 靠此节流）。
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            // stop 已置位（或本轮 tick 后置位）→ 退出。
+            if *stop.borrow() {
+                tracing::info!("IM 桥停止（热重载）");
+                return;
+            }
+            tokio::select! {
+                _ = stop.changed() => {
+                    if *stop.borrow() {
+                        tracing::info!("IM 桥停止（热重载）");
+                        return;
+                    }
                 }
-                Ok(_) => { /* 有消息，立即进入下一轮 */ }
-                Err(e) => {
-                    tracing::warn!("im tick 出错：{e}");
-                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                r = self.tick() => match r {
+                    Ok(0) => {
+                        // 无消息：短歇，避免空转吃 CPU（长轮询 provider 自带阻塞；Stream provider 靠此节流）。
+                        // 睡眠期间也响应 stop。
+                        tokio::select! {
+                            _ = stop.changed() => { if *stop.borrow() { tracing::info!("IM 桥停止（热重载）"); return; } }
+                            _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {}
+                        }
+                    }
+                    Ok(_) => { /* 有消息，立即进入下一轮 */ }
+                    Err(e) => {
+                        tracing::warn!("im tick 出错：{e}");
+                        tokio::select! {
+                            _ = stop.changed() => { if *stop.borrow() { tracing::info!("IM 桥停止（热重载）"); return; } }
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(3)) => {}
+                        }
+                    }
                 }
             }
         }

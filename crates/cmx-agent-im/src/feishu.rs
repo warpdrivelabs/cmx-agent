@@ -52,7 +52,7 @@ fn env_nonempty(key: &str) -> Option<String> {
 /// 飞书 Stream provider。常驻后台 task 持有 websocket；`poll` 从内部队列取已收消息。
 ///
 /// 内部状态全 `Arc`，故 `start()` 克隆自身句柄入后台 task，不重建内层 provider（避免字段未来
-/// 增加/忘拷导致状态分叉）。
+/// 增加/忘拷导致状态分叉）。支持热重载：`stop()` 发停止信号，Stream task 干净退出（连接关闭）。
 pub struct FeishuProvider {
     inner: Arc<FeishuInner>,
 }
@@ -71,10 +71,18 @@ struct FeishuInner {
     token: Mutex<Option<(String, Instant)>>,
     /// 已启动 Stream task 的去重标记（`start()` 仅首次 spawn）。
     started: AtomicBool,
+    /// 热重载停止信号：`stop()` 置 true，Stream 循环 `select!` 收到即退出。
+    stop_tx: tokio::sync::watch::Sender<bool>,
+    stop_rx: tokio::sync::watch::Receiver<bool>,
+    /// Stream 代际：`stop()` 自增。task 在任何阶段（含建连中）发现「自己领的代际
+    /// 已不是最新」→ 立即退出且不重连。堵死「旧 task 卡在建连窗口、stop 后又占上
+    /// 飞书连接把新桥顶掉」的乒乓竞态（飞书同 app 仅一条活跃 Stream 连接）。
+    generation: AtomicI64,
 }
 
 impl FeishuProvider {
     pub fn new(app_id: impl Into<String>, app_secret: impl Into<String>, base: Option<String>) -> Self {
+        let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
         Self {
             inner: Arc::new(FeishuInner {
                 app_id: app_id.into(),
@@ -88,6 +96,9 @@ impl FeishuProvider {
                 seq: AtomicI64::new(0),
                 token: Mutex::new(None),
                 started: AtomicBool::new(false),
+                stop_tx,
+                stop_rx,
+                generation: AtomicI64::new(0),
             }),
         }
     }
@@ -176,15 +187,38 @@ impl FeishuProvider {
     }
 
     /// Stream 主循环：建连 → 收帧（ping/pong/event）→ 入队 + ack；出错由外层重连。
-    async fn run_stream_once(&self) -> Result<(), String> {
+    /// 热重载：stop 置位或代际过期 → 返回 `Err(STOPPED)`（外层据此退出不重连）。
+    /// `my_gen` = 本 task 领取的代际号；`fetch_endpoint`/`ws 建连` 两个不响应 select 的
+    /// HTTP/TLS 阶段结束后也检查，保证 stop 后旧 task 绝不再占上飞书连接。
+    async fn run_stream_once(&self, my_gen: i64) -> Result<(), String> {
         let url = self.fetch_endpoint().await?;
+        if self.generation_stale(my_gen) {
+            return Err(STOPPED.into());
+        }
         let (ws, _resp) = connect_async(&url).await.map_err(|e| format!("ws 建连失败：{e}"))?;
+        if self.generation_stale(my_gen) {
+            // 建连成功但代际已过期：立刻关闭，绝不占用连接（否则顶掉新桥）。
+            drop(ws);
+            tracing::info!("feishu stream 建连后发现代际过期，立即退出（热重载）");
+            return Err(STOPPED.into());
+        }
         let (mut sink, mut stream) = ws.split();
         let mut ping = tokio::time::interval(PING_INTERVAL);
         ping.tick().await; // 跳过首次立即触发
         tracing::info!("feishu stream 已连接");
+        let mut stop = self.inner.stop_rx.clone();
         loop {
+            if self.generation_stale(my_gen) {
+                tracing::info!("feishu stream 代际过期，断开连接（热重载）");
+                return Err(STOPPED.into());
+            }
             tokio::select! {
+                _ = stop.changed(), if *stop.borrow() || stop.has_changed().unwrap_or(false) => {
+                    if *stop.borrow() {
+                        tracing::info!("feishu stream 收到停止信号，断开连接");
+                        return Err(STOPPED.into());
+                    }
+                }
                 msg = stream.next() => match msg {
                     Some(Ok(Message::Binary(b))) => {
                         let Some(frame) = decode_frame(&b) else { continue };
@@ -235,12 +269,33 @@ impl FeishuProvider {
     }
 
     /// 重连外壳：失败/断开 → 退避重试，永不放弃（对齐桥 `run()` 的退避语义）。
+    /// 热重载：stop 置位 → 退出（含退避 sleep 期间被通知也立即走）。
     async fn run_stream_loop(self: Arc<Self>) {
+        let mut stop = self.inner.stop_rx.clone();
+        let my_gen = self.inner.generation.load(Ordering::SeqCst); // 领取代际
         loop {
-            if let Err(e) = self.run_stream_once().await {
-                tracing::warn!("feishu stream 断开：{e}，{}s 后重连", RECONNECT_BACKOFF.as_secs());
+            tokio::select! {
+                _ = stop.changed() => {
+                    if *stop.borrow() {
+                        tracing::info!("feishu stream task 退出（热重载）");
+                        return;
+                    }
+                }
+                r = self.run_stream_once(my_gen) => {
+                    if matches!(r, Err(ref e) if e == STOPPED) {
+                        tracing::info!("feishu stream task 退出（热重载）");
+                        return;
+                    }
+                    if let Err(e) = r {
+                        tracing::warn!("feishu stream 断开：{e}，{}s 后重连", RECONNECT_BACKOFF.as_secs());
+                    }
+                    // 退避期间也响应 stop（select 包住 sleep）。
+                    tokio::select! {
+                        _ = stop.changed() => { if *stop.borrow() { return; } }
+                        _ = tokio::time::sleep(RECONNECT_BACKOFF) => {}
+                    }
+                }
             }
-            tokio::time::sleep(RECONNECT_BACKOFF).await;
         }
     }
 }
@@ -301,6 +356,23 @@ impl ImProvider for FeishuProvider {
         Ok(())
     }
 }
+
+impl FeishuProvider {
+    /// 热重载：发停止信号并自增代际——所有 Stream task（含正卡在建连中的）在下一个
+    /// 检查点退出且不再重连，飞书连接让位给新桥。
+    pub fn stop(&self) {
+        self.inner.generation.fetch_add(1, Ordering::SeqCst);
+        let _ = self.inner.stop_tx.send(true);
+    }
+
+    /// 代际是否已过期（本 task 领的号不再是最新）。
+    fn generation_stale(&self, my_gen: i64) -> bool {
+        self.inner.generation.load(Ordering::SeqCst) != my_gen
+    }
+}
+
+/// `run_stream_once` 返回该串 = 因 stop/代际过期退出（外层不再重连，正常退出 task）。
+const STOPPED: &str = "__stopped__";
 
 impl FeishuInner {
     /// CAS 守门：仅首次调用返回 true（已启动则 false，避免重复 spawn）。

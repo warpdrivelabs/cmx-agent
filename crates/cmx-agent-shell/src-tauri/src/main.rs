@@ -41,11 +41,34 @@ fn portal_base() -> String {
     portal_packed_default().unwrap_or_else(|| AuthConfig::default().base_url)
 }
 
+/// 运行中的 IM 桥句柄：stop 信号（热重载用）+ provider（其 stop() 断开飞书长连接）。
+struct ImBridgeHandle {
+    stop_tx: tokio::sync::watch::Sender<bool>,
+    provider: Arc<dyn cmx_agent_im::ImProvider>,
+}
+
+/// 当前桥的句柄槽（热重载：保存配置 → 停旧 → 起新）。
+static IM_BRIDGE: std::sync::Mutex<Option<ImBridgeHandle>> = std::sync::Mutex::new(None);
+
+/// 停掉当前运行的 IM 桥（若有）。发 stop 信号 + 断 provider 长连接即返回——
+/// 旧 task 异步退出，不阻塞新桥启动。
+fn stop_im_bridge() {
+    if let Ok(mut slot) = IM_BRIDGE.lock() {
+        if let Some(h) = slot.take() {
+            let _ = h.stop_tx.send(true);
+            h.provider.stop();
+            eprintln!("[im] 旧桥已停（热重载）");
+        }
+    }
+}
+
 /// IM 遥控装配（U16）：读 `CMX_AGENT_IM_*` env（开发联调）或 `<data_dir>/im.json`（GUI 设置面板），
 /// 配了就启动 `ImBridge` 后台 task，与桌面 UI 共用同一 `AgentApp`。IM 消息跑同一回合循环 →
 /// 事件经 SessionEventBus → `session_event` Tauri 事件实时推前端，回复经 ImBridge 回发 IM。
 /// 未配 / 装配失败 → 仅打日志 + 记状态，不阻断桌面 UI（IM 是可选遥控通道）。
+/// **热重载**：启动前先停旧桥——设置面板保存后直接重调本函数即可换配置，无需重启应用。
 fn start_im_if_configured(rt: &'static tokio::runtime::Runtime, app: Arc<AgentApp>) {
+    stop_im_bridge();
     let data_dir = cmx_agent_app::shared_data_dir();
     let resolved = match cmx_agent_im::resolve(Some(&data_dir)) {
         Ok(r) => r,
@@ -70,7 +93,8 @@ fn start_im_if_configured(rt: &'static tokio::runtime::Runtime, app: Arc<AgentAp
         resolved.source
     ));
     eprintln!("[im] 启动 IM 遥控（provider={kind_label}，{mode_label}，配置来源={}，portal={portal_base}）", resolved.source);
-    let provider = resolved.provider;
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    let provider = Arc::clone(&resolved.provider);
     rt.spawn(async move {
         // 飞书 Stream：起常驻后台 task；Telegram 长轮询：trait 默认 no-op。
         if let Err(e) = provider.start().await {
@@ -80,19 +104,27 @@ fn start_im_if_configured(rt: &'static tokio::runtime::Runtime, app: Arc<AgentAp
         let bridge = cmx_agent_im::ImBridge::new(app, provider, kind_label, allow)
             .with_personal(personal)
             .with_bindings(std::sync::Arc::new(bindings));
-        bridge.run().await;
+        bridge.run(stop_rx).await;
     });
+    // 句柄入槽（供下次热重载停旧：发 stop 信号 + provider.stop() 断长连接）。
+    if let Ok(mut slot) = IM_BRIDGE.lock() {
+        *slot = Some(ImBridgeHandle { stop_tx, provider: resolved.provider });
+    }
 }
 
 /// IM 遥控配置（设置 → IM 遥控 面板）。`action` = `get`（脱敏读 im.json）/
-/// `set`（保存 im.json，重启生效）。
+/// `set`（保存 im.json + **热重载桥**，立即生效）。
 ///
 /// 返回与 `dispatch_json` 同形的 JSON 串（`{ok,data}` / `{ok:false,error:{message}}`），
 /// 前端按统一信封解析。配置 schema 见 `cmx_agent_im::ImRemoconConfig`（secret keep/set 语义
 /// 照模型配置面板：面板只回显掩码，不回传明文）。身份模式固定个人（`personal=true`），
 /// 白名单不进面板（im.json 手工维护，GUI set 不触碰已有值）。
 #[tauri::command]
-async fn im_config(action: String, payload: Option<String>) -> Result<String, String> {
+async fn im_config(
+    action: String,
+    payload: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
     let data_dir = cmx_agent_app::shared_data_dir();
     match action.as_str() {
         "get" => {
@@ -155,10 +187,14 @@ async fn im_config(action: String, payload: Option<String>) -> Result<String, St
                 }
             }
             cmx_agent_im::save_im_config(&data_dir, &cfg)?;
+            // 热重载：保存即生效——停旧桥 + 按新 im.json 起新桥（无需重启应用）。
+            // env 激活时不重载（env 优先且不可热换，面板已提示）。
+            let app = Arc::clone(&state.app);
             let note = if cmx_agent_im::env_active() {
                 "已保存。⚠ 检测到环境变量 CMX_AGENT_IM_*（开发模式）优先生效，im.json 暂不生效。"
             } else {
-                "已保存，重启应用后生效"
+                start_im_if_configured(net_rt(), app);
+                "已保存，IM 遥控已按新配置重载（立即生效）"
             };
             Ok(serde_json::json!({ "ok": true, "data": { "note": note } }).to_string())
         }

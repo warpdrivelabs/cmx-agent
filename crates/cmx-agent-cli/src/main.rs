@@ -73,7 +73,8 @@ async fn im_mode(data_dir: Option<String>) -> anyhow::Result<()> {
     // 飞书 Stream：启动常驻后台 task；Telegram 长轮询：trait 默认 no-op。
     provider.start().await.map_err(|e| anyhow::anyhow!(e))?;
     let bridge = cmx_agent_im::ImBridge::new(app, provider, im_cfg.kind.label(), allow);
-    bridge.run().await;
+    let (_stop_tx, stop_rx) = tokio::sync::watch::channel(false); // CLI 无热重载，信号永不置位
+    bridge.run(stop_rx).await;
     Ok(())
 }
 
