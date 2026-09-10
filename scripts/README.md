@@ -91,7 +91,7 @@ KEYCHAIN_SERVICE="cmx-agent-updater-key"
 ### 运行时依赖（非打包问题，分发时注意）
 
 - **登录门依赖门户后端**：app 启动后登录对接 `127.0.0.1:8080`（cmx-portal-server）。给别人用需改 `AuthConfig` 指向远程门户，或目标机器也跑门户。
-- **model.json 不随 app 走**：模型配置在用户各自的 `~/Library/Application Support/com.pansoft.cmx-agent/`，首次跑无配置 → 回退 demo。要让 app 自带默认模型得改代码。
+- **model.json 不随 app 走**：模型配置在用户各自的 `~/Library/Application Support/com.pansoft.truemate/`，首次跑无配置 → 回退 demo。要让 app 自带默认模型得改代码。
 
 ## SKILL.md
 

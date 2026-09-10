@@ -423,7 +423,8 @@ mod tests {
             return;
         }
         let home = std::env::var("HOME").unwrap();
-        let mj = std::path::Path::new(&home).join("Library/Application Support/com.pansoft.cmx-agent/model.json");
+        let mj = std::path::Path::new(&home)
+            .join("Library/Application Support/com.pansoft.truemate/model.json");
         let Ok(s) = std::fs::read_to_string(&mj) else {
             eprintln!("无 model.json，跳过 live");
             return;

@@ -108,6 +108,23 @@
     @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
     @keyframes fadeInDown { from { opacity: 0; transform: translateY(-12px); } to { opacity: 1; transform: translateY(0); } }
     @keyframes fadeInUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+    /* 更新提示自绘模态（禁用浏览器原生 alert）：配色随登录页固定深色品牌主题 */
+    .cmx-upd-mask { position: fixed; inset: 0; z-index: 999; display: flex; align-items: center; justify-content: center;
+      background: rgba(3,6,12,.55); backdrop-filter: blur(4px); opacity: 0; transition: opacity .2s; }
+    .cmx-upd-mask.on { opacity: 1; }
+    .cmx-upd { width: min(420px, 86vw); background: #121822; border: 1px solid #2f3a4d; border-radius: 12px;
+      padding: 20px 22px; box-shadow: 0 12px 40px rgba(0,0,0,.5); }
+    .cmx-upd-title { display: flex; align-items: center; gap: 10px; color: #e8edf5; font-size: 16px; font-weight: 700; margin-bottom: 12px; }
+    .cmx-upd-title .dot { width: 8px; height: 8px; border-radius: 50%; background: #1fb182; box-shadow: 0 0 8px #1fb182; }
+    .cmx-upd-body { max-height: 46vh; overflow: auto; white-space: pre-wrap; word-break: break-word;
+      color: #8b95a8; font-size: 13px; line-height: 1.8; margin-bottom: 18px; }
+    .cmx-upd-ops { display: flex; justify-content: flex-end; gap: 10px; }
+    .cmx-upd-btn { padding: 9px 18px; border-radius: 6px; border: 1px solid #2f3a4d; background: #151c28;
+      color: #e8edf5; font-size: 13px; cursor: pointer; transition: all .25s; }
+    .cmx-upd-btn:hover { border-color: #1fb182; }
+    .cmx-upd-btn.primary { border: none; background: linear-gradient(135deg, #1fb182 0%, #22c55e 100%); color: #fff; font-weight: 600; }
+    .cmx-upd-btn.primary:hover:not(:disabled) { background: linear-gradient(135deg, #22c55e 0%, #34d399 100%); }
+    .cmx-upd-btn:disabled { opacity: .65; cursor: default; }
     @media screen and (max-width: 1040px) { .brand-panel { width: 46%; padding: 36px 40px; } .brand-title { font-size: 44px; } .brand-features { display: none; } }
     @media screen and (max-width: 820px) { .login-page { flex-direction: column; height: auto; min-height: 100vh; }
       .brand-panel { width: 100%; max-width: none; min-height: 240px; } .brand-content { max-width: none; margin-top: 0; }
@@ -209,6 +226,88 @@
       el.style.animationDelay = (-Math.random() * 12) + 's';
       shooterHost.appendChild(el);
     }
+  </script>
+  <script>
+    // ── 更新检查：仅应用启动后在登录页首查一次（5s），发现新版本自绘弹窗（force 拦登录表单）。
+    // 不等登录成功的理由：force 版本要在登录前拦截（服务端升级后旧客户端登录只会反复失败）；
+    // latest.json 是免鉴权边缘端点，无需登录态；登录页无进行中会话，是全应用最安全的安装重启时机。
+    // 退出登录回登录页不重查不弹；关闭应用重开是新进程，会重新首查。
+    // 弹出即写 cmx-update-snooze（30 分钟）：登录后主窗兜底检查不重复弹同一版本（两窗同 origin 共享）。
+    (async () => {
+      if (!(window.__TAURI__ && window.__TAURI__.core)) return; // Web 壳无更新通道
+      const snoozed = (v) => {
+        try {
+          const s = JSON.parse(localStorage.getItem('cmx-update-snooze') || 'null');
+          return !!(s && s.version === v && Date.now() - s.ts < 30 * 60 * 1000);
+        } catch (e) { return false; }
+      };
+      const showUpd = (info) => {
+        let mask = document.getElementById('cmx-upd-mask'); if (mask) mask.remove();
+        // 弹出即记「已提示」：登录后主窗兜底检查 30 分钟内不重复弹同一版本（不依赖用户点「稍后」；force 不受限）
+        try { localStorage.setItem('cmx-update-snooze', JSON.stringify({ version: info.version, ts: Date.now() })); } catch (e) {}
+        const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        mask = document.createElement('div');
+        mask.id = 'cmx-upd-mask'; mask.className = 'cmx-upd-mask';
+        mask.innerHTML = '<div class="cmx-upd" role="dialog" aria-modal="true">'
+          + '<div class="cmx-upd-title"><span class="dot"></span>发现新版本 ' + esc(info.version) + '</div>'
+          + '<div class="cmx-upd-body">' + (esc(info.notes) || '暂无更新说明') + '</div>'
+          + '<div class="cmx-upd-ops">'
+          + (info.force ? '' : '<button class="cmx-upd-btn" data-x="later">稍后</button>')
+          + '<button class="cmx-upd-btn primary" data-x="now">立即更新</button>'
+          + '</div></div>';
+        document.body.appendChild(mask);
+        requestAnimationFrame(() => mask.classList.add('on'));
+        const close = () => { mask.classList.remove('on'); setTimeout(() => mask.remove(), 200); };
+        mask.addEventListener('click', async (e) => {
+          const act = e.target.closest('[data-x]');
+          if (act && act.dataset.x === 'now') {
+            // 下载 + 验签 + 安装 + 自动重启（壳内 update_common.rs）；进度进按钮文案
+            const btn = mask.querySelector('[data-x="now"]');
+            btn.disabled = true; btn.textContent = '下载中…';
+            if (window.__TAURI__.event) {
+              try { window.__TAURI__.event.listen('update_progress', (ev) => {
+                const p = ev.payload || {};
+                btn.textContent = p.total ? '下载 ' + Math.round(p.received / p.total * 100) + '%'
+                                          : '下载 ' + Math.round(p.received / 1024) + 'KB';
+              }); } catch (err) {}
+            }
+            try {
+              await window.__TAURI__.core.invoke('download_and_install');
+              btn.textContent = '即将重启…';   // 壳内 install 后立刻 restart，通常见不到这一帧
+            } catch (err) {
+              btn.disabled = false; btn.textContent = '更新失败，点重试';
+            }
+          } else if (act && act.dataset.x === 'later') {
+            close();   // 标记已在弹出时写入
+          } else if (!info.force && e.target === mask) { close(); }
+        });
+      };
+      // 页面就绪即首查（本进程仅此一次）：先清上一周期遗留的「已提示」标记再查——
+      // 每次应用启动弹一次；退出登录回登录页不重查不弹（页面实例还在，也没有重查监听），
+      // 关闭应用重开是新进程，会重新首查。不等 5s：用户秒登录的话弹窗会挂在已隐藏的登录窗里。
+      const runUpdateCheck = async () => {
+        try { localStorage.removeItem('cmx-update-snooze'); } catch (e) {}
+        try {
+          const r = JSON.parse(await window.__TAURI__.core.invoke('check_update'));
+          if (r && r.ok && r.data && r.data.update_available) {
+            const info = { version: r.data.version, notes: r.data.notes, force: r.data.force };
+            if (!info.force && snoozed(info.version)) return;
+            showUpd(info);
+          }
+        } catch (e) { console.warn('[update] 首查失败（静默）:', e); }
+      };
+      setTimeout(runUpdateCheck, 500);
+      // 登录窗被藏（用户已登录走了）时更新弹窗还挂着没处理：清「已提示」标记并收掉弹窗，
+      // 让主窗亮出后的兜底检查补弹——否则首查写下的标记会把主窗拦住，用户全程无感。
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState !== 'hidden') return;
+        const mask = document.getElementById('cmx-upd-mask');
+        if (mask) {
+          try { localStorage.removeItem('cmx-update-snooze'); } catch (e) {}
+          mask.remove();
+        }
+      });
+    })();
   </script>
   <script>
     // ── 登录逻辑（同核多壳）：原生 Tauri 壳走 invoke("login")（成功后 Rust 显示主窗口 + 关闭本窗）；Web 壳回退 POST /api 后跳主页。 ──

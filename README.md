@@ -58,7 +58,7 @@ cd crates/cmx-agent-shell/src-tauri && cargo run
 
 - **模型配置**：环境变量（`CMX_AGENT_MODEL_*` / `CMX_AI_*` / `DEEPSEEK_API_KEY`）或
   `<数据目录>/model.json`（OpenAI 兼容 base_url/api_key/model）；未配置回退离线 DemoModel。
-  Web 壳数据目录 `%TEMP%\cmx-agent-desktop\data`，Tauri 壳 `%APPDATA%\pansoft\cmx-agent\data`（macOS 见 shell README）。
+  双壳统一数据目录 `%APPDATA%\pansoft\truemate\data`（macOS 见 shell README）。
 - **Windows**：无需 Git Bash（默认 PowerShell；要 POSIX 语义设 `CMX_AGENT_SHELL=sh`）。
 - **权限两旋钮**：界面 🛡 下拉即时切换（read-only / workspace-write / danger × 审批策略），选择记忆在浏览器 localStorage。
 

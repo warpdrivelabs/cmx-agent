@@ -30,6 +30,8 @@ tauri-plugin-process = "2"
 serde_json = "1"
 # K1：endpoint 运行时注入用 `url::Url`（树内已有 2.5.x，锁内即得，离线可解）。
 url = "2"
+# P1 更新上报：POST /agent-updates/report（reqwest 已在 updater 插件树内，仅声明 json feature 复用）。
+reqwest = { version = "0.12", features = ["json"] }
 tokio = { version = "1", features = ["full"] }
 # 数据根解析在 cmx-agent-app::shared_data_dir（directories 经其传入），本壳不直接引。
 # 日志：tracing（核已用）+ subscriber 把 IM 桥/Stream 的 info/warn 打到 stderr（联调抓 chat_id 必需）。

@@ -30,6 +30,64 @@ pub fn get_app_version(app: AppHandle) -> String {
     app.package_info().version.to_string()
 }
 
+// ── 更新结果上报（方案 §7.3 P1）：门户维护页「升级量 / 累计升级」的数据源 ──
+// download_and_install 安装前落 pending 标记；新版本首次启动时 POST /agent-updates/report
+// （免鉴权边缘通道，匿名可报）。上报未受理则标记保留、下次启动重试——升级量以门户受理为准，不重复计数。
+
+fn pending_path() -> std::path::PathBuf {
+    cmx_agent_app::shared_data_dir().join("update-pending.json")
+}
+
+async fn post_report(from: &str, to: &str, result: &str) -> bool {
+    let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
+    let body = serde_json::json!({
+        "from_version": from,
+        "to_version": to,
+        "target": format!("{os}-{arch}"),
+        "arch": arch,
+        "result": result,
+    });
+    let url = format!("{}/agent-updates/report", crate::portal_base());
+    let accepted = match reqwest::Client::new()
+        .post(url)
+        .json(&body)
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+    {
+        Ok(r) => r.status().is_success(),
+        Err(e) => {
+            tracing::warn!("更新结果上报请求失败（{result} {from}->{to}）：{e}");
+            false
+        }
+    };
+    if !accepted {
+        tracing::warn!("更新结果上报未受理（{result} {from}->{to}）");
+    }
+    accepted
+}
+
+/// 启动时消费 pending 标记（main.rs setup 里 spawn）：当前版本 == to_version → 上报
+/// success 并清标记；版本不符（用户手动装了别的版本）静默清；上报未受理保留待下次重试。
+pub async fn report_pending_update(app: AppHandle) {
+    let path = pending_path();
+    let Ok(txt) = std::fs::read_to_string(&path) else { return };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) else {
+        let _ = std::fs::remove_file(&path);
+        return;
+    };
+    let from = v["from_version"].as_str().unwrap_or("").to_string();
+    let to = v["to_version"].as_str().unwrap_or("").to_string();
+    let cur = app.package_info().version.to_string();
+    if to.is_empty() || to != cur {
+        // 版本不符（用户手动装了别的版本）：静默清，不计数。
+        let _ = std::fs::remove_file(&path);
+    } else if post_report(&from, &to, "success").await {
+        // 升级成功且门户受理：清标记；未受理则保留，下次启动重试（升级量以受理为准，不重复计数）。
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
 /// 检查更新：返回与 `dispatch_json` 同形的统一信封 JSON 串（前端 call 风格解析）。
 ///
 /// 成功：`{ok:true, data:{update_available, version?, notes?, force}}`
@@ -57,9 +115,11 @@ pub async fn check_update(app: AppHandle) -> Result<String, String> {
         .check()
         .await
         .map_err(|e| e.to_string())?;
-    // 入槽前把下载超时放宽为裕量（600s 按最大包体积；插件 download 同样吃这个字段）。
+    // 入槽前把下载超时放宽为裕量（120s：正常包几秒下完；门户/网络挂死时 2 分钟内失败可重试，
+    // 而不是永远"下载中"）。builder 的 timeout 会流入 Update 并同样作用于下载请求
+    // （updater 2.11.0 updater.rs :388/:698）。
     if let Some(u) = update.as_mut() {
-        u.timeout = Some(Duration::from_secs(600));
+        u.timeout = Some(Duration::from_secs(120));
     }
     Ok(serde_json::json!({
         "ok": true,
@@ -100,6 +160,13 @@ pub async fn download_and_install(app: AppHandle) -> Result<(), String> {
         .ok_or_else(|| "请先检查更新".to_string());
     let result = async move {
         let update: Update = update?;
+        // P1 上报：安装前落 pending 标记（from/to），新版本首次启动时上报 success（report_pending_update）。
+        let from_v = app.package_info().version.to_string();
+        let to_v = update.version.clone();
+        let _ = std::fs::write(
+            pending_path(),
+            serde_json::json!({ "from_version": from_v, "to_version": to_v }).to_string(),
+        );
         let app2 = app.clone();
         // 进度回调：on_chunk 给的是本次 chunk 增量（total 可能为 None），壳内累加成累计值再 emit。
         // emit 失败静默忽略（窗口可能已关，不当更新失败，对齐方案 L4 精神）。
@@ -116,7 +183,21 @@ pub async fn download_and_install(app: AppHandle) -> Result<(), String> {
                 || { /* 下载完成：无需通知，安装紧随其后 */ },
             )
             .await;
-        r.map_err(|e| e.to_string())?;
+        if let Err(e) = r {
+            // P1：失败也上报（方案值域 failed_verify / failed_install），升级量只计成功、失败口径单列。
+            let s = e.to_string();
+            let kind = if s.contains("signature")
+                || s.contains("minisign")
+                || s.contains("公钥")
+            {
+                "failed_verify"
+            } else {
+                "failed_install"
+            };
+            post_report(&from_v, &to_v, kind).await;
+            let _ = std::fs::remove_file(pending_path());
+            return Err(s);
+        }
         // install 完成（macOS：当前 .app 已被新版覆盖）。restart 会立刻杀掉 webview，
         // emit 的最后一帧大概率前端收不到，仅尽力而为。
         let _ = app.emit("update_installed", serde_json::json!({}));

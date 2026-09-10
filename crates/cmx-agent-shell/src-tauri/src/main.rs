@@ -354,6 +354,10 @@ async fn login(
 #[tauri::command]
 fn logout_to_login(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     state.app.logout();
+    // 主窗先藏、登录窗再亮：先 show 后 hide 会两窗瞬间同屏闪出主窗残影。
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.hide();
+    }
     if let Some(login_win) = app.get_webview_window("login") {
         let _ = login_win.show();
         let _ = login_win.set_focus();
@@ -369,9 +373,6 @@ fn logout_to_login(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<
         .center()
         .build()
         .map_err(|e| e.to_string())?;
-    }
-    if let Some(main) = app.get_webview_window("main") {
-        let _ = main.hide();
     }
     Ok(())
 }
@@ -524,6 +525,8 @@ fn main() {
                     let _ = main.set_decorations(false);
                 }
             }
+            // P1 更新上报：启动即异步消费 pending 标记（升级成功才计数），不阻塞启动。
+            tauri::async_runtime::spawn(update_common::report_pending_update(app.handle().clone()));
             let app_state = app.state::<AppState>();
             let app_ref = app_state.app.clone();
             let handle = app.handle().clone();
