@@ -177,6 +177,9 @@
     const version = (data && data.version) || '';
     const date = /(\d{4})-(\d{2})-(\d{2})/.exec(String((data && data.pub_date) || ''));
 
+    // 产物键的格式段（tauri 键 {os}-{arch}-{fmt} 的第三段），用于「同格式多架构」计数
+    const fmtOf = (k) => k.split('-').slice(2).join('-');
+
     osTiles.forEach(tile => {
       const prefix = OS_PREFIX[tile.dataset.os];
       const keys = Object.keys(platforms).filter(k =>
@@ -186,10 +189,14 @@
         tile.querySelector('.os-size').textContent = '暂未提供';
         return;
       }
-      const key = keys[0];
+      // macOS 首装分发优先取 .dmg 键（darwin-*-dmg）；.app.tar.gz 是 updater 产物，
+      // 仅在未登记 dmg 时兜底展示。两个键可共存于同一版本行、互不影响
+      // （tauri updater 插件只按 {target}-app 匹配，不消费 -dmg 键）。
+      const key = keys.find(k => /-dmg$/.test(k)) || keys[0];
       tile.dataset.url = downloadUrlOf(key, platforms[key], version);
+      const sameFmt = keys.filter(k => fmtOf(k) === fmtOf(key));
       tile.querySelector('.os-size').textContent =
-        fmtTextOf(key) + (keys.length > 1 ? ' · ' + keys.length + ' 架构' : '');
+        fmtTextOf(key) + (sameFmt.length > 1 ? ' · ' + sameFmt.length + ' 架构' : '');
     });
 
     setMeta(version
