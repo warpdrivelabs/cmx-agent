@@ -214,6 +214,12 @@ impl Guard for ApprovalGuard {
     }
 
     fn check(&self, ctx: &GuardCtx<'_>) -> GuardDecision {
+        // danger-full-access（≈ --yolo）：沙箱完全放行即代表用户显式信任，
+        // 跳过工具级人审不再弹卡——否则"设了完全访问还被 approval rejected 拦住"自相矛盾。
+        // UnlessTrusted 策略级逢写必问不受此影响（在内核另行处理）。
+        if ctx.sandbox.allows_high_risk() {
+            return GuardDecision::Allow;
+        }
         match ctx.spec.guard.requires_approval {
             Approval::Never => GuardDecision::Allow,
             Approval::Conditional | Approval::Always => GuardDecision::NeedApproval {

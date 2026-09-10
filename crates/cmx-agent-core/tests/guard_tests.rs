@@ -99,14 +99,15 @@ async fn approval_required_and_granted() {
         .add(Arc::new(ApprovalGuard));
     let agent = Agent::builder()
         .model(Arc::new(call_tool(
-            "danger_rm",
-            serde_json::json!({"path":"/tmp/x"}),
+            "shell",
+            serde_json::json!({"cmd":"echo approval-test"}),
         )))
         .tools(default_registry())
         .guards(guards)
         .approver(Arc::new(AutoApprover::approve()))
         .policy(Policy {
-            sandbox: SandboxMode::DangerFullAccess,
+            sandbox: SandboxMode::WorkspaceWrite,
+            allowed_roots: vec![std::env::temp_dir()],
             ..Default::default()
         })
         .build()
@@ -154,7 +155,7 @@ async fn preapproved_session_skips_card() {
         .guards(guards)
         .approver(Arc::new(PreapprovedApprover))
         .policy(Policy {
-            sandbox: SandboxMode::DangerFullAccess,
+            sandbox: SandboxMode::WorkspaceWrite,
             ..Default::default()
         })
         .build()
@@ -190,7 +191,7 @@ async fn approval_required_and_rejected_blocks_tool() {
         .guards(guards)
         .approver(Arc::new(AutoApprover::reject()))
         .policy(Policy {
-            sandbox: SandboxMode::DangerFullAccess,
+            sandbox: SandboxMode::WorkspaceWrite,
             ..Default::default()
         })
         .build()
@@ -266,6 +267,41 @@ async fn high_risk_allowed_under_danger_full_access() {
     assert_eq!(output["executed"], false); // 演示工具永不真删
 }
 
+#[tokio::test]
+async fn danger_full_access_skips_tool_approval() {
+    // danger-full-access（≈ --yolo）：即便工具声明 requires_approval: Always，
+    // 也不再弹审批卡——approver 挂 reject 兜底，若被问就会失败。
+    let mut guards = GuardPipeline::new();
+    guards
+        .add(Arc::new(HighRiskGuard))
+        .add(Arc::new(ApprovalGuard));
+    let agent = Agent::builder()
+        .model(Arc::new(call_tool(
+            "danger_rm",
+            serde_json::json!({"path":"/tmp/yolo"}),
+        )))
+        .tools(default_registry())
+        .guards(guards)
+        .approver(Arc::new(AutoApprover::reject())) // 若被问就会失败
+        .policy(Policy {
+            sandbox: SandboxMode::DangerFullAccess,
+            approval: ApprovalPolicy::OnRequest,
+            ..Default::default()
+        })
+        .build()
+        .unwrap();
+    let mut s = Session::new("yolo-skip");
+    agent.run_turn(&mut s, "rm").await.unwrap();
+    let (ok, _) = last_tool_result(&s);
+    assert!(ok, "danger-full-access 下 requires_approval 工具应跳过人审直接放行");
+    assert!(
+        !s.log
+            .iter()
+            .any(|e| matches!(e.kind, EventKind::ApprovalRequested { .. })),
+        "不应产生 ApprovalRequested 事件"
+    );
+}
+
 // ————— 两旋钮正交性 —————
 
 #[tokio::test]
@@ -282,7 +318,7 @@ async fn approval_policy_never_treats_needapproval_as_deny() {
         .guards(guards)
         .approver(Arc::new(AutoApprover::approve())) // 即便 approver 想批，也不该被问
         .policy(Policy {
-            sandbox: SandboxMode::DangerFullAccess,
+            sandbox: SandboxMode::WorkspaceWrite,
             approval: ApprovalPolicy::Never,
             ..Default::default()
         })
