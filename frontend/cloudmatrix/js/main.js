@@ -196,9 +196,33 @@
       }
       const key = keys[0];
       tile.dataset.url = downloadUrlOf(key, platforms[key], version);
-      const sameFmt = keys.filter(k => fmtOf(k) === fmtOf(key));
-      tile.querySelector('.os-size').textContent =
-        fmtTextOf(key) + (sameFmt.length > 1 ? ' · ' + sameFmt.length + ' 架构' : '');
+
+      // 多格式（如 Linux 同时登记 deb + rpm）：渲染格式切换 chips（os-tile 是 button，
+      // 内部不能嵌 button，用 span；点击 stopPropagation 防冒泡触发卡片下载）。
+      const fmts = [...new Set(keys.map(fmtOf))];
+      const sizeEl = tile.querySelector('.os-size');
+      if (fmts.length > 1) {
+        const labelOf = (f) => (FMT_TEXT[f] || '.' + f).split(' ')[0];
+        sizeEl.innerHTML = '<span class="os-fmts">' + fmts.map((f, i) =>
+          '<span class="os-fmt' + (i === 0 ? ' is-active' : '') + '" data-fmt="' + f + '" role="button" tabindex="0">' +
+          labelOf(f) + '</span>').join('') + '</span>';
+        sizeEl.querySelectorAll('.os-fmt').forEach(chip => {
+          const pick = () => {
+            const fmt = chip.dataset.fmt;
+            const k = keys.find(x => fmtOf(x) === fmt);
+            sizeEl.querySelectorAll('.os-fmt').forEach(c => c.classList.toggle('is-active', c === chip));
+            tile.dataset.url = downloadUrlOf(k, platforms[k], version);
+          };
+          chip.addEventListener('click', (e) => { e.stopPropagation(); pick(); });
+          chip.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); pick(); }
+          });
+        });
+      } else {
+        const sameFmt = keys.filter(k => fmtOf(k) === fmtOf(key));
+        sizeEl.textContent =
+          fmtTextOf(key) + (sameFmt.length > 1 ? ' · ' + sameFmt.length + ' 架构' : '');
+      }
     });
 
     setMeta(version
@@ -328,6 +352,6 @@
   if (window.console && console.log) {
     const style = 'font-size:14px;font-weight:bold;color:#2563eb;background:#dbeafe;padding:4px 10px;border-radius:6px;';
     console.log('%c普联软件·智方（CloudMatrix）', style);
-    console.log('%cTrueMate · Work true. Mate true. 专注工作，真心搭档。', 'color:#6b7280;font-size:12px;');
+    console.log('%cTrueMate · Work true. Mate true. 专注工作，真心伙伴。', 'color:#6b7280;font-size:12px;');
   }
 })();

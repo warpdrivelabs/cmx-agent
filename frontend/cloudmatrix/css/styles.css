@@ -348,6 +348,26 @@ button { font-family: inherit; cursor: pointer; }
   box-shadow: none;
 }
 
+/* 多格式切换 chips（如 Linux 同时登记 .deb + .rpm）：span 实现（os-tile 是 button 不可嵌套 button） */
+.os-fmts { display: inline-flex; gap: 6px; }
+.os-fmt {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--qq-border);
+  font-size: 12px;
+  color: var(--qq-muted-foreground);
+  cursor: pointer;
+  transition: border-color .2s ease, color .2s ease, background-color .2s ease;
+}
+.os-fmt:hover { border-color: var(--qq-primary); color: var(--qq-primary); }
+.os-fmt.is-active {
+  border-color: var(--qq-primary);
+  color: var(--qq-primary);
+  background: rgba(37, 99, 235, 0.08);
+  font-weight: 600;
+}
+
 /* 下载按钮 */
 .btn-primary {
   display: inline-flex;
