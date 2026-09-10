@@ -121,12 +121,16 @@ if [ "$DO_NOTARIZE" -eq 1 ]; then
 fi
 
 # ── 5. Gatekeeper 终检 ───────────────────────────────────────────
-log "spctl --assess（Gatekeeper 终检）"
-spctl --assess --verbose=4 "$APP" > /tmp/cmx-spctl.out 2>&1 \
-  || die "Gatekeeper 未 accepted（见 /tmp/cmx-spctl.out）"
-grep -q "accepted" /tmp/cmx-spctl.out \
-  || die "Gatekeeper 未 accepted"
-echo "Gatekeeper: accepted"
+# 仅公证模式跑：Developer ID 未公证的包在 spctl 必然 rejected（公证票据才是 Gatekeeper
+# 凭据），--no-notarize 自用调试模式下此检查无意义，跳过（本机跑无隔离属性不拦）。
+if [ "$DO_NOTARIZE" -eq 1 ]; then
+  log "spctl --assess（Gatekeeper 终检）"
+  spctl --assess --verbose=4 "$APP" > /tmp/cmx-spctl.out 2>&1 \
+    || die "Gatekeeper 未 accepted（见 /tmp/cmx-spctl.out）"
+  grep -q "accepted" /tmp/cmx-spctl.out \
+    || die "Gatekeeper 未 accepted"
+  echo "Gatekeeper: accepted"
+fi
 
 # ── 6. updater 产物（.app.tar.gz 重打包 + minisign） ─────────────
 # 为什么重打包：tauri build 自产的 .app.tar.gz 打包自**未经本脚本重签/公证的 .app**，

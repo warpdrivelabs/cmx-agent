@@ -5,7 +5,7 @@
 # 构建：`cd cmx-agent/crates/cmx-agent-shell/src-tauri && cargo run`（首次联网拉 tauri 依赖并缓存）。
 [package]
 name = "cmx-agent-shell"
-version = "0.2.0"
+version = "0.2.2"
 edition = "2021"
 description = "TrueMate · cmx 企业桌面智能体 · 原生 Tauri 壳（同核多壳：复用 cmx-agent-app 的 dispatch_json）"
 
