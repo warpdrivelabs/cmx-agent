@@ -1,4 +1,4 @@
-  /* 连接器面板 */
+﻿  /* 连接器面板 */
   .connectors-view{flex:1;display:flex;flex-direction:column;min-height:0}
   .conn-toolbar{display:flex;align-items:center;gap:10px;padding:12px 22px;border-bottom:1px solid var(--border)}
   .conn-toolbar .ct{font-weight:600;font-size:14px} .conn-toolbar .cm{color:var(--muted);font-size:12px}
@@ -55,12 +55,6 @@
   .pg-link{color:var(--blue);cursor:pointer;text-decoration:underline;word-break:break-all}
   .pg-frame-hint{color:var(--muted);margin-left:6px}
   .pg-frame{display:block;width:calc(100% - 52px);height:60vh;margin:0 26px;border:1px solid var(--border2);border-radius:10px;background:#fff}
-  .empty-detail{text-align:center;max-width:420px}
-  .empty-detail .ed-ico{font-size:52px;margin-bottom:14px;opacity:.9}
-  .empty-detail .ed-t{font-size:20px;font-weight:700;margin-bottom:10px}
-  .empty-detail .ed-d{font-size:14px;color:var(--ink2);line-height:1.9}
-  .empty-detail .ed-note{margin-top:18px;font-size:12px;color:var(--muted)}
-  #connlist{flex:1;overflow:auto;padding:22px;display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;align-content:start}
   .conn{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px 18px}
   .conn.offline{opacity:.62}
   .conn .ch{display:flex;align-items:center;gap:10px;margin-bottom:8px}

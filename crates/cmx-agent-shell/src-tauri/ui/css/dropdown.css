@@ -1,4 +1,4 @@
-/* ── 自绘下拉组件（cmx-dd）──
+﻿/* ── 自绘下拉组件（cmx-dd）──
    替换原生 <select> 的弹出列表（OS 渲染无法主题化）。
    原生 select 隐藏（.cmx-dd-native），自绘 trigger + option list 完全可控。
    兼容：select.value 读写 + change 事件照常工作。 */
@@ -42,7 +42,6 @@
 .selbtn .cmx-dd-trigger{background:var(--panel2);border-color:var(--border2);border-radius:9px;padding:7px 12px;color:var(--ink2);font-size:13px}
 .selbtn .cmx-dd-trigger:hover{background:var(--hover);border-color:var(--aqua);color:var(--ink)}
 
-/* .mcfg-row / .scfg-row 场景：宽度撑满 */
-.mcfg-row .cmx-dd,.scfg-row .cmx-dd{width:100%}
-.mcfg-row .cmx-dd-trigger,.scfg-row .cmx-dd-trigger{width:100%}
-.mcfg-row .cmx-dd-list,.scfg-row .cmx-dd-list{width:100%}
+/* .mcfg-row /
+.mcfg-row .cmx-dd-trigger,
+.mcfg-row .cmx-dd-list,

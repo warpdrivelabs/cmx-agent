@@ -44,6 +44,7 @@ function activateTab(id){
 }
 
 // 打开或聚焦一个 tab
+/** 打开或聚焦 tab。@param opts {{id,kind,title,ico?,sessionId?}} */
 function openTab({id, kind, title, ico, sessionId}){
   let t=findTab(id);
   if(t){ activateTab(id); return t; }
@@ -106,21 +107,4 @@ QUICK.forEach(q=>{ const b=el("button","<span>"+q+"</span>"); b.className="qa"; 
   quickEl.append(b); });
 
 // ── 侧栏会话列表（真实：list_sessions）──
-async function refreshTasks(){
-  const resp = await call({cmd:"list_sessions"});
-  const list = (resp.ok && resp.data.sessions) || [];
-  document.getElementById("taskcount").textContent = "("+list.length+")";
-  const box = document.getElementById("tasklist"); box.innerHTML="";
-  if(list.length===0){ box.append(el("empty-tasks","还没有任务。<br>点上方「新建任务」或在首页直接下达指令。")); return; }
-  list.forEach(m=>{
-    const t=el("task"+(m.id===CURRENT?" active":""));
-    t.innerHTML = `<span class="tt">${esc(m.title||m.id)}</span><span class="tm">${ago(m.updated_at)}</span><span class="del" title="删除">✕</span>`;
-    t.querySelector(".tt").onclick = ()=>openSession(m.id);
-    t.querySelector(".del").onclick = async (e)=>{ e.stopPropagation(); await call({cmd:"delete_session",session_id:m.id});
-      if(findTab("s:"+m.id)) closeTab("s:"+m.id); refreshTasks(); };
-    box.append(t);
-  });
-}
-function ago(iso){ const d=(Date.now()-new Date(iso).getTime())/86400000;
-  if(d<1) return "今天"; if(d<2) return "昨天"; return Math.floor(d)+"天前"; }
 

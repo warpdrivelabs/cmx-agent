@@ -64,10 +64,8 @@ function cmxInitDropdown (sel) {
     list.classList.contains("on") ? closeList() : openList();
   });
 
-  // 点外面关闭
-  document.addEventListener("click", (e) => {
-    if (!wrap.contains(e.target)) closeList();
-  });
+  // 点外面关闭（由全局关闭器统一处理，不挂 per-instance listener）
+  wrap._cmxClose = closeList;
 
   // 拦截 select.value setter → 同步 trigger 文本
   const desc = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value");
@@ -91,3 +89,9 @@ function cmxInitAllDropdowns () {
 
 // 脚本在 body 底部，DOM 已解析完 → 立即初始化
 cmxInitAllDropdowns();
+// ── 全局下拉关闭器（单监听器，替代 per-instance document listeners）──
+document.addEventListener("click", (e) => {
+  document.querySelectorAll(".cmx-dd.on").forEach(wrap => {
+    if (!wrap.contains(e.target) && wrap._cmxClose) wrap._cmxClose();
+  });
+});

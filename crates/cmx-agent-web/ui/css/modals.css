@@ -1,4 +1,4 @@
-  /* cmx 功能菜单（点左下 cmx 按钮弹出） */
+﻿  /* cmx 功能菜单（点左下 cmx 按钮弹出） */
   .cmxmenu{position:fixed;left:56px;bottom:10px;min-width:180px;background:var(--panel);
     border:1px solid var(--border2);border-radius:10px;padding:5px;box-shadow:0 8px 28px rgba(0,0,0,.35);
     display:none;z-index:60}
@@ -14,7 +14,7 @@
   .modelmenu .mm-item{cursor:pointer}
   .modelmenu .mm-item.on{color:var(--aqua)}
   .modelmenu .mm-ck{width:14px;text-align:center;color:var(--aqua)}
-  .modelmenu .mm-note{font-size:11px;color:var(--muted);padding:6px 11px}
+  .modelmenu
   .model .mdot{color:var(--aqua)} .model .mlabel{font-weight:600}
 
   /* ── 模型配置面板 ── */

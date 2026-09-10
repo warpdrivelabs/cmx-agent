@@ -1,4 +1,5 @@
 // ── 后端桥：同核多壳。原生 Tauri 壳走 invoke("agent")，Web 壳回退 HTTP POST /api。两者同达 dispatch_json。 ──
+/** 双桥 JSON 前门：Tauri invoke agent 或 HTTP POST /api。@param req {{cmd:string,...}} @returns {Promise<{ok,data?,error?}>} */
 async function call(req){
   if (window.__TAURI__ && window.__TAURI__.core){
     const raw = await window.__TAURI__.core.invoke("agent", { payload: JSON.stringify(req) });

@@ -8,6 +8,7 @@ function mdInline(t){
     .replace(/~~([^~]+)~~/g,'<del>$1</del>')
     .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
 }
+/** 轻量 Markdown → HTML。@param {string} src @returns {string} HTML */
 function renderMarkdown(src){
   if(!src) return "";
   const lines=String(src).replace(/\r\n/g,"\n").split("\n");

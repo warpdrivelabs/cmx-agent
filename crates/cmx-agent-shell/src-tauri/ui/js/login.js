@@ -29,8 +29,8 @@ async function checkAuthAndRoute () {
     if (r && r.ok && r.data && r.data.user) {
       location.hash = '#/';
       showMainView();
-      refreshUser();
-      refreshTasks();
+      if (typeof refreshUser === "function") refreshUser();
+      if (typeof refreshTasks === "function") refreshTasks();
       return;
     }
   } catch (e) { /* 未认证或桥不通 */ }
@@ -175,8 +175,8 @@ form.addEventListener('submit', async (e) => {
     // 登录成功 → SPA 切视图（不再跳页面）
     location.hash = '#/';
     showMainView();
-    refreshUser();   // 刷新用户头像/名称
-    refreshTasks();  // 刷新侧栏会话列表
+    if (typeof refreshUser === "function") refreshUser();   // main.js 加载后可用
+    if (typeof refreshTasks === "function") refreshTasks(); // main.js 加载后可用
   } catch (err) {
     errorEl.textContent = (typeof err === 'string' ? err : (err && err.message)) || '登录失败，请重试';
   } finally {

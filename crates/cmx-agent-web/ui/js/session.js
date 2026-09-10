@@ -1,3 +1,22 @@
+﻿// ── 侧栏会话列表（从 tabs.js 挪入）──
+async function refreshTasks(){
+  const resp = await call({cmd:"list_sessions"});
+  const list = (resp.ok && resp.data.sessions) || [];
+  document.getElementById("taskcount").textContent = "("+list.length+")";
+  const box = document.getElementById("tasklist"); box.innerHTML="";
+  if(list.length===0){ box.append(el("empty-tasks","还没有任务。<br>点上方「新建任务」或在首页直接下达指令。")); return; }
+  list.forEach(m=>{
+    const t=el("task"+(m.id===CURRENT?" active":""));
+    t.innerHTML = `<span class="tt">${esc(m.title||m.id)}</span><span class="tm">${ago(m.updated_at)}</span><span class="del" title="删除">✕</span>`;
+    t.addEventListener("click", (e)=>{ if(e.target.closest(".del")) return; openSession(m.id); });
+    t.querySelector(".del").onclick = async (e)=>{ e.stopPropagation(); await call({cmd:"delete_session",session_id:m.id});
+      if(findTab("s:"+m.id)) closeTab("s:"+m.id); refreshTasks(); };
+    box.append(t);
+  });
+}
+function ago(iso){ const d=(Date.now()-new Date(iso).getTime())/86400000;
+  if(d<1) return "今天"; if(d<2) return "昨天"; return Math.floor(d)+"天前"; }
+
 // ── 会话渲染（渲染到指定 log 容器）──
 // 打字机：text_delta 累加到 log._raw，每次按 markdown 重渲当前气泡（log._sb）。
 function renderEvent(log, ev, sid){

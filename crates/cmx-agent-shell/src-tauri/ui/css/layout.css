@@ -1,4 +1,4 @@
-  .cmx-act img{width:30px;height:30px;border-radius:8px;object-fit:cover;display:block}
+﻿  .cmx-act img{width:30px;height:30px;border-radius:8px;object-fit:cover;display:block}
   .cmx-act:hover{background:var(--hover)}
   /* 活动栏底部用户头像按钮 */
   .user-act{padding:0}
@@ -69,7 +69,7 @@
   .im-search input{width:100%;background:var(--surface);border:1px solid var(--border);border-radius:9px;
     padding:8px 11px;color:var(--ink);font-size:13px;outline:none;font-family:inherit}
   .im-search input:focus{border-color:var(--aqua)}
-  .im-list,.plug-list{flex:1;overflow:auto;margin:0 -4px}
+  .im-list,
   /* Telegram 式会话行 */
   .im-item{display:flex;gap:10px;padding:9px 8px;border-radius:9px;cursor:pointer}
   .im-item:hover{background:var(--hover)}
@@ -83,7 +83,6 @@
   .im-item .unread{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--aqua);color:#fff;
     font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
   /* VSCode 式插件行 */
-  .plug-sec{font-size:11px;font-weight:700;color:var(--muted);padding:12px 8px 5px;letter-spacing:.5px}
   .plug-item{display:flex;gap:10px;padding:9px 8px;border-radius:9px;cursor:pointer}
   .plug-item:hover{background:var(--hover)}
   .plug-item .pic{width:38px;height:38px;border-radius:9px;flex:0 0 38px;display:flex;align-items:center;justify-content:center;
@@ -97,8 +96,7 @@
   .plug-item .pbtn:hover{background:var(--hover)}
   .brand{display:flex;align-items:center;gap:9px;height:var(--header-h);box-sizing:border-box;
     margin:0 -10px;padding:0 14px;border-bottom:1px solid var(--border)}
-  .brand .uav{width:26px;height:26px;border-radius:50%;background:linear-gradient(135deg,var(--aqua),var(--green));
-    display:flex;align-items:center;justify-content:center;font-size:14px;flex:0 0 26px}
+  .brand
   .brand .uname{font-weight:700;font-size:14px} .brand .v{color:var(--muted);font-size:11px;margin-left:auto;font-weight:400}
   .newbtn{display:flex;align-items:center;gap:9px;width:100%;padding:11px 12px;border-radius:10px;
     background:var(--surface);border:1px solid var(--border2);font-weight:600;font-size:14px;margin:12px 0 8px}
@@ -115,14 +113,4 @@
   .task .tt{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .task .tm{font-size:11px;color:var(--muted);flex:0 0 auto}
   .task .del{opacity:0;color:var(--muted);font-size:14px;padding:0 2px} .task:hover .del{opacity:.7} .task .del:hover{color:var(--red);opacity:1}
-  .empty-tasks{color:var(--muted);font-size:12.5px;padding:10px 12px;line-height:1.7}
-  .promo{margin:8px -2px 8px;padding:12px;border-radius:10px;background:linear-gradient(135deg,#12241d,#0f1a17);
-    border:1px solid var(--border2);position:relative}
-  .promo .x{position:absolute;top:8px;right:10px;color:var(--muted);font-size:13px}
-  .promo .pt{font-weight:600;font-size:13px;margin-bottom:3px} .promo .ps{color:var(--ink2);font-size:12px}
-  .promo .ps b{color:var(--green)} .promo .pb{margin-top:9px;padding:6px 12px;border-radius:7px;background:#fff;color:#111;font-weight:700;font-size:12px}
-  .userbar{display:flex;align-items:center;gap:8px;padding:10px 14px;border-top:1px solid var(--border);margin:0 -10px;position:relative}
-  .cmxbtn{display:flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:8px;overflow:hidden;padding:0}
-  .cmxbtn:hover{filter:brightness(1.08)} .cmxbtn img{width:100%;height:100%;object-fit:cover;display:block}
-  .userbar .ic-group{margin-left:auto;display:flex;align-items:center;gap:4px}
-  .userbar .ic{color:var(--muted);font-size:15px;padding:4px 5px;border-radius:7px} .userbar .ic:hover{color:var(--ink);background:var(--hover)}
+  .empty-tasks{color:var(--muted);font-size:12.5px;padding:10px 12px;line-height:1.7}
