@@ -271,11 +271,11 @@ async fn list_providers_seeds_from_model_json() {
     .unwrap());
     assert_eq!(v["ok"], true, "{v:?}");
     let providers = v["data"]["providers"].as_array().unwrap();
-    assert!(providers.len() >= 3, "至少三个内置预设：{providers:?}");
+    assert!(providers.len() >= 1, "至少内置 MLamp 预设：{providers:?}");
     let ds = providers
         .iter()
-        .find(|p| p["id"] == "builtin-deepseek")
-        .expect("builtin-deepseek 应存在");
+        .find(|p| p["id"] == "builtin-default")
+        .expect("builtin-default 应存在");
     assert_eq!(ds["builtin"], true);
     assert_eq!(ds["model"], "deepseek-r1", "model.json 的 model 应合入命中条目");
     let masked = ds["api_key_masked"].as_str().unwrap();
@@ -307,7 +307,7 @@ async fn save_provider_creates_and_list_grows() {
     )
     .unwrap());
     let providers = v["data"]["providers"].as_array().unwrap();
-    assert_eq!(providers.len(), 4, "三内置 + 一自定义：{providers:?}");
+    assert_eq!(providers.len(), 2, "一内置 + 一自定义：{providers:?}");
     let kimi = providers.iter().find(|p| p["id"] == id.as_str()).unwrap();
     assert_eq!(kimi["name"], "我的Kimi");
     assert_eq!(kimi["active"], false, "新建不自动激活");
@@ -372,7 +372,7 @@ async fn delete_provider_rejects_builtin() {
     let tmp = TempDir::new("prov-del-builtin");
     let app = app_with(&tmp, MockModel::saying("hi"));
     let v = resp(serde_json::from_str(
-        &dispatch_json(&app, r#"{"cmd":"delete_provider","id":"builtin-deepseek"}"#).await,
+        &dispatch_json(&app, r#"{"cmd":"delete_provider","id":"builtin-mlamp"}"#).await,
     )
     .unwrap());
     assert_eq!(v["ok"], false, "{v:?}");
@@ -407,7 +407,7 @@ async fn delete_provider_and_active_fallback() {
     )
     .unwrap());
     let providers = v["data"]["providers"].as_array().unwrap();
-    assert_eq!(providers.len(), 3);
+    assert_eq!(providers.len(), 1);
     assert!(providers.iter().any(|p| p["active"] == true), "有剩余内置条目被激活");
 }
 

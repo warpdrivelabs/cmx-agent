@@ -15,7 +15,8 @@ use crate::config::ModelProviderConfig;
 /// 一条命名 provider 配置（providers.json 的一个元素）。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NamedProvider {
-    /// 稳定标识：内置用 `builtin-mlamp` / `builtin-deepseek` / `builtin-openai`，自定义用 `p-<nanos>`。
+    /// 稳定标识：内置用 `builtin-mlamp`（旧版遗留 `builtin-deepseek`/`builtin-openai` 读入时剪除，
+    /// 兼容播种 `builtin-default`），自定义用 `p-<nanos>`。
     pub id: String,
     /// 用户可见名称，如「我的Kimi」。必填非空（面板校验 + app 层兜底）。
     pub name: String,
@@ -37,12 +38,9 @@ pub struct ProviderFile {
     pub providers: Vec<NamedProvider>,
 }
 
-/// 内置预设（不可删）。id 固定；base_url/model 预填，key 留空等用户填。
-pub const BUILTIN_PRESETS: &[(&str, &str, &str)] = &[
-    ("builtin-mlamp", "MLamp", "https://llmgw-bz.mlamp.cn/v1"),
-    ("builtin-deepseek", "DeepSeek", "https://api.deepseek.com/v1"),
-    ("builtin-openai", "OpenAI", "https://api.openai.com/v1"),
-];
+/// 内置预设（不可删）。id 固定；base_url/model 预填，key 留空等用户填（**key 不入仓库**，
+/// 开源分发下内置条目只预置地址，凭据仍由用户 GUI 填入本地 providers.json）。
+pub const BUILTIN_PRESETS: &[(&str, &str, &str)] = &[("builtin-mlamp", "MLamp", "https://llmgw-bz.mlamp.cn/v1")];
 
 /// 自定义条目 id（纳秒时间戳，无 uuid 依赖）。
 pub fn new_id() -> String {
@@ -54,16 +52,38 @@ pub fn new_id() -> String {
 
 impl ProviderFile {
     /// 读 `<dir>/providers.json`；不存在/解析失败则**播种**（不落盘——写发生在首次 save）：
-    /// 三个内置预设常驻；model.json 的 key/model/base_url 合入命中 base_url 的内置条目
+    /// 内置预设常驻；model.json 的 key/model/base_url 合入命中 base_url 的内置条目
     /// （未命中则作为「默认」内置条目追加）；model.json 未配置则尝试 env 同样合并；
     /// 都没有 → 空表（demo 兜底）。
     pub fn load(dir: &Path) -> Self {
         if let Ok(s) = std::fs::read_to_string(dir.join("providers.json")) {
-            if let Ok(pf) = serde_json::from_str::<ProviderFile>(&s) {
+            if let Ok(mut pf) = serde_json::from_str::<ProviderFile>(&s) {
+                pf.prune_removed_builtins();
                 return Self::ensure_builtins(pf);
             }
         }
         Self::seed(dir)
+    }
+
+    /// 旧版本内置条目剪除（2026-09-10 收敛为仅 MLamp 一条）：已发布的旧版文件里留有
+    /// `builtin-deepseek`/`builtin-openai`，读入时删除；active 指向被剪条目时回落剩余首条。
+    /// `ensure_builtins` 会把误剪的**现行**内置补回，故此处只管历史遗留 id。
+    fn prune_removed_builtins(&mut self) {
+        const REMOVED: [&str; 2] = ["builtin-deepseek", "builtin-openai"];
+        let before = self.providers.len();
+        self.providers.retain(|p| !REMOVED.contains(&p.id.as_str()));
+        if self.providers.len() == before {
+            return;
+        }
+        if let Some(a) = &self.active
+            && REMOVED.contains(&a.as_str())
+        {
+            self.active = None; // 先清：指向被剪条目的激活失效
+        }
+        // active 失效（或本就指向被剪条目）→ 回落剩余首条。
+        if self.active.is_none() {
+            self.active = self.providers.first().map(|p| p.id.clone());
+        }
     }
 
     /// 播种：内置预设打底 + model.json / env 合并。
@@ -112,7 +132,7 @@ impl ProviderFile {
         pf
     }
 
-    /// 补齐三个内置预设（已存在则不动；手工删过 providers.json 也能恢复）。
+    /// 补齐内置预设（已存在则不动；手工删过 providers.json 也能恢复）。
     fn ensure_builtins(mut self) -> Self {
         for (id, name, base) in BUILTIN_PRESETS {
             if !self.providers.iter().any(|p| &p.id == id) {
@@ -231,13 +251,33 @@ mod tests {
     }
 
     #[test]
-    fn seed_ensures_three_builtins() {
+    fn seed_ensures_builtins() {
         let d = tmpdir("seed");
         let pf = ProviderFile::load(&d);
         for (id, _, _) in BUILTIN_PRESETS {
             assert!(pf.get(id).map(|p| p.builtin).unwrap_or(false), "missing {id}");
         }
         assert_eq!(pf.active, None, "无 model.json 时不应有激活条目");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn load_prunes_removed_legacy_builtins() {
+        // 旧版文件带着已下线的 builtin-deepseek/openai → 读入时剪除；active 指向被剪条目 → 回落首条。
+        let d = tmpdir("prune");
+        std::fs::write(
+            d.join("providers.json"),
+            r#"{"active":"builtin-deepseek","providers":[
+                {"id":"builtin-mlamp","name":"MLamp","builtin":true,"base_url":"https://llmgw-bz.mlamp.cn/v1","api_key":"","model":"mlamp/glm-5.2"},
+                {"id":"builtin-deepseek","name":"DeepSeek","builtin":true,"base_url":"https://api.deepseek.com/v1","api_key":"","model":"deepseek-chat"},
+                {"id":"builtin-openai","name":"OpenAI","builtin":true,"base_url":"https://api.openai.com/v1","api_key":"","model":"gpt-4o"}]}"#,
+        )
+        .unwrap();
+        let pf = ProviderFile::load(&d);
+        assert!(pf.get("builtin-deepseek").is_none(), "历史遗留内置应被剪除");
+        assert!(pf.get("builtin-openai").is_none(), "历史遗留内置应被剪除");
+        assert!(pf.get("builtin-mlamp").is_some(), "现行内置保留");
+        assert_eq!(pf.active.as_deref(), Some("builtin-mlamp"), "active 指向被剪条目应回落");
         std::fs::remove_dir_all(&d).ok();
     }
 
@@ -251,10 +291,10 @@ mod tests {
         )
         .unwrap();
         let pf = ProviderFile::load(&d);
-        let ds = pf.get("builtin-deepseek").unwrap();
+        let ds = pf.get("builtin-default").unwrap();
         assert_eq!(ds.config.api_key, "sk-abc");
         assert_eq!(ds.config.model, "deepseek-r1");
-        assert_eq!(pf.active.as_deref(), Some("builtin-deepseek"));
+        assert_eq!(pf.active.as_deref(), Some("builtin-default"));
         std::fs::remove_dir_all(&d).ok();
     }
 
