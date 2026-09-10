@@ -652,8 +652,6 @@
             <select id="mcfg-preset">
               <option value="">自定义</option>
               <option value="mlamp">MLamp（llmgw-bz.mlamp.cn/v1）</option>
-              <option value="deepseek">DeepSeek（api.deepseek.com/v1）</option>
-              <option value="openai">OpenAI（api.openai.com/v1）</option>
             </select>
           </div>
           <div class="mcfg-row">
@@ -696,79 +694,77 @@
   </div>
   <!-- 设置面板（Modal）：IM 遥控连接配置（飞书/QQ/Telegram 凭证 → 后端 im.json；保存热重载即时生效）。
        个人模式固定（消息以桌面登录账号身份跑回合，无验证码绑定）。复用模型面板的 mcfg-*
-       样式；交互走 data-act 委托（内联 onclick 被两壳 CSP 拦截，勿用）；密文走「锁」交互
-       （面板只回显掩码，解锁才能改，保存 keep/set 语义同 API Key）。 -->
+       样式 + 左右双栏（左列通道列表勾选启用，右侧所选通道凭证详情）；交互走 data-act 委托
+       （内联 onclick 被两壳 CSP 拦截，勿用）；密文走「锁」交互（面板只回显掩码，解锁才能改，
+       保存 keep/set 语义同 API Key）。 -->
   <div class="mcfg-overlay hidden" id="settings-overlay">
-    <div class="mcfg-box">
+    <div class="mcfg-box mcfg-wide">
       <div class="mcfg-head">⚙ 设置 <button data-act="closeSettings">✕</button></div>
-      <!-- 门户服务器地址：运行期不可改（构建期烧录），不进设置面板。 -->
-      <div class="mcfg-row">
-        <label>IM 遥控</label>
-        <div class="mcfg-temp-row">
-          <select id="scfg-kind" style="flex:1">
-            <option value="feishu">飞书 Feishu</option>
-            <option value="qq">QQ 机器人</option>
-            <option value="telegram">Telegram</option>
-          </select>
-          <label style="display:flex;align-items:center;gap:5px;font-weight:400;font-size:12.5px;color:var(--ink2);white-space:nowrap">
-            <input type="checkbox" id="scfg-enabled" checked> 启用
-          </label>
-        </div>
-      </div>
-      <div id="scfg-feishu-block">
-        <div class="mcfg-row">
-          <label>App ID</label>
-          <input id="scfg-app-id" type="text" placeholder="cli_…（飞书开放平台 · 凭证与基础信息）">
-        </div>
-        <div class="mcfg-row">
-          <label>App Secret</label>
-          <div class="mcfg-key-wrap">
-            <input id="scfg-app-secret" type="password" placeholder="（脱敏；点 🔓 解锁填写）" readonly>
-            <button id="scfg-secret-lock" data-act="scfgSecretLock" title="解锁/锁定 App Secret">🔒</button>
+      <div class="mcfg-body">
+        <!-- 左列：通道列表（勾选 = 启用并在线；未勾 = 只存凭证不上线）。复用 mcfg-list 样式。 -->
+        <div class="mcfg-list" id="scfg-list"></div>
+        <!-- 右侧：所选通道凭证详情 -->
+        <div class="mcfg-detail" id="scfg-detail">
+          <div id="scfg-feishu-block">
+            <div class="mcfg-row">
+              <label>App ID</label>
+              <input id="scfg-app-id" type="text" placeholder="cli_…（飞书开放平台 · 凭证与基础信息）">
+            </div>
+            <div class="mcfg-row">
+              <label>App Secret</label>
+              <div class="mcfg-key-wrap">
+                <input id="scfg-app-secret" type="password" placeholder="（脱敏；点 🔓 解锁填写）" readonly>
+                <button id="scfg-secret-lock" data-act="scfgSecretLock" title="解锁/锁定 App Secret">🔒</button>
+              </div>
+            </div>
+            <div class="mcfg-row">
+              <label>区域</label>
+              <select id="scfg-base">
+                <option value="">飞书 · 国内（open.feishu.cn）</option>
+                <option value="https://open.larksuite.com">Lark · 海外（open.larksuite.com）</option>
+              </select>
+            </div>
           </div>
-        </div>
-        <div class="mcfg-row">
-          <label>区域</label>
-          <select id="scfg-base">
-            <option value="">飞书 · 国内（open.feishu.cn）</option>
-            <option value="https://open.larksuite.com">Lark · 海外（open.larksuite.com）</option>
-          </select>
-        </div>
-      </div>
-      <div id="scfg-qq-block" style="display:none">
-        <div class="mcfg-row">
-          <label>AppID</label>
-          <input id="scfg-qq-app-id" type="text" placeholder="10…（QQ 开放平台 q.qq.com · 开发设置）">
-        </div>
-        <div class="mcfg-row">
-          <label>AppSecret</label>
-          <div class="mcfg-key-wrap">
-            <input id="scfg-qq-secret" type="password" placeholder="（脱敏；点 🔓 解锁填写）" readonly>
-            <button id="scfg-qq-lock" data-act="scfgQqLock" title="解锁/锁定 AppSecret">🔒</button>
+          <div id="scfg-qq-block" style="display:none">
+            <div class="mcfg-row">
+              <label>AppID</label>
+              <input id="scfg-qq-app-id" type="text" placeholder="10…（QQ 开放平台 q.qq.com · 开发设置）">
+            </div>
+            <div class="mcfg-row">
+              <label>AppSecret</label>
+              <div class="mcfg-key-wrap">
+                <input id="scfg-qq-secret" type="password" placeholder="（脱敏；点 🔓 解锁填写）" readonly>
+                <button id="scfg-qq-lock" data-act="scfgQqLock" title="解锁/锁定 AppSecret">🔒</button>
+              </div>
+            </div>
+            <div class="mcfg-row">
+              <label>环境</label>
+              <select id="scfg-qq-base">
+                <option value="">正式（api.sgroup.qq.com）</option>
+                <option value="https://sandbox.api.sgroup.qq.com">沙箱（sandbox.api.sgroup.qq.com）</option>
+              </select>
+            </div>
+            <div style="font-size:11.5px;color:var(--muted);margin:2px 0 6px;line-height:1.5">
+              QQ 官方机器人仅支持被动回复：收到消息后 5 分钟内可回（群聊最多 5 条）；群聊使用需 @机器人。
+            </div>
           </div>
-        </div>
-        <div class="mcfg-row">
-          <label>环境</label>
-          <select id="scfg-qq-base">
-            <option value="">正式（api.sgroup.qq.com）</option>
-            <option value="https://sandbox.api.sgroup.qq.com">沙箱（sandbox.api.sgroup.qq.com）</option>
-          </select>
-        </div>
-        <div style="font-size:11.5px;color:var(--muted);margin:2px 0 6px;line-height:1.5">
-          QQ 官方机器人仅支持被动回复：收到消息后 5 分钟内可回（群聊最多 5 条）；群聊使用需 @机器人。
-        </div>
-      </div>
-      <div id="scfg-telegram-block" style="display:none">
-        <div class="mcfg-row">
-          <label>Bot Token</label>
-          <div class="mcfg-key-wrap">
-            <input id="scfg-tg-token" type="password" placeholder="（脱敏；点 🔓 解锁填写）" readonly>
-            <button id="scfg-tg-lock" data-act="scfgTgLock" title="解锁/锁定 Bot Token">🔒</button>
+          <div id="scfg-telegram-block" style="display:none">
+            <div class="mcfg-row">
+              <label>Bot Token</label>
+              <div class="mcfg-key-wrap">
+                <input id="scfg-tg-token" type="password" placeholder="（脱敏；点 🔓 解锁填写）" readonly>
+                <button id="scfg-tg-lock" data-act="scfgTgLock" title="解锁/锁定 Bot Token">🔒</button>
+              </div>
+            </div>
           </div>
+          <div id="scfg-note" style="font-size:11.5px;color:var(--muted);margin:2px 0 6px;line-height:1.5"></div>
         </div>
       </div>
-      <div id="scfg-note" style="font-size:11.5px;color:var(--muted);margin:2px 0 6px;line-height:1.5"></div>
       <div class="mcfg-actions">
+        <label style="display:flex;align-items:center;gap:5px;font-weight:400;font-size:12.5px;color:var(--ink2);white-space:nowrap;cursor:pointer">
+          <input type="checkbox" id="scfg-enabled" checked> 启用遥控
+        </label>
+        <span style="flex:1"></span>
         <button data-act="closeSettings">取消</button>
         <button class="mcfg-save" data-act="imcfgSave">保存</button>
       </div>
@@ -1838,7 +1834,16 @@ function toggleMenu(){ document.getElementById("usermenu").classList.remove("on"
 function closeMenu(){ document.getElementById("cmxmenu").classList.remove("on"); document.getElementById("usermenu").classList.remove("on"); }
 // ── 设置 → IM 遥控连接配置（后端 im.json；Tauri 壳 invoke("im_config")）──
 // 密文交互照模型面板：打开即锁定（只回显掩码），解锁才能改，保存 keep/set 二选一。
+// 布局照模型配置面板：左列通道列表（勾选 = 启用并在线），右侧所选通道凭证详情。
 let _scfgSecretUnlocked=false, _scfgTgUnlocked=false, _scfgQqUnlocked=false;
+let _scfgSel="feishu"; // 当前选中的通道（左列高亮 + 右侧详情），独立于勾选启用态
+// 各通道勾选启用态（暂存源：勾选框在左列动态生成，每次重渲染按此回填）。
+let _scfgEnabled = { feishu:false, qq:false, telegram:false };
+const SCFG_CHANNELS=[
+  {id:"feishu",   name:"飞书",      block:"scfg-feishu-block",   credKey:"app_secret_masked",     credField:"app_id"},
+  {id:"qq",       name:"QQ 机器人", block:"scfg-qq-block",       credKey:"qq_secret_masked",      credField:"qq_app_id"},
+  {id:"telegram", name:"Telegram", block:"scfg-telegram-block", credKey:"telegram_token_masked", credField:null},
+];
 async function menuSettings(){
   closeMenu();
   if(!(window.__TAURI__ && window.__TAURI__.core)){
@@ -1849,7 +1854,10 @@ async function menuSettings(){
   try{ r = JSON.parse(await window.__TAURI__.core.invoke("im_config",{action:"get"})); }catch(e){ showToast("读取失败："+e); return; }
   if(!r||!r.ok){ showToast("读取 IM 配置失败："+((r&&r.error&&r.error.message)||"未知")); return; }
   const d=r.data;
-  document.getElementById("scfg-kind").value    = d.kind||"feishu";
+  // 多通道：回显 active 勾选；旧文件无 active 时按 kind 单通道回显。
+  // 先把「启用态」记到暂存变量——勾选框是 scfgRenderList 动态生成的，此时还不存在。
+  const active = (d.active&&d.active.length) ? d.active : (d.kind?[d.kind]:[]);
+  _scfgEnabled = { feishu:active.includes("feishu"), qq:active.includes("qq"), telegram:active.includes("telegram") };
   document.getElementById("scfg-enabled").checked= d.enabled!==false;
   document.getElementById("scfg-app-id").value  = d.app_id||"";
   document.getElementById("scfg-app-secret").value = d.app_secret_masked||"";
@@ -1860,10 +1868,49 @@ async function menuSettings(){
   document.getElementById("scfg-qq-base").value   = d.qq_base||"";
   const note=[];
   if(d.env_active) note.push("⚠ 检测到环境变量 CMX_AGENT_IM_*（开发模式）优先生效，此处保存的配置暂不生效。");
-  if(!d.configured) note.push("尚未配置：填入你的 IM 机器人凭证（飞书 App ID/Secret、QQ AppID/AppSecret 等），保存即启用遥控。");
+  if(!d.configured) note.push("尚未配置：勾选通道并填入凭证，保存即启用遥控。勾选的通道同时在线。");
   document.getElementById("scfg-note").textContent = note.join("  ·  ");
+  // 默认选中：激活列表第一个通道（没有则飞书）。
+  _scfgSel = active[0] || "feishu";
+  scfgRenderList();
   scfgSwitchKind();
   document.getElementById("settings-overlay").classList.remove("hidden");
+}
+// 左列渲染：通道名 + 启用勾选 + 凭证状态（已配/未配）。复用模型面板 mcfg-list 样式。
+function scfgRenderList(){
+  const list=document.getElementById("scfg-list");
+  list.innerHTML=SCFG_CHANNELS.map(ch=>{
+    const en=!!_scfgEnabled[ch.id];
+    const hasCred = ch.credField ? !!document.getElementById(ch.credField==="app_id"?"scfg-app-id":"scfg-qq-app-id").value.trim()
+                                 : !!document.getElementById("scfg-tg-token").value.trim();
+    const on=ch.id===_scfgSel;
+    return `<div class="mcfg-list-item${on?' on':''}" data-act="scfgSelect" data-id="${ch.id}">`
+      +`<div style="min-width:0;display:flex;align-items:center;gap:7px">`
+      +`<input type="checkbox" id="scfg-en-${ch.id}" ${en?"checked":""} data-scfg-cb="1" title="勾选 = 启用并在线">`
+      +`<span class="lp-name">${ch.name}</span></div>`
+      +(hasCred?'<span class="lp-dot" title="凭证已填"></span>':'<span class="lp-badge">未配</span>')
+      +`</div>`;
+  }).join("");
+  // 勾选框：change 写回暂存态并刷新徽标；click 阻止冒泡（否则触发父行 scfgSelect 切详情）。
+  list.querySelectorAll('input[data-scfg-cb]').forEach(cb=>{
+    cb.addEventListener("change", e=>{ _scfgEnabled[cb.closest("[data-id]").dataset.id]=cb.checked; scfgRenderList(); });
+    cb.addEventListener("click", e=>e.stopPropagation());
+  });
+}
+// 切换左列选中：右侧只显示所选通道的凭证块（勾选启用与否不影响查看，只影响保存是否上线）。
+function scfgSelectChannel(el){
+  const id=el.dataset.id;
+  if(id===_scfgSel) return;
+  _scfgSel=id;
+  scfgSwitchKind();
+}
+function scfgSwitchKind(){
+  for(const ch of SCFG_CHANNELS){
+    document.getElementById(ch.block).style.display = ch.id===_scfgSel ? "" : "none";
+  }
+  document.getElementById("scfg-list").querySelectorAll(".mcfg-list-item").forEach(el=>{
+    el.classList.toggle("on", el.dataset.id===_scfgSel);
+  });
 }
 function closeSettings(){ document.getElementById("settings-overlay").classList.add("hidden"); }
 function scfgResetLocks(){
@@ -1890,16 +1937,12 @@ function scfgToggleQqLock(){
   if(_scfgQqUnlocked){ input.readOnly=true; input.type="password"; input.value=""; btn.textContent="🔒"; _scfgQqUnlocked=false; }
   else { input.readOnly=false; input.type="text"; input.value=""; btn.textContent="🔓"; _scfgQqUnlocked=true; input.focus(); }
 }
-// 平台切换：只显示所选 provider 的凭证块。
-function scfgSwitchKind(){
-  const kind=document.getElementById("scfg-kind").value;
-  document.getElementById("scfg-feishu-block").style.display   = kind==="feishu"   ? "" : "none";
-  document.getElementById("scfg-qq-block").style.display       = kind==="qq"      ? "" : "none";
-  document.getElementById("scfg-telegram-block").style.display = kind==="telegram" ? "" : "none";
-}
+// 通道勾选/选中切换由 scfgRenderList / scfgSelectChannel 负责（左列动态生成，显式监听）。
 async function imcfgSave(){
+  const active=SCFG_CHANNELS.filter(ch=>_scfgEnabled[ch.id]).map(ch=>ch.id);
   const payload={
-    kind:document.getElementById("scfg-kind").value,
+    kind:active[0]||"",
+    active,
     enabled:document.getElementById("scfg-enabled").checked,
     personal:true,
     app_id:document.getElementById("scfg-app-id").value.trim(),
@@ -1913,6 +1956,9 @@ async function imcfgSave(){
   if(_scfgSecretUnlocked) payload.app_secret_value=document.getElementById("scfg-app-secret").value.trim();
   if(_scfgTgUnlocked)     payload.telegram_token_value=document.getElementById("scfg-tg-token").value.trim();
   if(_scfgQqUnlocked)     payload.qq_secret_value=document.getElementById("scfg-qq-secret").value.trim();
+  if(document.getElementById("scfg-enabled").checked && active.length===0){
+    showToast("请至少勾选一个 IM 通道（或取消「启用遥控」）"); return;
+  }
   let r=null;
   try{ r=JSON.parse(await window.__TAURI__.core.invoke("im_config",{action:"set", payload:JSON.stringify(payload)})); }
   catch(e){ showToast("保存失败："+e); return; }
@@ -2409,13 +2455,9 @@ async function setModelChoice(el){
 // —— 模型配置面板（多 provider：列表+详情）——
 const MCFG_PRESETS = {
   mlamp:    "https://llmgw-bz.mlamp.cn/v1",
-  deepseek: "https://api.deepseek.com/v1",
-  openai:   "https://api.openai.com/v1",
 };
 const MCFG_CANDIDATES = {
   mlamp:    ["mlamp/deepseek-v4-flash","mlamp/qwen3-coder-next-fp8","mlamp/deepseek-v4-pro","mlamp/glm-5.2","mlamp/kimi-k3","mlamp/qwen3.8-27b","mlamp/minimax-h3"],
-  deepseek: ["deepseek-v4-flash","deepseek-v4-pro","deepseek-r1","deepseek-chat"],
-  openai:   ["gpt-4o","gpt-4o-mini","o1","o1-mini"],
 };
 let _mcfgKeyUnlocked = false;
 let _mcfgProviders = [];      // list_providers 快照（面板期间）
@@ -2680,6 +2722,7 @@ document.addEventListener("click", e=>{
   } else if(act === "setModelChoice"){ setModelChoice(el);
   } else if(act === "setProviderChoice"){ setProviderChoice(el);
   } else if(act === "providerSelect"){ mcfgSelectProvider(el);
+  } else if(act === "scfgSelect"){ scfgSelectChannel(el);
   } else if(act === "openModelConfig"){ closeMenu(); openModelConfig();
   } else if(act === "toggleVoice"){
     toggleVoice(el);
@@ -2690,9 +2733,8 @@ document.addEventListener("click", e=>{
   }
 });
 
-// 设置面板：平台下拉的 change 委托管不了（click-only）→ 显式监听；点遮罩空白处关闭（target
-// 必须是遮罩自身，避免点进表单误关）。同样绕开被拦的内联 on* 属性。
-document.getElementById("scfg-kind").addEventListener("change", scfgSwitchKind);
+// 设置面板：通道勾选框在左列动态生成（scfgRenderList 内显式监听 change）；点遮罩空白处关闭
+// （target 必须是遮罩自身，避免点进表单误关）。同样绕开被拦的内联 on* 属性。
 {
   const _scfgOverlay = document.getElementById("settings-overlay");
   _scfgOverlay.addEventListener("click", e => { if(e.target === _scfgOverlay) closeSettings(); });
