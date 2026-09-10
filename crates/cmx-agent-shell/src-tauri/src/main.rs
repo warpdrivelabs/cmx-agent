@@ -44,31 +44,35 @@ fn portal_base() -> String {
 }
 
 /// 运行中的 IM 桥句柄：stop 信号（热重载用）+ provider（其 stop() 断开飞书长连接）。
+/// **多通道**：每个启用的 provider 一项（飞书 + QQ 可同时在线）。
 struct ImBridgeHandle {
     stop_tx: tokio::sync::watch::Sender<bool>,
     provider: Arc<dyn cmx_agent_im::ImProvider>,
 }
 
-/// 当前桥的句柄槽（热重载：保存配置 → 停旧 → 起新）。
-static IM_BRIDGE: std::sync::Mutex<Option<ImBridgeHandle>> = std::sync::Mutex::new(None);
+/// 当前桥的句柄槽（热重载：保存配置 → 停旧 → 起新）。多通道 = 多个句柄。
+static IM_BRIDGES: std::sync::Mutex<Vec<ImBridgeHandle>> = std::sync::Mutex::new(Vec::new());
 
 /// 停掉当前运行的 IM 桥（若有）。发 stop 信号 + 断 provider 长连接即返回——
 /// 旧 task 异步退出，不阻塞新桥启动。
 fn stop_im_bridge() {
-    if let Ok(mut slot) = IM_BRIDGE.lock() {
-        if let Some(h) = slot.take() {
+    if let Ok(mut slots) = IM_BRIDGES.lock() {
+        for h in slots.drain(..) {
             let _ = h.stop_tx.send(true);
             h.provider.stop();
+        }
+        if !slots.is_empty() {
             eprintln!("[im] 旧桥已停（热重载）");
         }
     }
 }
 
 /// IM 遥控装配（U16）：读 `CMX_AGENT_IM_*` env（开发联调）或 `<data_dir>/im.json`（GUI 设置面板），
-/// 配了就启动 `ImBridge` 后台 task，与桌面 UI 共用同一 `AgentApp`。IM 消息跑同一回合循环 →
-/// 事件经 SessionEventBus → `session_event` Tauri 事件实时推前端，回复经 ImBridge 回发 IM。
+/// 配了就为**每个启用的通道**（飞书/QQ/Telegram 可多选）启动一个 `ImBridge` 后台 task，
+/// 与桌面 UI 共用同一 `AgentApp`。IM 消息跑同一回合循环 → 事件经 SessionEventBus →
+/// `session_event` Tauri 事件实时推前端，回复经 ImBridge 回发 IM。
 /// 未配 / 装配失败 → 仅打日志 + 记状态，不阻断桌面 UI（IM 是可选遥控通道）。
-/// **热重载**：启动前先停旧桥——设置面板保存后直接重调本函数即可换配置，无需重启应用。
+/// **热重载**：启动前先停全部旧桥——设置面板保存后直接重调本函数即可换配置，无需重启应用。
 fn start_im_if_configured(rt: &'static tokio::runtime::Runtime, app: Arc<AgentApp>) {
     stop_im_bridge();
     let data_dir = cmx_agent_app::shared_data_dir();
@@ -81,36 +85,46 @@ fn start_im_if_configured(rt: &'static tokio::runtime::Runtime, app: Arc<AgentAp
             return;
         }
     };
-    let kind_label = resolved.kind.label();
-    let allow = resolved.allow;
+    let allow = resolved.allow.clone();
     // 个人模式：im.json `personal=true`（默认）= 所有 IM 消息直接以桌面壳当前登录用户身份
     // 跑回合，无需验证码绑定；false = 绑定模式（按发送者 open_id 鉴权）。env 来源恒绑定模式。
     let personal = resolved.personal;
     // 绑定模式才需要绑定解析器（个人模式会被桥短路，但仍装配以防模式切换复用代码路径）。
     let portal_base = portal_base();
-    let bindings = cmx_agent_im::PortalBindingResolver::new(portal_base.clone());
+    let labels: Vec<&str> = resolved.channels.iter().map(|c| c.kind.label()).collect();
     let mode_label = if personal { "个人模式" } else { "绑定模式" };
     set_im_status(format!(
-        "运行中：provider={kind_label}（{mode_label}，配置来源={}，portal={portal_base}）",
+        "运行中：provider={}（{mode_label}，配置来源={}，portal={portal_base}）",
+        labels.join("+"),
         resolved.source
     ));
-    eprintln!("[im] 启动 IM 遥控（provider={kind_label}，{mode_label}，配置来源={}，portal={portal_base}）", resolved.source);
-    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
-    let provider = Arc::clone(&resolved.provider);
-    rt.spawn(async move {
-        // 飞书 Stream：起常驻后台 task；Telegram 长轮询：trait 默认 no-op。
-        if let Err(e) = provider.start().await {
-            eprintln!("[im] provider.start 失败：{e}");
-            return;
+    eprintln!(
+        "[im] 启动 IM 遥控（provider={}，{mode_label}，配置来源={}，portal={portal_base}）",
+        labels.join("+"),
+        resolved.source
+    );
+    for ch in resolved.channels {
+        let kind_label = ch.kind.label();
+        let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+        let provider = Arc::clone(&ch.provider);
+        let app = Arc::clone(&app);
+        let bindings = cmx_agent_im::PortalBindingResolver::new(portal_base.clone());
+        let allow = allow.clone();
+        rt.spawn(async move {
+            // 飞书 Stream：起常驻后台 task；Telegram 长轮询：trait 默认 no-op。
+            if let Err(e) = provider.start().await {
+                eprintln!("[im] provider[{kind_label}].start 失败：{e}");
+                return;
+            }
+            let bridge = cmx_agent_im::ImBridge::new(app, provider, kind_label, allow.clone())
+                .with_personal(personal)
+                .with_bindings(std::sync::Arc::new(bindings));
+            bridge.run(stop_rx).await;
+        });
+        // 句柄入槽（供下次热重载停旧：发 stop 信号 + provider.stop() 断长连接）。
+        if let Ok(mut slots) = IM_BRIDGES.lock() {
+            slots.push(ImBridgeHandle { stop_tx, provider: Arc::clone(&ch.provider) });
         }
-        let bridge = cmx_agent_im::ImBridge::new(app, provider, kind_label, allow)
-            .with_personal(personal)
-            .with_bindings(std::sync::Arc::new(bindings));
-        bridge.run(stop_rx).await;
-    });
-    // 句柄入槽（供下次热重载停旧：发 stop 信号 + provider.stop() 断长连接）。
-    if let Ok(mut slot) = IM_BRIDGE.lock() {
-        *slot = Some(ImBridgeHandle { stop_tx, provider: resolved.provider });
     }
 }
 
@@ -161,8 +175,19 @@ async fn im_config(
             let mut cfg = cmx_agent_im::load_im_config(&data_dir).unwrap_or_default();
             cfg.enabled = v.get("enabled").and_then(|x| x.as_bool()).unwrap_or(true);
             cfg.personal = true; // 身份模式固定个人：消息以桌面登录账号身份跑回合。
-            if let Some(kind) = get_str("kind").filter(|s| !s.is_empty()) {
+            // 多通道（2026-09-10）：面板多选 → `active` 列表；`kind` 同步为首个启用项
+            // （兼容旧版本读文件的语义）。空列表 = 未勾任何通道。
+            if let Some(active) = v.get("active").and_then(|x| x.as_array()) {
+                cfg.active = active
+                    .iter()
+                    .filter_map(|x| x.as_str().map(|s| s.trim().to_string()))
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                cfg.kind = cfg.active.first().cloned().unwrap_or_default();
+            } else if let Some(kind) = get_str("kind").filter(|s| !s.is_empty()) {
+                // 兼容旧前端只报 kind：单选语义照旧。
                 cfg.kind = kind;
+                cfg.active = vec![cfg.kind.clone()];
             }
             if let Some(app_id) = get_str("app_id") {
                 cfg.feishu.app_id = app_id;
@@ -189,16 +214,17 @@ async fn im_config(
             }
             // 白名单不进 GUI：GUI set 不触碰 cfg.allow（im.json 手工维护，已有值保留）。
             // 门户服务器地址：运行期不可改（构建期烧录），set 请求里的 portal_base 一律忽略。
-            // 启用态下按 provider 校验凭证齐备（禁用态允许存半成品）。
+            // 启用态下按通道逐个校验凭证齐备（禁用态允许存半成品）。
+            // 多通道：任一勾选通道缺凭证即拒——避免「以为两个都在线，其实只起了一个」。
             if cfg.enabled {
-                let missing = match cfg.kind.trim() {
-                    "telegram" if cfg.telegram.token.is_empty() => Some("Bot Token"),
-                    "feishu" if cfg.feishu.app_id.is_empty() => Some("App ID"),
-                    "feishu" if cfg.feishu.app_secret.is_empty() => Some("App Secret"),
+                let missing = cfg.active().into_iter().find_map(|k| match k.as_str() {
+                    "telegram" if cfg.telegram.token.is_empty() => Some("Telegram Bot Token"),
+                    "feishu" if cfg.feishu.app_id.is_empty() => Some("飞书 App ID"),
+                    "feishu" if cfg.feishu.app_secret.is_empty() => Some("飞书 App Secret"),
                     "qq" if cfg.qq.app_id.is_empty() => Some("QQ AppID"),
                     "qq" if cfg.qq.app_secret.is_empty() => Some("QQ AppSecret"),
                     _ => None,
-                };
+                });
                 if let Some(field) = missing {
                     return Ok(err_json("bad_request", &format!("{field} 不能为空")));
                 }

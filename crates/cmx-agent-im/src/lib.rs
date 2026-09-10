@@ -35,8 +35,8 @@ pub use qq::QqProvider;
 pub use config::{ImConfig, ImKind, parse_allow};
 pub use binding::{ImBindingResolver, MockBindingResolver, PortalBindingResolver};
 pub use remocon::{
-    FeishuCreds, ImRemoconConfig, QqCreds, ResolvedIm, TelegramCreds, env_active, im_config_path,
-    load_im_config, resolve, save_im_config, test_feishu, test_qq,
+    FeishuCreds, ImRemoconConfig, QqCreds, ResolvedChannel, ResolvedIm, TelegramCreds, env_active,
+    im_config_path, load_im_config, resolve, save_im_config, test_feishu, test_qq,
 };
 
 /// 一条入站 IM 消息。

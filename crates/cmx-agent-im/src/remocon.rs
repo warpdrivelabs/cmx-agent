@@ -26,9 +26,14 @@ pub struct ImRemoconConfig {
     /// 总开关：false = 已保存凭证但停用（壳跳过 IM 桥）。
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// provider 类型：`feishu` / `telegram` / `qq`。
+    /// 主 provider 类型：`feishu` / `telegram` / `qq`。兼容保留字段——多通道语义见
+    /// [`Self::active`]；旧版本/手写的 im.json 只有本字段（单选），`resolve` 按它回落。
     #[serde(default)]
     pub kind: String,
+    /// **多通道**（2026-09-10）：同时启用的 provider 列表（`feishu`/`telegram`/`qq` 可组合）。
+    /// 空 = 旧版单选文件，回落 [`Self::kind`]。GUI set 恒写入本字段；`kind` 同步为首个启用项。
+    #[serde(default)]
+    pub active: Vec<String>,
     /// 个人模式（默认 true）：所有 IM 消息直接以桌面壳当前登录用户身份跑回合，
     /// 无需验证码绑定（自己私聊自己的机器人）。false = 绑定模式（按发送者 open_id
     /// 鉴权，群聊多用户用，需在桌面端取码完成绑定）。
@@ -106,6 +111,7 @@ impl Default for ImRemoconConfig {
         Self {
             enabled: true,
             kind: "feishu".into(),
+            active: Vec::new(),
             personal: true,
             feishu: FeishuCreds::default(),
             telegram: TelegramCreds::default(),
@@ -116,12 +122,32 @@ impl Default for ImRemoconConfig {
 }
 
 impl ImRemoconConfig {
+    /// 当前生效的 provider 列表（保序去重）：`active` 非空用之；空回落单选 `kind`
+    /// （旧版文件兼容）。返回空 = 启用态下没有任何可用通道（resolve 报错提示）。
+    pub fn active(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let push = |k: &str, out: &mut Vec<String>| {
+            let k = k.trim();
+            if !k.is_empty() && parse_kind(k).is_ok() && !out.iter().any(|e| e == k) {
+                out.push(k.to_string());
+            }
+        };
+        for k in &self.active {
+            push(k, &mut out);
+        }
+        if out.is_empty() {
+            push(&self.kind, &mut out);
+        }
+        out
+    }
+
     /// 脱敏视图（面板 get 回显）：secret/token 只给掩码，明文不出后端。
     pub fn masked(&self) -> Value {
         json!({
             "configured": true,
             "enabled": self.enabled,
             "kind": self.kind,
+            "active": self.active(),
             "personal": self.personal,
             "app_id": self.feishu.app_id,
             "app_secret_masked": mask_secret(&self.feishu.app_secret),
@@ -134,14 +160,9 @@ impl ImRemoconConfig {
         })
     }
 
-    /// 文件配置 → 运行装配件。凭证缺失返回 Err（带缺哪个），供面板/启动日志直说问题。
-    fn to_resolved(&self) -> Result<ResolvedIm, String> {
-        let kind = parse_kind(&self.kind).map_err(|e| format!("im.json {e}"))?;
-        let allow = if self.allow.is_empty() {
-            None
-        } else {
-            Some(self.allow.iter().cloned().collect::<HashSet<String>>())
-        };
+    /// 单个 provider（按 kind 标签）→ 运行装配件。凭证缺失返回 Err（带缺哪个）。
+    fn resolve_one(&self, kind: &str) -> Result<(ImKind, Arc<dyn ImProvider>), String> {
+        let kind = parse_kind(kind).map_err(|e| format!("im.json {e}"))?;
         let provider: Arc<dyn ImProvider> = match kind {
             ImKind::Feishu => {
                 let f = &self.feishu;
@@ -175,23 +196,50 @@ impl ImRemoconConfig {
                 Arc::new(QqProvider::new(q.app_id.trim(), q.app_secret.trim(), non_empty(&q.base)))
             }
         };
-        Ok(ResolvedIm { kind, allow, provider, personal: self.personal, source: "im.json" })
+        Ok((kind, provider))
     }
 }
 
-/// 壳启动装好的 IM 遥控：provider + 白名单 + 来源标签（日志/面板提示用）。
+/// 壳启动装好的 IM 遥控：**多个** provider（多通道同时在线）+ 白名单 + 来源标签（日志/面板用）。
 pub struct ResolvedIm {
-    pub kind: ImKind,
+    /// 每个启用通道一项（保序 = im.json `active` 顺序）。空 = 无可用通道（调用方按未启用处理）。
+    pub channels: Vec<ResolvedChannel>,
     /// `None` = 不限（个人模式建议配白名单；绑定模式门 = 已绑定身份）。
     pub allow: Option<HashSet<String>>,
-    pub provider: Arc<dyn ImProvider>,
     /// 个人模式（im.json 来源读 `personal`；env 来源恒 false = 绑定模式，env 语义不变）。
     pub personal: bool,
     /// `"env"`（开发联调）或 `"im.json"`（GUI 面板）。
     pub source: &'static str,
 }
 
-/// 壳启动装配：**env 优先**（开发联调覆盖），回落 im.json（GUI）。两者皆无 → Err（壳跳过 IM）。
+/// 一个启用的 IM 通道。
+pub struct ResolvedChannel {
+    pub kind: ImKind,
+    pub provider: Arc<dyn ImProvider>,
+}
+
+impl ResolvedIm {
+    /// 兼容单通道语义的便捷读法：首个通道（env 来源恒单通道）。
+    pub fn first(&self) -> Option<&ResolvedChannel> {
+        self.channels.first()
+    }
+}
+
+/// 测试用：unwrap_err 需要 T: Debug（provider 是 dyn trait 不实现，手动补最小实现）。
+impl std::fmt::Debug for ResolvedIm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let kinds: Vec<&str> = self.channels.iter().map(|c| c.kind.label()).collect();
+        f.debug_struct("ResolvedIm")
+            .field("channels", &kinds)
+            .field("allow", &self.allow)
+            .field("personal", &self.personal)
+            .field("source", &self.source)
+            .finish()
+    }
+}
+
+/// 壳启动装配：**env 优先**（开发联调覆盖，env 语义不变：恒单通道），回落 im.json（GUI，
+/// 多通道）。两者皆无 → Err（壳跳过 IM）。
 ///
 /// env 路径沿用 [`ImConfig::from_env`]（含白名单校验）；注意 env 只配凭证不配白名单时会落到
 /// im.json 分支——开发联调请同时配 `CMX_AGENT_IM_ALLOW` 或 `CMX_AGENT_IM_NO_ALLOW=1`。
@@ -201,9 +249,8 @@ pub fn resolve(data_dir: Option<&Path>) -> Result<ResolvedIm, String> {
         && let Ok(provider) = cfg.build_provider()
     {
         return Ok(ResolvedIm {
-            kind: cfg.kind,
+            channels: vec![ResolvedChannel { kind: cfg.kind, provider }],
             allow: cfg.allow,
-            provider,
             personal: false,
             source: "env",
         });
@@ -215,7 +262,31 @@ pub fn resolve(data_dir: Option<&Path>) -> Result<ResolvedIm, String> {
         if !cfg.enabled {
             return Err("IM 遥控已在设置中停用".into());
         }
-        return cfg.to_resolved();
+        let allow = if cfg.allow.is_empty() {
+            None
+        } else {
+            Some(cfg.allow.iter().cloned().collect::<HashSet<String>>())
+        };
+        // 逐通道装配：凭证齐备的通道启用；有通道配了一半（启用了但缺凭证）→ 报错直说缺哪个
+        // （fail-closed：宁可不启动任何通道，不让用户误以为全部在线）。全部未配齐 → 报首个错。
+        let mut channels = Vec::new();
+        let mut first_err: Option<String> = None;
+        for k in cfg.active() {
+            match cfg.resolve_one(&k) {
+                Ok((kind, provider)) => channels.push(ResolvedChannel { kind, provider }),
+                Err(e) => {
+                    first_err = Some(e);
+                    break;
+                }
+            }
+        }
+        if let Some(e) = first_err {
+            return Err(e);
+        }
+        if channels.is_empty() {
+            return Err("im.json 未启用任何 IM 通道（请到 设置 → IM 遥控 勾选并填凭证）".into());
+        }
+        return Ok(ResolvedIm { channels, allow, personal: cfg.personal, source: "im.json" });
     }
     Err("未配置 IM 遥控（env 与 im.json 均无，桌面壳为纯本地模式）".into())
 }
@@ -383,6 +454,7 @@ mod tests {
         let cfg = ImRemoconConfig {
             enabled: true,
             kind: "qq".into(),
+            active: vec!["qq".into(), "feishu".into()],
             personal: true,
             feishu: FeishuCreds {
                 app_id: "cli_x".into(),
@@ -400,8 +472,23 @@ mod tests {
         assert_eq!(back.qq.app_id, "10xx");
         assert_eq!(back.qq.app_secret, "qq-secret");
         assert_eq!(back.kind, "qq");
+        assert_eq!(back.active(), vec!["qq".to_string(), "feishu".to_string()]);
         assert_eq!(back.allow, vec!["oc_a", "oc_b"]);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn active_falls_back_to_kind_for_legacy_files() {
+        // 旧版单选文件（无 active）→ 回落 kind；去重 + 未知值过滤。
+        let legacy = ImRemoconConfig { kind: "qq".into(), ..Default::default() };
+        assert_eq!(legacy.active(), vec!["qq".to_string()]);
+
+        let dup = ImRemoconConfig {
+            kind: "feishu".into(),
+            active: vec!["feishu".into(), "bogus".into(), "feishu ".into()],
+            ..Default::default()
+        };
+        assert_eq!(dup.active(), vec!["feishu".to_string()]);
     }
 
     #[test]
@@ -439,28 +526,27 @@ mod tests {
     }
 
     #[test]
-    fn to_resolved_validates_creds() {
+    fn resolve_one_validates_creds() {
         // feishu 缺 secret → Err 带字段名
         let bad = ImRemoconConfig { kind: "feishu".into(), ..Default::default() };
-        let err = match bad.to_resolved() {
+        let err = match bad.resolve_one("feishu") {
             Err(e) => e,
             Ok(_) => panic!("缺凭证应 Err"),
         };
         assert!(err.contains("App ID"), "{err}");
 
-        // 齐备 → Ok，allow 空表示不限
+        // 齐备 → Ok
         let ok = ImRemoconConfig {
             kind: "feishu".into(),
             feishu: FeishuCreds { app_id: "cli_1".into(), app_secret: "s".into(), base: String::new() },
             ..Default::default()
         };
-        let r = ok.to_resolved().unwrap();
-        assert_eq!(r.kind, ImKind::Feishu);
-        assert!(r.allow.is_none());
+        let (kind, _) = ok.resolve_one("feishu").unwrap();
+        assert_eq!(kind, ImKind::Feishu);
 
         // telegram 缺 token → Err
         let tg = ImRemoconConfig { kind: "telegram".into(), ..Default::default() };
-        assert!(tg.to_resolved().is_err());
+        assert!(tg.resolve_one("telegram").is_err());
 
         // qq 缺 AppSecret → Err 带字段名
         let bad_qq = ImRemoconConfig {
@@ -468,7 +554,7 @@ mod tests {
             qq: QqCreds { app_id: "10xx".into(), ..Default::default() },
             ..Default::default()
         };
-        let err = match bad_qq.to_resolved() {
+        let err = match bad_qq.resolve_one("qq") {
             Err(e) => e,
             Ok(_) => panic!("缺凭证应 Err"),
         };
@@ -480,20 +566,76 @@ mod tests {
             qq: QqCreds { app_id: "10xx".into(), app_secret: "s".into(), base: String::new() },
             ..Default::default()
         };
-        assert_eq!(ok_qq.to_resolved().unwrap().kind, ImKind::Qq);
+        let (kind, _) = ok_qq.resolve_one("qq").unwrap();
+        assert_eq!(kind, ImKind::Qq);
     }
 
     #[test]
-    fn to_resolved_allow_listed() {
-        let cfg = ImRemoconConfig {
-            kind: "feishu".into(),
-            feishu: FeishuCreds { app_id: "i".into(), app_secret: "s".into(), base: String::new() },
-            allow: vec!["oc_a".into()],
-            ..Default::default()
-        };
-        let r = cfg.to_resolved().unwrap();
+    fn resolve_im_json_multi_channel() {
+        // 多通道：飞书 + QQ 凭证齐备、active 双选 → 两个通道都装上。
+        let dir = tmp_dir("multi");
+        std::fs::write(
+            im_config_path(&dir),
+            r#"{"kind":"qq","active":["qq","feishu"],"feishu":{"app_id":"cli_1","app_secret":"s"},"qq":{"app_id":"10xx","app_secret":"s"}}"#,
+        )
+        .unwrap();
+        let r = resolve(Some(&dir)).unwrap();
+        assert_eq!(r.channels.len(), 2);
+        assert_eq!(r.channels[0].kind, ImKind::Qq); // 保序 = active 顺序
+        assert_eq!(r.channels[1].kind, ImKind::Feishu);
+        assert!(r.allow.is_none());
+        assert!(r.personal);
+        std::fs::remove_dir_all(&dir).ok();
+
+        // 旧版单选文件（无 active）：回落 kind，仍单通道可用。
+        let dir = tmp_dir("legacy");
+        std::fs::write(
+            im_config_path(&dir),
+            r#"{"kind":"feishu","feishu":{"app_id":"cli_1","app_secret":"s"}}"#,
+        )
+        .unwrap();
+        let r = resolve(Some(&dir)).unwrap();
+        assert_eq!(r.channels.len(), 1);
+        assert_eq!(r.channels[0].kind, ImKind::Feishu);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn resolve_im_json_fails_closed_on_partial_creds() {
+        // 有通道配了一半（QQ 缺 AppSecret）→ 整体 Err 直说缺哪个，不静默半启用。
+        let dir = tmp_dir("partial-creds");
+        std::fs::write(
+            im_config_path(&dir),
+            r#"{"active":["qq","feishu"],"feishu":{"app_id":"cli_1","app_secret":"s"},"qq":{"app_id":"10xx"}}"#,
+        )
+        .unwrap();
+        let err = resolve(Some(&dir)).unwrap_err();
+        assert!(err.contains("AppSecret"), "{err}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn resolve_im_json_no_channel_is_err() {
+        // 启用但没勾任何通道（active 空 + kind 空）→ Err 提示去面板勾选。
+        let dir = tmp_dir("no-channel");
+        std::fs::write(im_config_path(&dir), r#"{"kind":""}"#).unwrap();
+        let err = resolve(Some(&dir)).unwrap_err();
+        assert!(err.contains("未启用任何 IM 通道"), "{err}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn resolve_allow_listed() {
+        let dir = tmp_dir("allow");
+        std::fs::write(
+            im_config_path(&dir),
+            r#"{"kind":"feishu","feishu":{"app_id":"i","app_secret":"s"},"allow":["oc_a"]}"#,
+        )
+        .unwrap();
+        let r = resolve(Some(&dir)).unwrap();
         let allow = r.allow.expect("应返回白名单");
         assert!(allow.contains("oc_a"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
