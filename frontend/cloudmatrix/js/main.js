@@ -182,17 +182,19 @@
 
     osTiles.forEach(tile => {
       const prefix = OS_PREFIX[tile.dataset.os];
-      const keys = Object.keys(platforms).filter(k =>
+      let keys = Object.keys(platforms).filter(k =>
         k.startsWith(prefix) && ((platforms[k].url || '').trim() || (platforms[k].file_id || '').trim()));
+      // macOS 只发 .dmg（首装分发格式）：.app.tar.gz 是 tauri updater 产物，不下发给用户。
+      // 未登记 dmg 键 → 卡片置灰提示「暂未提供」，绝不回退 tar.gz。
+      if (tile.dataset.os === 'macos') {
+        keys = keys.filter(k => /-dmg$/.test(k));
+      }
       if (!keys.length) {
         tile.classList.add('is-unavailable');
         tile.querySelector('.os-size').textContent = '暂未提供';
         return;
       }
-      // macOS 首装分发优先取 .dmg 键（darwin-*-dmg）；.app.tar.gz 是 updater 产物，
-      // 仅在未登记 dmg 时兜底展示。两个键可共存于同一版本行、互不影响
-      // （tauri updater 插件只按 {target}-app 匹配，不消费 -dmg 键）。
-      const key = keys.find(k => /-dmg$/.test(k)) || keys[0];
+      const key = keys[0];
       tile.dataset.url = downloadUrlOf(key, platforms[key], version);
       const sameFmt = keys.filter(k => fmtOf(k) === fmtOf(key));
       tile.querySelector('.os-size').textContent =
