@@ -55,6 +55,6 @@ async function streamSend(sessionId, text, onEvent){
     }
   }
 }
-function esc(s){ return String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+function esc(s){ return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 function el(cls,html){ const d=document.createElement("div"); d.className=cls; if(html!=null)d.innerHTML=html; return d; }
-
+

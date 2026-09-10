@@ -1,6 +1,9 @@
 // —— 模型选择器（composer 的 ◎ 模型按钮）——
+// 当前模型显示名（供 openSession 克隆模板后同步新 tab 的 .mlabel；模板是惰性 DOM，querySelectorAll 不到）
+let _modelLabel = "";
 function setModelLabel(name){
-  const short = name==="demo" ? "Demo" : name.replace(/^deepseek-/,"").replace(/^gpt-/,"gpt-");
+  const short = !name ? "未配置" : name==="demo" ? "Demo" : name.replace(/^deepseek-/,"").replace(/^gpt-/,"gpt-");
+  _modelLabel = short;
   document.querySelectorAll(".model .mlabel").forEach(s=>s.textContent=short);
 }
 async function refreshModelLabel(){

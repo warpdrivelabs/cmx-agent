@@ -32,6 +32,14 @@ function cmxInitDropdown (sel) {
     // 关掉其他打开的 dropdown
     document.querySelectorAll(".cmx-dd-list.on").forEach(l => { l.classList.remove("on"); l.closest(".cmx-dd")?.classList.remove("on"); });
     buildItems();
+    // 视口底部溢出检测：trigger 底部 + 弹出列表高 > viewport → 向上弹
+    const rect = trigger.getBoundingClientRect();
+    list.style.top = ""; list.style.bottom = "";
+    const listH = Math.min(Array.from(sel.options).length * 38 + 8, 260); // 近似高度（item ~38px + padding）
+    if (rect.bottom + listH > window.innerHeight && rect.top > listH) {
+      list.style.top = "auto";
+      list.style.bottom = "calc(100% + 4px)";
+    }
     list.classList.add("on");
     wrap.classList.add("on");
   }
@@ -63,6 +71,30 @@ function cmxInitDropdown (sel) {
     e.stopPropagation();
     list.classList.contains("on") ? closeList() : openList();
   });
+
+  // 键盘：Enter/Space 开关、↑↓ 移动 active、Enter 选中、Esc 关闭
+  trigger.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); list.classList.contains("on") ? closeList() : openList(); return; }
+    if (!list.classList.contains("on")) return;
+    const items = [...list.querySelectorAll(".cmx-dd-item")];
+    let idx = items.findIndex(i => i.classList.contains("active"));
+    if (e.key === "ArrowDown") { e.preventDefault(); idx = Math.min(idx + 1, items.length - 1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); idx = Math.max(idx - 1, 0); }
+    else if (e.key === "Escape") { closeList(); return; }
+    else return;
+    items.forEach(i => i.classList.remove("active"));
+    items[idx]?.classList.add("active");
+    items[idx]?.scrollIntoView({ block: "nearest" });
+    e.preventDefault();
+  });
+  // 列表展开时 Enter 选中当前 active 项
+  list.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    const active = list.querySelector(".cmx-dd-item.active");
+    if (active) { active.click(); }
+  });
+  // trigger 可聚焦
+  trigger.tabIndex = 0;
 
   // 点外面关闭（由全局关闭器统一处理，不挂 per-instance listener）
   wrap._cmxClose = closeList;

@@ -109,7 +109,11 @@ async function checkUpdate(silent){
     }
   }catch(err){
     UPDATE_INFO = null; renderUpdateBtn();
-    if(!silent) showToast("检查更新失败："+err);   // 静默检查失败：无感（fail-closed）
+    if(!silent){
+    const msg=String(err);
+    if(msg.includes("fallback platforms")){ showToast("更新服务暂未配置当前平台的安装包"); }
+    else{ showToast("检查更新失败："+msg); }
+  }
   }
 }
 // 启动自动检查（登录页是首查点，此处兜底：登录页查时未发布、登录过程中才发布的窗口期）。

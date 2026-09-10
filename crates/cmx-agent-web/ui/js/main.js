@@ -22,7 +22,12 @@ let APP_VERSION = "M2 · 0.1.0";
   }
 })();
 function toggleMenu(){ document.getElementById("usermenu").classList.remove("on"); document.getElementById("cmxmenu").classList.toggle("on"); }
-function closeMenu(){ document.getElementById("cmxmenu").classList.remove("on"); document.getElementById("usermenu").classList.remove("on"); }
+function closeMenu(){
+  document.getElementById("cmxmenu").classList.remove("on");
+  document.getElementById("usermenu").classList.remove("on");
+  document.getElementById("modelmenu").classList.remove("on");
+  document.getElementById("tab-dropdown").classList.remove("on");
+}
 let CURRENT_USER = null;   // {user_id, username, nickname, roles} 或 null
 // 拉取当前登录用户（前门 current_user），填充活动栏头像 + 用户菜单。未登录则显示占位。
 async function refreshUser(){
@@ -135,7 +140,10 @@ const ACTIONS = { newTask, openConnectors, startFromHome, toggleSidebar, toggleT
   userChangePassword, pwdClose, pwdExit, pwdSave, logoutCancel, logoutConfirm };
 document.addEventListener("click", e=>{
   const el = e.target.closest("[data-act]");
-  if(!el){ closeMenu(); closeTabCtx(); document.getElementById("modelmenu").classList.remove("on"); document.getElementById("tab-dropdown").classList.remove("on"); return; }
+  // 菜单切换类动作自己管开/关，不提前关（否则 openModelMenu 刚开就被关掉）
+  const _menuToggle = ["openModelMenu","toggleMenu","toggleUserMenu","toggleTabOverflow"];
+  if(!el || !_menuToggle.includes(el.dataset.act)){ closeMenu(); closeTabCtx(); }
+  if(!el) return;
   const act = el.dataset.act;
   if(act === "runConnectorTool"){
     runConnectorTool(el.dataset.tool, el.dataset.online === "1");
@@ -234,13 +242,16 @@ setTimeout(async () => {
       showMainView();
       refreshUser();
       refreshTasks();
+      refreshModelLabel();
     }
   } catch(e) {}
 }, 2000);
 
 // 登录后主窗口被显示时刷新用户信息：原生壳监听 Tauri "logged-in" 事件；并兜底监听窗口 focus。
-if(window.__TAURI__ && window.__TAURI__.event){ window.__TAURI__.event.listen("logged-in", ()=>{ location.hash = "#/"; showMainView(); refreshUser(); refreshTasks(); }); }
-window.addEventListener("focus", ()=>{ refreshUser(); });
+if(window.__TAURI__ && window.__TAURI__.event){ window.__TAURI__.event.listen("logged-in", ()=>{ location.hash = "#/"; showMainView(); refreshUser(); refreshTasks(); refreshModelLabel(); }); }
+// 兜底监听窗口 focus 刷新用户信息（3s debounce，避免每次点内元素都发 current_user 请求）
+let _refreshUserTimer=null;
+window.addEventListener("focus", ()=>{ if(_refreshUserTimer) return; _refreshUserTimer=setTimeout(()=>{ _refreshUserTimer=null; refreshUser(); }, 3000); });
 
 // 会话事件总线实时通道（U16）：任意来源（本地 / IM 桥）的会话事件广播给前端，按 session_id 分流渲染。
 // 这是「飞书发消息实时显示到对话界面」的最后一公里——IM 无关，微信/钉钉接入后走同一条路。
@@ -253,11 +264,3 @@ if(window.__TAURI__ && window.__TAURI__.event){
 } else {
   console.log("[session_event] 未注册：window.__TAURI__.event 不可用");
 }
-
-// ── 首页品类按钮（日常办公/代码开发/设计创意）：点击切换 active 状态 ──
-document.querySelectorAll("#home .cat").forEach(btn => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll("#home .cat").forEach(b => b.classList.remove("active"));
-    btn.classList.add("active");
-  });
-});

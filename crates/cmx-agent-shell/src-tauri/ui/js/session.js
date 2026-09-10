@@ -18,13 +18,14 @@ function ago(iso){ const d=(Date.now()-new Date(iso).getTime())/86400000;
   if(d<1) return "今天"; if(d<2) return "昨天"; return Math.floor(d)+"天前"; }
 
 // ── 会话渲染（渲染到指定 log 容器）──
-// 打字机：text_delta 累加到 log._raw，每次按 markdown 重渲当前气泡（log._sb）。
+// 打字机：text_delta 累加到 log._raw，rAF 节流渲染——每帧最多一次 markdown 重渲，
+// 长回复不再逐字全量 innerHTML（避免几千字回复每 token 都重排 DOM）。
 function renderEvent(log, ev, sid){
   const k=ev.kind;
   if(k==="text_delta"){
     if(!log._sb){ const r=el("row"); const b=el("bubble md"); r.append(el("avatar a","AI"),b); log.append(r); log._sb=b; log._raw=""; }
     log._raw=(log._raw||"")+(ev.text||"");
-    log._sb.innerHTML=renderMarkdown(log._raw);
+    if(!log._raf){ log._raf=requestAnimationFrame(()=>{ log._raf=null; log._sb.innerHTML=renderMarkdown(log._raw); log.scrollTop=1e9; }); }
     log.scrollTop=1e9; return;
   }
   if(k==="user_message"){
@@ -33,6 +34,7 @@ function renderEvent(log, ev, sid){
   }
   else if(k==="model_message"){
     let bub=null;
+    if(log._raf){ cancelAnimationFrame(log._raf); log._raf=null; }  // 取消 pending rAF，避免收尾后又渲一次
     if(log._sb){ log._sb.innerHTML=renderMarkdown(log._raw||ev.text||""); bub=log._sb; log._sb=null; }  // 收尾：定稿 markdown
     else if(ev.text){ const r=el("row"); const b=el("bubble md"); b.innerHTML=renderMarkdown(ev.text); r.append(el("avatar a","AI"),b); log.append(r); bub=b; }
     if(bub) addBubbleActions(bub);   // AI 文本气泡也挂操作按钮（底部行）
@@ -115,13 +117,15 @@ function openSessionLive(sessionId){
   const node=document.getElementById("tpl-session").content.cloneNode(true);
   t.view.className="tabview";
   t.view.append(node);
+  // 模板里的 .mlabel 是硬编码"未配置"（惰性 DOM，querySelectorAll 不到）→ 克隆后用当前值覆盖
+  t.view.querySelectorAll(".model .mlabel").forEach(s=>s.textContent=_modelLabel);
   const inp=t.view.querySelector(".inp2");
   inp.addEventListener("keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendChatTab(t);} });
   inp.addEventListener("input",e=>autoGrow(e.target));
   t.view.querySelector(".tab-send").onclick=()=>sendChatTab(t);
   const log=t.view.querySelector(".log"); log.innerHTML=""; log._seqs=new Set(); log._sb=null;
   activateTab(tabId);
-  refreshTasks();
+  scheduleRefreshTasks();
   // 后台补历史：把未渲染过的事件 prepend 到 log 顶部（历史在上、实时新事件在下），不擦除。
   call({cmd:"get_events",session_id:sessionId,limit:HIST_PAGE}).then(resp=>{
     const d=(resp&&resp.ok&&resp.data)||{}; const evs=d.events||[];
@@ -241,6 +245,7 @@ async function openSession(sessionId, autoPrompt){
     const node=document.getElementById("tpl-session").content.cloneNode(true);
     t.view.className="tabview";
     t.view.append(node);
+    t.view.querySelectorAll(".model .mlabel").forEach(s=>s.textContent=_modelLabel);
     const inp=t.view.querySelector(".inp2");
     inp.addEventListener("keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendChatTab(t);} });
     inp.addEventListener("input",e=>autoGrow(e.target));
@@ -258,19 +263,23 @@ async function openSession(sessionId, autoPrompt){
   const _log=t.view.querySelector(".log");
   if(_log) requestAnimationFrame(()=>{ _log.scrollTop=_log.scrollHeight;
     requestAnimationFrame(()=>{ _log.scrollTop=_log.scrollHeight; }); });
-  refreshTasks();
+  scheduleRefreshTasks();
   if(autoPrompt){ await doSendTab(t, autoPrompt); }
   else { const inp=t.view.querySelector(".inp2"); if(inp) inp.focus(); }
 }
 
 async function doSendTab(t, text){
   const log=t.view.querySelector(".log");
+  // 取消标记：tab 关闭后不再渲染事件（streamSend 回调检查此 flag）
+  let _cancelled = false;
+  t._streamCancel = () => { _cancelled = true; };
   // 1) 立即乐观渲染用户气泡，并让流里的 user_message 事件跳过一次，避免重复。
   renderEvent(log, {kind:"user_message", text}, t.sessionId);
   log._skipUser = true;
   // 2) 打字等待指示器：立即出现，覆盖「发送→首个 token」的等待。
   showTyping(log);
   await streamSend(t.sessionId, text, (ev)=>{
+    if(_cancelled) return;
     if(ev.kind==="stream_done"){ hideTyping(log); return; }
     if(ev.kind==="stream_error"){ hideTyping(log); renderEvent(log,{kind:"model_message",text:"⚠ "+(ev.message||"错误")}, t.sessionId); return; }
     // 有可见输出（文字流/工具卡/模型消息）到达 → 先撤等待动画，再渲染。
@@ -283,7 +292,7 @@ async function doSendTab(t, text){
   hideTyping(log);
   const m=(await call({cmd:"list_sessions"})).data.sessions.find(x=>x.id===t.sessionId);
   if(m){ t.title=m.title||t.sessionId; renderTabs(); }
-  refreshTasks();
+  scheduleRefreshTasks();
 }
 async function sendChatTab(t){
   const box=t.view.querySelector(".inp2"); const text=box.value.trim(); if(!text) return;
@@ -318,4 +327,4 @@ function toggleVoice(btn){
 }
 document.getElementById("inp").addEventListener("keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();startFromHome();} });
 document.getElementById("inp").addEventListener("input",e=>autoGrow(e.target));
-
+

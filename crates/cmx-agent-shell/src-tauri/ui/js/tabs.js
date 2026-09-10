@@ -58,7 +58,10 @@ function openTab({id, kind, title, ico, sessionId}){
 // 关闭一个 tab
 function closeTab(id){
   const idx=TABS.findIndex(t=>t.id===id); if(idx<0) return;
-  const t=TABS[idx]; t.view.remove(); TABS.splice(idx,1);
+  const t=TABS[idx];
+  // 通知进行中的流停止渲染（doSendTab 回调检查 _cancelled flag）
+  if(t._streamCancel) t._streamCancel();
+  t.view.remove(); TABS.splice(idx,1);
   if(ACTIVE===id){
     // 激活相邻 tab
     const next=TABS[idx] || TABS[idx-1];
@@ -107,4 +110,4 @@ QUICK.forEach(q=>{ const b=el("button","<span>"+q+"</span>"); b.className="qa"; 
   quickEl.append(b); });
 
 // ── 侧栏会话列表（真实：list_sessions）──
-
+

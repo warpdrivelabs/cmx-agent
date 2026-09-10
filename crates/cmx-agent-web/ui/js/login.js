@@ -31,6 +31,7 @@ async function checkAuthAndRoute () {
       showMainView();
       if (typeof refreshUser === "function") refreshUser();
       if (typeof refreshTasks === "function") refreshTasks();
+      if (typeof refreshModelLabel === "function") refreshModelLabel();
       return;
     }
   } catch (e) { /* 未认证或桥不通 */ }
@@ -84,68 +85,10 @@ function seedLoginSpace () {
   }
 }
 
-// ── 更新检查（仅 Tauri 壳；启动后在登录视图首查一次，5s 后）──
+// ── 更新检查（仅 Tauri 壳；启动后 500ms 首查）──
+// 复用 update.js 的 checkUpdate(true)（静默模式：失败无感，有新版弹自绘窗+标题栏按钮）。
 // 退出登录回登录视图不重查不弹；关闭应用重开是新进程，会重新首查。
-(async () => {
-  if (!(window.__TAURI__ && window.__TAURI__.core)) return; // Web 壳无更新通道
-  const snoozed = (v) => {
-    try {
-      const s = JSON.parse(localStorage.getItem('cmx-update-snooze') || 'null');
-      return !!(s && s.version === v && Date.now() - s.ts < 30 * 60 * 1000);
-    } catch (e) { return false; }
-  };
-  const showUpd = (info) => {
-    let mask = document.getElementById('cmx-upd-mask'); if (mask) mask.remove();
-    try { localStorage.setItem('cmx-update-snooze', JSON.stringify({ version: info.version, ts: Date.now() })); } catch (e) {}
-    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-    mask = document.createElement('div');
-    mask.id = 'cmx-upd-mask'; mask.className = 'cmx-upd-mask';
-    mask.innerHTML = '<div class="cmx-upd" role="dialog" aria-modal="true">'
-      + '<div class="cmx-upd-title"><span class="dot"></span>发现新版本 ' + esc(info.version) + '</div>'
-      + '<div class="cmx-upd-body">' + (esc(info.notes) || '暂无更新说明') + '</div>'
-      + '<div class="cmx-upd-ops">'
-      + (info.force ? '' : '<button class="cmx-upd-btn" data-x="later">稍后</button>')
-      + '<button class="cmx-upd-btn primary" data-x="now">立即更新</button>'
-      + '</div></div>';
-    document.body.appendChild(mask);
-    requestAnimationFrame(() => mask.classList.add('on'));
-    const close = () => { mask.classList.remove('on'); setTimeout(() => mask.remove(), 200); };
-    mask.addEventListener('click', async (e) => {
-      const act = e.target.closest('[data-x]');
-      if (act && act.dataset.x === 'now') {
-        const btn = mask.querySelector('[data-x="now"]');
-        btn.disabled = true; btn.textContent = '下载中…';
-        if (window.__TAURI__.event) {
-          try { window.__TAURI__.event.listen('update_progress', (ev) => {
-            const p = ev.payload || {};
-            btn.textContent = p.total ? '下载 ' + Math.round(p.received / p.total * 100) + '%'
-                                      : '下载 ' + Math.round(p.received / 1024) + 'KB';
-          }); } catch (err) {}
-        }
-        try {
-          await window.__TAURI__.core.invoke('download_and_install');
-          btn.textContent = '即将重启…';
-        } catch (err) {
-          btn.disabled = false; btn.textContent = '更新失败，点重试';
-        }
-      } else if (act && act.dataset.x === 'later') {
-        close();
-      } else if (!info.force && e.target === mask) { close(); }
-    });
-  };
-  const runUpdateCheck = async () => {
-    try { localStorage.removeItem('cmx-update-snooze'); } catch (e) {}
-    try {
-      const r = JSON.parse(await window.__TAURI__.core.invoke('check_update'));
-      if (r && r.ok && r.data && r.data.update_available) {
-        const info = { version: r.data.version, notes: r.data.notes, force: r.data.force };
-        if (!info.force && snoozed(info.version)) return;
-        showUpd(info);
-      }
-    } catch (e) { console.warn('[update] 首查失败（静默）:', e); }
-  };
-  setTimeout(runUpdateCheck, 500);
-})();
+setTimeout(() => { if (typeof checkUpdate === "function") checkUpdate(true); }, 500);
 
 // ── 登录逻辑（同核多壳）：原生 Tauri 壳走 invoke("login")（SPA 下返回成功即切视图）；Web 壳回退 POST /api。──
 const form = document.getElementById('login-form');
@@ -177,6 +120,7 @@ form.addEventListener('submit', async (e) => {
     showMainView();
     if (typeof refreshUser === "function") refreshUser();   // main.js 加载后可用
     if (typeof refreshTasks === "function") refreshTasks(); // main.js 加载后可用
+    if (typeof refreshModelLabel === "function") refreshModelLabel(); // 模型标签（首次调用可能竞态失败）
   } catch (err) {
     errorEl.textContent = (typeof err === 'string' ? err : (err && err.message)) || '登录失败，请重试';
   } finally {
