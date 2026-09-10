@@ -97,8 +97,11 @@ pub async fn report_pending_update(app: AppHandle) {
 pub async fn check_update(app: AppHandle) -> Result<String, String> {
     // D5：endpoint 运行时注入（tauri.conf.json 不再持有 endpoints），URL = 构建期烧录的
     // portal_base() + 固定路径（方案 §7.1）。endpoints 收 Vec<Url> 且返回 Result。
+    // {{target}}/{{current_version}} 由插件请求前替换（2.11.0 updater.rs :459-489，query 里的
+    // 花括号不被 url crate 编码）：服务端据此对「该平台无产物」回 204（无更新），
+    // 避免 platforms 缺键被插件判 TargetsNotFound 报错。
     let endpoint = url::Url::parse(&format!(
-        "{}/agent-updates/latest.json",
+        "{}/agent-updates/latest.json?target={{{{target}}}}&current_version={{{{current_version}}}}",
         crate::portal_base()
     ))
     .map_err(|e| e.to_string())?;

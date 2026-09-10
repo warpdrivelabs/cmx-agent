@@ -559,21 +559,14 @@ fn main() {
             }
             Ok(())
         })
-        // 登录门守卫：未登录时关闭登录窗 = 退出应用（否则只剩隐藏的主窗，界面像卡死）。
-        // 主窗关闭 = 退出应用：登录窗现常驻隐藏复用（不再销毁），主窗 X 后若无此守卫，
-        // 隐藏的登录窗会让进程残留成"假死"。
-        .on_window_event(|window, event| {
+        // 关窗守卫：用户关闭任何可见窗口 = 退出应用（无托盘、无常驻诉求）。
+        // 必须无条件硬退出，不能按登录态放行：会话回放/断网保留会让"登录窗可见且已认证"
+        // 真实存在，放行关闭 = 全窗消失但进程残留；exit(0) 优雅退出在 webview 挂死
+        // （如下载卡住）时也会卡在销毁阶段——std::process::exit 直接终结，不留假死。
+        // 本应用状态（auth.json / update-pending.json）均为写穿落盘，硬退出无丢失风险。
+        .on_window_event(|_window, event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
-                match window.label() {
-                    "login" => {
-                        let authed = window.state::<AppState>().app.is_authenticated();
-                        if !authed {
-                            window.app_handle().exit(0);
-                        }
-                    }
-                    "main" => window.app_handle().exit(0),
-                    _ => {}
-                }
+                std::process::exit(0);
             }
         })
         .run(tauri::generate_context!())
