@@ -56,11 +56,11 @@ impl ProviderFile {
     /// （未命中则作为「默认」内置条目追加）；model.json 未配置则尝试 env 同样合并；
     /// 都没有 → 空表（demo 兜底）。
     pub fn load(dir: &Path) -> Self {
-        if let Ok(s) = std::fs::read_to_string(dir.join("providers.json")) {
-            if let Ok(mut pf) = serde_json::from_str::<ProviderFile>(&s) {
-                pf.prune_removed_builtins();
-                return Self::ensure_builtins(pf);
-            }
+        if let Ok(s) = std::fs::read_to_string(dir.join("providers.json"))
+            && let Ok(mut pf) = serde_json::from_str::<ProviderFile>(&s)
+        {
+            pf.prune_removed_builtins();
+            return Self::ensure_builtins(pf);
         }
         Self::seed(dir)
     }

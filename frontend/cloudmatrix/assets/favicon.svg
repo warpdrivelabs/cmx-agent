@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- 外六边形 -->
+  <path d="M128 12 L222.5 66 L222.5 190 L128 244 L33.5 190 L33.5 66 Z"
+        fill="none" stroke="#000" stroke-width="24" stroke-linejoin="round"/>
+  <!-- 内部六角星（由两个三角形叠加） -->
+  <path d="M128 64 L180 152 L76 152 Z
+           M128 192 L76 104 L180 104 Z"
+        fill="none" stroke="#000" stroke-width="24" stroke-linejoin="round" stroke-linecap="round"/>
+</svg>

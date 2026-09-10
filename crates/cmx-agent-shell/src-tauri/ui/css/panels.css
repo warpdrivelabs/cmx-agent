@@ -1,0 +1,79 @@
+  /* 连接器面板 */
+  .connectors-view{flex:1;display:flex;flex-direction:column;min-height:0}
+  .conn-toolbar{display:flex;align-items:center;gap:10px;padding:12px 22px;border-bottom:1px solid var(--border)}
+  .conn-toolbar .ct{font-weight:600;font-size:14px} .conn-toolbar .cm{color:var(--muted);font-size:12px}
+  .conn-toolbar .back{color:var(--ink2);font-size:13px;padding:5px 9px;border-radius:7px} .conn-toolbar .back:hover{background:var(--hover)}
+  .connlist{flex:1;overflow:auto;padding:22px;display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;align-content:start}
+
+  /* 插件 master-detail：列表在侧栏（原位置），详情在主内容区 tab（VSCode 式） */
+  .pg-search{display:flex;gap:6px;padding:2px 0 10px}
+  .pg-search input{flex:1;background:var(--surface);border:1px solid var(--border2);color:var(--ink);border-radius:8px;padding:7px 10px;font-size:12.5px;outline:none}
+  .pg-search input:focus{border-color:var(--aqua)}
+  .pg-refresh{flex:0 0 auto;background:var(--surface);border:1px solid var(--border2);color:var(--ink2);border-radius:8px;padding:0 10px;cursor:pointer}
+  .pg-refresh:hover{background:var(--hover)}
+  .pg-list{flex:1;overflow:auto;margin:0 -4px}
+  .pg-sec{font-size:11px;font-weight:700;color:var(--muted);padding:12px 8px 5px;letter-spacing:.5px}
+  .pg-hint,.pg-loading{color:var(--muted);font-size:12px;padding:8px 10px}
+  .pg-item.sel{background:var(--accent-soft)}
+  .pg-item.sel .pn{color:var(--aqua)}
+  /* 详情（主内容区 tab） */
+  .plugins-detail-view{flex:1;display:flex;flex-direction:column;min-height:0}
+  .pg-detail{flex:1;min-width:0;overflow:auto;background:var(--bg)}
+  .pg-empty{color:var(--muted);font-size:13px;padding:40px 30px;text-align:center}
+  .pg-empty.sm{padding:16px;text-align:left}
+  .pg-detail-inner{padding:0 0 30px}
+  .pg-topbar{height:3px;background:var(--muted)}
+  .pg-detail-inner.is-installed .pg-topbar{background:var(--aqua)}
+  .pg-head{display:flex;gap:16px;padding:22px 26px 12px}
+  .pg-ico{width:64px;height:64px;flex:0 0 64px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:34px;color:#fff}
+  .pg-h-main{min-width:0;flex:1}
+  .pg-title{font-size:19px;font-weight:700;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .pg-sub{color:var(--muted);font-size:12.5px;margin-top:4px}
+  .pg-desc{color:var(--ink2);font-size:13.5px;margin-top:8px;line-height:1.5}
+  .pg-badge{font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;border:1px solid}
+  .pg-badge.installed{color:var(--aqua);border-color:var(--aqua);background:var(--accent-soft)}
+  .pg-badge.disabled{color:var(--muted);border-color:var(--muted)}
+  .pg-badge.market{color:var(--muted);border-color:var(--border2)}
+  .pg-item.pg-off .pic{filter:grayscale(1);opacity:.55} .pg-item.pg-off .pn{color:var(--muted)}
+  .pg-actions{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+  .pg-actbtn{font-size:12.5px;padding:6px 14px;border-radius:8px;border:1px solid var(--border2);background:var(--surface);color:var(--ink);cursor:pointer}
+  .pg-actbtn:hover{background:var(--hover)}
+  .pg-actbtn.primary{background:var(--aqua);border-color:var(--aqua);color:#fff}
+  .pg-actbtn.primary:hover{filter:brightness(1.06)}
+  .pg-actbtn.ghost{background:transparent;color:var(--ink2)}
+  .pg-actbtn.danger{background:var(--red);border-color:var(--red);color:#fff}
+  .pg-actbtn:disabled{opacity:.6;cursor:default}
+  .pg-sec-h{font-size:12px;font-weight:700;color:var(--muted);letter-spacing:.5px;padding:16px 26px 8px;border-top:1px solid var(--border);margin-top:14px}
+  .pg-chips{display:flex;flex-wrap:wrap;gap:7px;padding:2px 26px 4px}
+  .pg-chip{font-size:11.5px;padding:4px 10px;border-radius:7px;background:var(--surface);border:1px solid var(--border2);color:var(--ink2)}
+  .pg-chip.perm{color:var(--violet);border-color:var(--violet)}
+  .pg-chip.warn{color:var(--orange);border-color:var(--orange)}
+  .pg-kvs{padding:6px 26px}
+  .pg-kv{display:flex;gap:10px;font-size:12.5px;padding:3px 0}
+  .pg-kv .k{flex:0 0 90px;color:var(--muted)} .pg-kv .v{color:var(--ink2);word-break:break-all;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .pg-frame-bar{padding:4px 26px 8px;font-size:12px;color:var(--muted)}
+  .pg-link{color:var(--blue);cursor:pointer;text-decoration:underline;word-break:break-all}
+  .pg-frame-hint{color:var(--muted);margin-left:6px}
+  .pg-frame{display:block;width:calc(100% - 52px);height:60vh;margin:0 26px;border:1px solid var(--border2);border-radius:10px;background:#fff}
+  .empty-detail{text-align:center;max-width:420px}
+  .empty-detail .ed-ico{font-size:52px;margin-bottom:14px;opacity:.9}
+  .empty-detail .ed-t{font-size:20px;font-weight:700;margin-bottom:10px}
+  .empty-detail .ed-d{font-size:14px;color:var(--ink2);line-height:1.9}
+  .empty-detail .ed-note{margin-top:18px;font-size:12px;color:var(--muted)}
+  #connlist{flex:1;overflow:auto;padding:22px;display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px;align-content:start}
+  .conn{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px 18px}
+  .conn.offline{opacity:.62}
+  .conn .ch{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+  .conn .ico{width:36px;height:36px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:17px;color:#fff;flex:0 0 36px}
+  .conn.flow .ico{background:var(--blue)} .conn.onto .ico{background:var(--violet)} .conn.report .ico{background:var(--orange)}
+  .conn .cn{font-weight:700;font-size:15px} .conn .cs{font-size:12px;color:var(--muted)}
+  .conn .dot{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600}
+  .conn .dot.on{color:var(--aqua)} .conn .dot.off{color:var(--muted)}
+  .conn .dot .b{width:8px;height:8px;border-radius:50%}
+  .conn .dot.on .b{background:var(--aqua)} .conn .dot.off .b{background:var(--muted)}
+  .conn .desc{font-size:13px;color:var(--ink2);line-height:1.5;margin-bottom:12px}
+  .conn .tools{display:flex;flex-wrap:wrap;gap:7px}
+  .conn .tchip{display:inline-flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--border2);border-radius:8px;padding:6px 11px;font-size:12px;color:var(--ink2);cursor:pointer;font-family:"SF Mono",Menlo,monospace}
+  .conn .tchip:hover{background:var(--hover);color:var(--ink);border-color:var(--aqua)}
+  .conn.offline .tchip{cursor:not-allowed;opacity:.7}
+  .conn .meta{font-size:11px;color:var(--muted);margin-top:10px}

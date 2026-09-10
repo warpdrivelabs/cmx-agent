@@ -1,0 +1,563 @@
+/* ============================================================
+   智方 CloudMatrix - QQ 风格设计系统
+   保持与设计稿一致的设计令牌，并扩展交互、动画、响应式
+   ============================================================ */
+
+:root {
+  /* 主题色 - 与设计稿完全一致 */
+  --qq-background: #ffffff;
+  --qq-foreground: #1f2937;
+  --qq-card: #ffffff;
+  --qq-card-foreground: #1f2937;
+  --qq-popover: #ffffff;
+  --qq-popover-foreground: #1f2937;
+  --qq-primary: #2563eb;
+  --qq-primary-foreground: #ffffff;
+  --qq-muted: #f3f4f6;
+  --qq-muted-foreground: #6b7280;
+  --qq-border: #e5e7eb;
+  --qq-input: #e5e7eb;
+  --qq-ring: #2563eb;
+
+  /* 圆角令牌 */
+  --qq-radius-sm: 6px;
+  --qq-radius-md: 12px;
+  --qq-radius-lg: 24px;
+
+  /* 状态色 */
+  --qq-state-success: #10b981;
+  --qq-state-warning: #f59e0b;
+  --qq-state-error: #ef4444;
+  --qq-state-info: #3b82f6;
+
+  /* 字体栈 */
+  --qq-font-sans: "Inter", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --qq-font-mono: "SFMono-Regular", "JetBrains Mono", "Fira Code", Consolas, monospace;
+
+  /* 间距阶 */
+  --qq-s-1: 4px;
+  --qq-s-2: 8px;
+  --qq-s-3: 12px;
+  --qq-s-4: 16px;
+  --qq-s-5: 24px;
+  --qq-s-6: 32px;
+  --qq-s-7: 48px;
+  --qq-s-8: 80px;
+  --qq-s-9: 120px;
+
+  /* 阴影 */
+  --qq-shadow-1: 0 4px 12px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.04);
+  --qq-shadow-2: 0 12px 32px -8px rgba(37, 99, 235, 0.22);
+  --qq-shadow-3: 0 28px 64px -20px rgba(37, 99, 235, 0.32);
+
+  --qq-footer: #1f2937;
+
+  --qq-hero: #0b1220;
+  --qq-hero-glow: #1e3a8a;
+  --qq-hero-accent: #2563eb;
+
+  /* Header 滚动状态 */
+  --header-h: 64px;
+}
+
+/* 暗色模式（系统级，可选禁用） */
+@media (prefers-color-scheme: dark) {
+  html[data-theme="auto"] {
+    --qq-background: #0b1220;
+    --qq-foreground: #e5e7eb;
+    --qq-card: #111a2e;
+    --qq-card-foreground: #e5e7eb;
+    --qq-popover: #111a2e;
+    --qq-popover-foreground: #e5e7eb;
+    --qq-muted: #1e293b;
+    --qq-muted-foreground: #94a3b8;
+    --qq-border: #1e293b;
+    --qq-input: #1e293b;
+    --qq-footer: #060b16;
+  }
+}
+
+/* ============================================================
+   基础重置
+   ============================================================ */
+* { box-sizing: border-box; }
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: var(--header-h);
+}
+
+body {
+  font-family: var(--qq-font-sans);
+  background-color: var(--qq-background);
+  color: var(--qq-foreground);
+  line-height: 1.6;
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+img, svg { display: block; max-width: 100%; }
+a { color: inherit; text-decoration: none; }
+button { font-family: inherit; cursor: pointer; }
+:focus-visible {
+  outline: 2px solid var(--qq-ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.font-mono { font-family: var(--qq-font-mono); }
+
+/* ============================================================
+   语义化颜色类（与 Tailwind tokens 对齐）
+   ============================================================ */
+.bg-background { background-color: var(--qq-background); }
+.text-foreground { color: var(--qq-foreground); }
+.border-border { border-color: var(--qq-border); }
+.bg-card { background-color: var(--qq-card); }
+.text-card-foreground { color: var(--qq-card-foreground); }
+.bg-primary { background-color: var(--qq-primary); }
+.text-primary { color: var(--qq-primary); }
+.text-primary-foreground { color: var(--qq-primary-foreground); }
+.bg-muted { background-color: var(--qq-muted); }
+.text-muted-foreground { color: var(--qq-muted-foreground); }
+.border-input { border-color: var(--qq-input); }
+.ring-primary { --tw-ring-color: var(--qq-primary); }
+
+/* ============================================================
+   QQ 风格背景与圆角工具类
+   ============================================================ */
+.bg-qq-footer { background-color: var(--qq-footer); }
+.bg-qq-hero {
+  background-color: var(--qq-hero);
+  background-image:
+    radial-gradient(circle at 70% 30%, rgba(37, 99, 235, 0.25) 0%, transparent 55%),
+    radial-gradient(circle at 30% 80%, rgba(30, 58, 138, 0.35) 0%, transparent 50%);
+}
+.rounded-qq-card { border-radius: 32px; }
+
+.shadow-1 { box-shadow: var(--qq-shadow-1); }
+.shadow-2 { box-shadow: var(--qq-shadow-2); }
+.shadow-3 { box-shadow: var(--qq-shadow-3); }
+
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* ============================================================
+   Header
+   ============================================================ */
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background-color: rgba(255, 255, 255, 0.85);
+  backdrop-filter: saturate(180%) blur(12px);
+  -webkit-backdrop-filter: saturate(180%) blur(12px);
+  border-bottom: 1px solid transparent;
+  transition: background-color .25s ease, border-color .25s ease, box-shadow .25s ease;
+}
+.site-header.is-scrolled {
+  background-color: rgba(255, 255, 255, 0.95);
+  border-bottom-color: var(--qq-border);
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.04);
+}
+@media (prefers-color-scheme: dark) {
+  html[data-theme="auto"] .site-header {
+    background-color: rgba(11, 18, 32, 0.85);
+  }
+  html[data-theme="auto"] .site-header.is-scrolled {
+    background-color: rgba(11, 18, 32, 0.95);
+  }
+}
+
+.nav-link {
+  position: relative;
+  color: var(--qq-muted-foreground);
+  transition: color .2s ease;
+}
+.nav-link::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; bottom: -6px;
+  height: 2px;
+  background: var(--qq-primary);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform .25s ease;
+}
+.nav-link:hover { color: var(--qq-primary); }
+.nav-link:hover::after,
+.nav-link.is-active::after { transform: scaleX(1); }
+.nav-link.is-active { color: var(--qq-foreground); }
+
+/* 移动端菜单按钮 */
+.menu-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px; height: 40px;
+  border-radius: 10px;
+  border: 1px solid var(--qq-border);
+  background: var(--qq-card);
+  color: var(--qq-foreground);
+}
+.menu-toggle:hover { color: var(--qq-primary); border-color: var(--qq-primary); }
+
+/* PC（≥768px）不显示移动端菜单按钮与面板——独立于 Tailwind md:hidden 的兜底：
+   Tailwind runtime 未加载/失效时也要保证正确隐藏 */
+@media (min-width: 768px) {
+  #menu-toggle, #mobile-menu { display: none !important; }
+}
+
+/* 移动端菜单面板 */
+.mobile-menu {
+  position: fixed;
+  top: var(--header-h);
+  left: 0; right: 0;
+  background: var(--qq-card);
+  border-bottom: 1px solid var(--qq-border);
+  box-shadow: var(--qq-shadow-1);
+  transform: translateY(-12px);
+  opacity: 0;
+  visibility: hidden;
+  transition: transform .25s ease, opacity .25s ease, visibility .25s ease;
+  z-index: 40;
+}
+.mobile-menu.is-open {
+  transform: translateY(0);
+  opacity: 1;
+  visibility: visible;
+}
+.mobile-menu a {
+  display: block;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--qq-border);
+  color: var(--qq-foreground);
+}
+.mobile-menu a:last-child { border-bottom: 0; }
+.mobile-menu a:hover { background: var(--qq-muted); color: var(--qq-primary); }
+
+/* ============================================================
+   Hero 区
+   ============================================================ */
+.hero-section {
+  position: relative;
+  overflow: hidden;
+}
+.hero-section::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(circle at 18% 20%, rgba(96, 165, 250, 0.15) 0%, transparent 35%),
+    radial-gradient(circle at 82% 70%, rgba(37, 99, 235, 0.18) 0%, transparent 40%);
+  pointer-events: none;
+}
+.hero-content { position: relative; z-index: 2; }
+
+.hero-title {
+  background: linear-gradient(135deg, #ffffff 0%, #bfdbfe 60%, #60a5fa 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.hero-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  color: #fff;
+  padding: 12px 24px;
+  border-radius: 999px;
+  font-weight: 500;
+  transition: background-color .2s ease, transform .2s ease, border-color .2s ease;
+}
+.hero-cta:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.8);
+  transform: translateY(-2px);
+}
+.hero-cta:active { transform: translateY(0); }
+
+.hero-visual {
+  position: relative;
+  width: 100%;
+  max-width: 420px;
+  aspect-ratio: 1 / 1;
+}
+.hero-visual img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  object-position: 42% 42%;
+  animation: float 6s ease-in-out infinite;
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+/* ============================================================
+   下载卡片
+   ============================================================ */
+.download-card {
+  background: var(--qq-card);
+  border-radius: 32px;
+  box-shadow: var(--qq-shadow-1);
+  padding: 48px;
+  text-align: center;
+  transition: box-shadow .3s ease, transform .3s ease;
+}
+.download-card:hover { box-shadow: var(--qq-shadow-2); }
+
+.os-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 24px 20px;
+  border-radius: 20px;
+  background: var(--qq-muted);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: transform .2s ease, border-color .2s ease, background-color .2s ease, box-shadow .2s ease;
+  position: relative;
+}
+.os-tile:hover {
+  transform: translateY(-4px);
+  border-color: var(--qq-primary);
+  background: #fff;
+  box-shadow: var(--qq-shadow-2);
+}
+.os-tile img { width: 48px; height: 48px; }
+.os-tile .os-name { font-size: 14px; color: var(--qq-muted-foreground); }
+.os-tile .os-size { font-size: 12px; color: var(--qq-muted-foreground); opacity: 0.7; }
+.os-tile:hover .os-name { color: var(--qq-foreground); }
+
+/* 平台无产物（更新源未登记该平台安装包 / 源不可达）：置灰且不可点 */
+.os-tile.is-unavailable {
+  opacity: .5;
+  cursor: not-allowed;
+}
+.os-tile.is-unavailable:hover {
+  transform: none;
+  border-color: transparent;
+  background: var(--qq-muted);
+  box-shadow: none;
+}
+
+/* 下载按钮 */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 24px;
+  background: var(--qq-primary);
+  color: var(--qq-primary-foreground);
+  border-radius: 999px;
+  font-weight: 600;
+  border: 1px solid var(--qq-primary);
+  transition: transform .2s ease, box-shadow .2s ease, background-color .2s ease;
+}
+.btn-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--qq-shadow-2);
+}
+.btn-primary:active { transform: translateY(0); }
+
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 24px;
+  background: transparent;
+  color: var(--qq-foreground);
+  border: 1px solid var(--qq-border);
+  border-radius: 999px;
+  font-weight: 500;
+  transition: border-color .2s ease, color .2s ease, background-color .2s ease;
+}
+.btn-ghost:hover { border-color: var(--qq-primary); color: var(--qq-primary); background: var(--qq-muted); }
+
+/* ============================================================
+   特性卡片
+   ============================================================ */
+.feature-card {
+  background: var(--qq-card);
+  border: 1px solid var(--qq-border);
+  border-radius: 20px;
+  padding: 28px;
+  transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease;
+  height: 100%;
+}
+.feature-card:hover {
+  transform: translateY(-4px);
+  border-color: var(--qq-primary);
+  box-shadow: var(--qq-shadow-2);
+}
+.feature-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px; height: 48px;
+  border-radius: 12px;
+  background: rgba(37, 99, 235, 0.1);
+  color: var(--qq-primary);
+  margin-bottom: 16px;
+}
+
+/* ============================================================
+   FAQ 折叠面板
+   ============================================================ */
+.faq-item {
+  border: 1px solid var(--qq-border);
+  border-radius: 16px;
+  background: var(--qq-card);
+  overflow: hidden;
+  transition: border-color .2s ease, box-shadow .2s ease;
+}
+.faq-item.is-open {
+  border-color: var(--qq-primary);
+  box-shadow: var(--qq-shadow-1);
+}
+.faq-question {
+  width: 100%;
+  text-align: left;
+  padding: 18px 24px;
+  background: transparent;
+  border: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--qq-foreground);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.faq-question:hover { color: var(--qq-primary); }
+.faq-question .chev {
+  flex-shrink: 0;
+  transition: transform .25s ease;
+}
+.faq-item.is-open .faq-question .chev { transform: rotate(180deg); }
+.faq-answer {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height .3s ease;
+}
+.faq-answer-inner {
+  padding: 0 24px 20px;
+  color: var(--qq-muted-foreground);
+  line-height: 1.7;
+}
+
+/* ============================================================
+   Footer
+   ============================================================ */
+.site-footer {
+  background-color: var(--qq-footer);
+  color: #fff;
+}
+.site-footer a { color: rgba(255, 255, 255, 0.7); transition: color .2s ease; }
+.site-footer a:hover { color: #fff; }
+
+/* ============================================================
+   滚动入场动画
+   ============================================================ */
+[data-animate] {
+  opacity: 0;
+  transform: translateY(24px);
+  transition: opacity .6s ease, transform .6s ease;
+  will-change: transform, opacity;
+}
+[data-animate].is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+[data-animate][data-animate-delay="1"] { transition-delay: .08s; }
+[data-animate][data-animate-delay="2"] { transition-delay: .16s; }
+[data-animate][data-animate-delay="3"] { transition-delay: .24s; }
+[data-animate][data-animate-delay="4"] { transition-delay: .32s; }
+
+/* Toast 提示 */
+.toast {
+  position: fixed;
+  bottom: 32px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: var(--qq-foreground);
+  color: var(--qq-background);
+  padding: 10px 20px;
+  border-radius: 999px;
+  font-size: 14px;
+  box-shadow: var(--qq-shadow-2);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity .25s ease, transform .25s ease, visibility .25s ease;
+  z-index: 100;
+  pointer-events: none;
+}
+.toast.is-show {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ============================================================
+   响应式适配
+   ============================================================ */
+@media (max-width: 1024px) {
+  .download-card { padding: 36px 28px; }
+}
+
+@media (max-width: 768px) {
+  :root { --header-h: 56px; }
+
+  .download-card {
+    padding: 28px 20px;
+    border-radius: 24px;
+  }
+  .download-card .os-row {
+    flex-direction: row;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .os-tile {
+    flex: 1;
+    padding: 16px 8px;
+    border-radius: 16px;
+  }
+  .os-tile img { width: 36px; height: 36px; }
+  .os-tile .os-name { font-size: 12px; }
+  .os-tile .os-size { font-size: 11px; }
+
+  .hero-visual { max-width: 280px; }
+}
+
+@media (max-width: 480px) {
+  .download-card { padding: 24px 16px; }
+  .os-tile { padding: 12px 4px; }
+  .os-tile img { width: 32px; height: 32px; }
+}
+
+/* 减少动画偏好 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+  html { scroll-behavior: auto; }
+  .hero-visual img { animation: none; }
+  [data-animate] { opacity: 1; transform: none; }
+}
+
+/* 打印友好 */
+@media print {
+  .site-header, .hero-cta, .menu-toggle, .mobile-menu, .toast { display: none !important; }
+  .bg-qq-hero { background: #fff !important; color: #000 !important; }
+  .hero-title { color: #1e3a8a !important; -webkit-text-fill-color: #1e3a8a; }
+}

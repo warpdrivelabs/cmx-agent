@@ -15,10 +15,8 @@ use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
 use cmx_agent_app::{AgentApp, DesktopAppBuilder, dispatch_json};
 
-/// 前端单页（内嵌，免额外静态文件依赖）。
+/// 前端单页 SPA（内嵌，css/js 拆分为静态资源经 include_bytes! 内嵌）。
 const INDEX_HTML: &str = include_str!("../ui/index.html");
-/// 登录页（内嵌）。参照 CMXPortalManager 登录方式，对接门户 /api/auth。
-const LOGIN_HTML: &str = include_str!("../ui/login.html");
 /// cmx 品牌图标（左下按钮）。从项目 images/ 内嵌。
 const CMX_PNG: &[u8] = include_bytes!("../../../images/cmx.png");
 
@@ -47,8 +45,9 @@ async fn main() {
 
     let router = Router::new()
         .route("/", get(index))
-        .route("/login", get(login_page))
         .route("/cmx.png", get(cmx_png))
+        .route("/css/{*path}", get(css_asset))
+        .route("/js/{*path}", get(js_asset))
         .route("/api", post(api))
         .route("/api/stream", post(api_stream))
         .route("/health", get(|| async { "ok" }))
@@ -106,12 +105,55 @@ async fn index() -> Html<&'static str> {
     Html(INDEX_HTML)
 }
 
-async fn login_page() -> Html<&'static str> {
-    Html(LOGIN_HTML)
-}
-
 async fn cmx_png() -> impl IntoResponse {
     ([(axum::http::header::CONTENT_TYPE, "image/png")], CMX_PNG)
+}
+
+/// 静态 CSS 资源路由：path 匹配到 include_bytes! 内嵌内容，Content-Type text/css。
+async fn css_asset(
+    axum::extract::Path(path): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let body: &[u8] = match path.as_str() {
+        "tokens.css" => include_bytes!("../ui/css/tokens.css"),
+        "layout.css" => include_bytes!("../ui/css/layout.css"),
+        "modals.css" => include_bytes!("../ui/css/modals.css"),
+        "chat.css" => include_bytes!("../ui/css/chat.css"),
+        "panels.css" => include_bytes!("../ui/css/panels.css"),
+        "login.css" => include_bytes!("../ui/css/login.css"),
+        _ => return axum::http::StatusCode::NOT_FOUND.into_response(),
+    };
+    (
+        [(axum::http::header::CONTENT_TYPE, "text/css")],
+        body,
+    )
+        .into_response()
+}
+
+/// 静态 JS 资源路由：path 匹配到 include_bytes! 内嵌内容，Content-Type application/javascript。
+async fn js_asset(
+    axum::extract::Path(path): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let body: &[u8] = match path.as_str() {
+        "bridge.js" => include_bytes!("../ui/js/bridge.js"),
+        "tabs.js" => include_bytes!("../ui/js/tabs.js"),
+        "markdown.js" => include_bytes!("../ui/js/markdown.js"),
+        "render.js" => include_bytes!("../ui/js/render.js"),
+        "session.js" => include_bytes!("../ui/js/session.js"),
+        "panels.js" => include_bytes!("../ui/js/panels.js"),
+        "model.js" => include_bytes!("../ui/js/model.js"),
+        "im.js" => include_bytes!("../ui/js/im.js"),
+        "login.js" => include_bytes!("../ui/js/login.js"),
+        "main.js" => include_bytes!("../ui/js/main.js"),
+        _ => return axum::http::StatusCode::NOT_FOUND.into_response(),
+    };
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "application/javascript",
+        )],
+        body,
+    )
+        .into_response()
 }
 
 /// 唯一 API：前端 POST 一段 JSON 命令，回一段 JSON 响应（= Tauri invoke 边界的 HTTP 版）。

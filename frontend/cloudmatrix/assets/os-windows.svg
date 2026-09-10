@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="Windows">
+  <defs>
+    <linearGradient id="win-blue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="18" height="18" rx="2" fill="url(#win-blue)"/>
+  <rect x="26" y="4" width="18" height="18" rx="2" fill="url(#win-blue)" opacity="0.85"/>
+  <rect x="4" y="26" width="18" height="18" rx="2" fill="url(#win-blue)" opacity="0.85"/>
+  <rect x="26" y="26" width="18" height="18" rx="2" fill="url(#win-blue)" opacity="0.7"/>
+</svg>

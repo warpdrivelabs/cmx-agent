@@ -4,9 +4,8 @@
 //! 业务全在已测的 cmx-agent-app（façade / JSONL 落库 / 前门协议 / 五层守卫 / 认证），与 Web 壳共用同一核。
 //! 前端 `ui/index.html` 里 `call()` 检测 `window.__TAURI__` 走 invoke，否则回退 HTTP。
 //!
-//! 登录门（当前态：回滚用旧双窗口 UI——新前端 frontend/ 已就绪待切换，见方案 §19）：
-//! 启动时主窗口隐藏、只显示 `login` 窗口；登录成功后显示主窗并关闭登录窗。
-//! 新前端切回时将恢复单窗口 SPA（`#/login` 路由，方案 §11.4），届时删除本段与三命令。
+//! 登录门（SPA 单窗口）：启动后只开一个 `main` 窗口，前端 js/login.js 通过 hash 路由
+//! （#/login ↔ #/）切换登录/主视图，不再使用双窗口。`login` 命令仅做认证 dispatch。
 
 // Windows 发布版按"窗口程序"链接，双击不挂控制台终端；调试版保留终端看 eprintln 日志。
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
@@ -295,45 +294,9 @@ async fn agent(payload: String, state: State<'_, AppState>) -> Result<String, St
 fn platform() -> &'static str {
     std::env::consts::OS
 }
-/// 启动守卫（主窗口前端调用）：若当前**未认证**，则隐藏主窗口、显示并聚焦登录窗口。
-///
-/// 登录门是「每次启动先见登录窗」的既定行为；但主窗口的 `index.html` 启动即渲染、不检查登录态，
-/// 而 `visible:false` 的配置在部分平台/场景下不保证前面隐藏。此命令把启动行为与登出行为对齐：
-/// 未登录 → 回到登录窗（同 `logout_to_login`）。前端在 `refreshUser()` 拉到空用户时调用。
-#[tauri::command]
-fn guard_login(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    if state.app.is_authenticated() {
-        return Ok(()); // 已登录：保持主窗口
-    }
-    // 未登录：隐藏主窗口，重建/显示登录窗。
-    if let Some(login_win) = app.get_webview_window("login") {
-        let _ = login_win.show();
-        let _ = login_win.set_focus();
-    } else {
-        tauri::WebviewWindowBuilder::new(
-            &app,
-            "login",
-            tauri::WebviewUrl::App("login.html".into()),
-        )
-        .title("登录 · TrueMate")
-        .inner_size(980.0, 640.0)
-        .resizable(false)
-        .center()
-        .build()
-        .map_err(|e| e.to_string())?;
-    }
-    if let Some(main) = app.get_webview_window("main") {
-        let _ = main.hide();
-    }
-    Ok(())
-}
-
-/// 登录命令（登录窗口专用）：校验凭据 → **成功则显示主窗口并关闭登录窗**，返回用户 JSON；失败返回错误文案。
-///
-/// 这正是「登录成功后打开现有窗口」：主窗口在启动时已创建但 `visible:false`，此处仅 `show()` 之。
+/// 登录命令（SPA 单窗口）：校验凭据 → 返回用户 JSON（前端 js/login.js 切视图）；失败返回错误文案。
 #[tauri::command]
 async fn login(
-    app: tauri::AppHandle,
     state: State<'_, AppState>,
     username: String,
     password: String,
@@ -349,16 +312,6 @@ async fn login(
             .and_then(|d| d.get("user"))
             .cloned()
             .unwrap_or(serde_json::Value::Null);
-        eprintln!("[login] ok; revealing main window");
-        // 显示已存在的主窗口 + 隐藏登录窗（**不销毁**：登出直接 show 复用，避免每次跨线程重建 webview——曾致登出卡死）。通知主窗口刷新用户信息。
-        if let Some(main) = app.get_webview_window("main") {
-            let _ = main.show();
-            let _ = main.set_focus();
-            let _ = main.emit("logged-in", user.clone());
-        }
-        if let Some(login_win) = app.get_webview_window("login") {
-            let _ = login_win.hide();
-        }
         Ok(user.to_string())
     } else {
         let msg = v
@@ -371,38 +324,6 @@ async fn login(
         Err(msg)
     }
 }
-
-/// 登出并回到登录窗（主窗口菜单「退出登录」调用）：清认证态 → 隐藏主窗 → 显示/重建登录窗。
-///
-/// ⚠ 必须是 **sync 命令**（跑主线程）：`WebviewWindowBuilder::build()` 在 async 命令（异步运行时线程）
-/// 里跨线程建窗，Windows/WebView2 下偶发死锁——正是"退出登录经常卡死"的根因。登录窗常驻隐藏复用，
-/// 常规登出只剩 show/hide，不再建窗；build 分支仅作窗口意外丢失时的兜底（此时已安全在主线程）。
-#[tauri::command]
-fn logout_to_login(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    state.app.logout();
-    // 主窗先藏、登录窗再亮：先 show 后 hide 会两窗瞬间同屏闪出主窗残影。
-    if let Some(main) = app.get_webview_window("main") {
-        let _ = main.hide();
-    }
-    if let Some(login_win) = app.get_webview_window("login") {
-        let _ = login_win.show();
-        let _ = login_win.set_focus();
-    } else {
-        tauri::WebviewWindowBuilder::new(
-            &app,
-            "login",
-            tauri::WebviewUrl::App("login.html".into()),
-        )
-        .title("登录 · TrueMate")
-        .inner_size(980.0, 640.0)
-        .resizable(false)
-        .center()
-        .build()
-        .map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
 
 fn build_app() -> AgentApp {
     // 双壳统一数据根（与 Web 壳同一份：model.json / 会话共享；CMX_AGENT_DATA_DIR 可覆盖，隔离测试用）。
@@ -537,7 +458,7 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(AppState { app })
-        .invoke_handler(tauri::generate_handler![agent, login, logout_to_login, guard_login, send_stream, platform, im_config, update_common::get_app_version, update_common::check_update, update_common::download_and_install])
+        .invoke_handler(tauri::generate_handler![agent, login, send_stream, platform, im_config, update_common::get_app_version, update_common::check_update, update_common::download_and_install])
         // U16：会话事件总线 → 前端实时通道。常驻 task 订阅 AgentApp 的 event_bus，把任意来源
         //（本地 / IM 桥 / 后续 webhook）的会话事件 emit 成全局 `session_event` Tauri 事件。
         // 前端 `index.html` 监听它，按 session_id 分流渲染——实现「飞书发消息实时显示到对话界面」，
@@ -545,31 +466,27 @@ fn main() {
         // 同时设置 cmx 图标（Linux 任务栏/标题栏；bundle.icon 仅打包时生效）。
         .setup(|app| {
             // Windows/Linux 关主窗系统装饰（前端自绘三键 + 缩放热区）；macOS 走 Overlay 交通灯。
-            // 平台差异运行时处理：平台 conf 只放 bundle.targets，避免 windows 数组整体替换导致三份配置重复。
-            if !cfg!(target_os = "macos") {
-                if let Some(main) = app.get_webview_window("main") {
+            // 窗口 visible:false 创建（conf），装饰处理完再 show——消除首帧白屏 + 系统标题栏闪烁。
+            if let Some(main) = app.get_webview_window("main") {
+                if !cfg!(target_os = "macos") {
                     let _ = main.set_decorations(false);
                 }
+                let _ = main.show();
+                let _ = main.set_focus();
             }
             // P1 更新上报：启动即异步消费 pending 标记（升级成功才计数），不阻塞启动。
             tauri::async_runtime::spawn(update_common::report_pending_update(app.handle().clone()));
             let app_state = app.state::<AppState>();
             let app_ref = app_state.app.clone();
             let handle = app.handle().clone();
-            // 会话回放：本地 auth.json 有效（access 可用或 refresh 续签成功）→ 隐藏登录窗、
-            // 直进主窗，免每次启动登录；无效/无会话则保持登录门（conf 默认 login 可见）。
-            // 阻塞主线程跑一次短网络校验（/me 为 JWT 校验级延迟）换窗口状态首帧前确定，避免闪跳。
+            // 会话回放：本地 auth.json 有效（access 可用或 refresh 续签成功）→ 恢复认证态。
+            // 窗口视图切换由前端 SPA 路由决定（js/login.js 检查 whoami 后切 #/ 或 #/login）。
             let restored = net_rt().block_on(app_ref.try_restore_session());
             if restored {
-                if let Some(login_win) = app.get_webview_window("login") {
-                    let _ = login_win.hide();
-                }
-                if let Some(main) = app.get_webview_window("main") {
-                    let _ = main.show();
-                    let _ = main.set_focus();
-                    let user = app_ref.current_user().unwrap_or(serde_json::Value::Null);
-                    let _ = main.emit("logged-in", user);
-                }
+                eprintln!("[session] 会话回放成功（认证态已恢复）");
+                // 通知前端切到主视图（webview JS 跑在 block_on 完成前，whoami 会暂时失败）
+                let user = app_ref.current_user().unwrap_or(serde_json::Value::Null);
+                let _ = app.handle().emit("logged-in", user);
             }
             net_rt().spawn(async move {
                 let mut rx = app_ref.event_bus().subscribe();

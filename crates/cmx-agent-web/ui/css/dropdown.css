@@ -1,0 +1,48 @@
+/* ── 自绘下拉组件（cmx-dd）──
+   替换原生 <select> 的弹出列表（OS 渲染无法主题化）。
+   原生 select 隐藏（.cmx-dd-native），自绘 trigger + option list 完全可控。
+   兼容：select.value 读写 + change 事件照常工作。 */
+.cmx-dd{position:relative;display:inline-flex}
+.cmx-dd-native{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);pointer-events:none}
+
+/* 触发按钮 */
+.cmx-dd-trigger{
+  display:inline-flex;align-items:center;gap:8px;
+  background:var(--surface);border:1px solid var(--border2);border-radius:8px;
+  padding:7px 12px;color:var(--ink);font-family:inherit;font-size:13px;
+  cursor:pointer;outline:none;transition:border-color .2s,box-shadow .2s;
+  white-space:nowrap;min-width:0;
+}
+.cmx-dd-trigger:hover{border-color:var(--aqua)}
+.cmx-dd-trigger:focus{border-color:var(--aqua);box-shadow:0 0 0 2px var(--accent-soft)}
+.cmx-dd-label{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
+.cmx-dd-arrow{flex-shrink:0;color:var(--muted);transition:transform .2s}
+.cmx-dd.on .cmx-dd-arrow{transform:rotate(180deg)}
+
+/* 弹出列表 */
+.cmx-dd-list{
+  position:absolute;top:calc(100% + 4px);left:0;min-width:100%;z-index:1000;
+  background:var(--panel);border:1px solid var(--border2);border-radius:10px;
+  padding:4px;box-shadow:0 8px 28px rgba(0,0,0,.4);
+  display:none;max-height:260px;overflow-y:auto;
+}
+.cmx-dd-list.on{display:block}
+.cmx-dd-item{
+  display:flex;align-items:center;gap:6px;
+  padding:8px 12px;border-radius:7px;font-size:13px;
+  color:var(--ink2);cursor:pointer;white-space:nowrap;
+  transition:background .12s,color .12s;
+}
+.cmx-dd-item:hover{background:var(--hover);color:var(--ink)}
+.cmx-dd-item.active{color:var(--aqua);background:var(--accent-soft);font-weight:600}
+.cmx-dd-item .dd-check{margin-left:auto;flex-shrink:0;opacity:0}
+.cmx-dd-item.active .dd-check{opacity:1}
+
+/* .selbtn 场景：trigger 继承 selbtn 的 chip 风格 */
+.selbtn .cmx-dd-trigger{background:var(--panel2);border-color:var(--border2);border-radius:9px;padding:7px 12px;color:var(--ink2);font-size:13px}
+.selbtn .cmx-dd-trigger:hover{background:var(--hover);border-color:var(--aqua);color:var(--ink)}
+
+/* .mcfg-row / .scfg-row 场景：宽度撑满 */
+.mcfg-row .cmx-dd,.scfg-row .cmx-dd{width:100%}
+.mcfg-row .cmx-dd-trigger,.scfg-row .cmx-dd-trigger{width:100%}
+.mcfg-row .cmx-dd-list,.scfg-row .cmx-dd-list{width:100%}

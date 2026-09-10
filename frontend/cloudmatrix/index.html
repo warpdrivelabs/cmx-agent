@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b1220" />
+  <meta name="description" content="普联软件·智方（CloudMatrix）- 认真工作，真心搭档。TrueMate Agent 由 TrueOnto 驱动，支持 Linux / Windows / macOS 三端。" />
+  <title>普联软件·智方（CloudMatrix）</title>
+
+  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
+
+  <!-- Tailwind（本地化 runtime 4.3.1，与原设计稿一致；不依赖外网 CDN）
+       字体走 --qq-font-sans 的系统栈（PingFang SC / Microsoft YaHei 等），中文显示不受影响 -->
+  <script src="js/tailwind.browser.js"></script>
+  <!-- Lucide 图标（本地化，v1.8.0 官方 UMD 包；lucide 1.x 起 createIcons 必须传 { icons }） -->
+  <script src="js/lucide.min.js" defer></script>
+
+  <!-- QQ 风格设计系统 -->
+  <link rel="stylesheet" href="css/styles.css" />
+
+  <style type="text/tailwindcss">
+    @theme inline {
+      --color-background: var(--qq-background);
+      --color-foreground: var(--qq-foreground);
+      --color-card: var(--qq-card);
+      --color-card-foreground: var(--qq-card-foreground);
+      --color-popover: var(--qq-popover);
+      --color-popover-foreground: var(--qq-popover-foreground);
+      --color-primary: var(--qq-primary);
+      --color-primary-foreground: var(--qq-primary-foreground);
+      --color-muted: var(--qq-muted);
+      --color-muted-foreground: var(--qq-muted-foreground);
+      --color-border: var(--qq-border);
+      --color-input: var(--qq-input);
+      --color-ring: var(--qq-ring);
+      --radius-sm: var(--qq-radius-sm);
+      --radius-md: var(--qq-radius-md);
+      --radius-lg: var(--qq-radius-lg);
+    }
+  </style>
+</head>
+<body class="min-h-screen font-sans antialiased">
+  <main>
+    <!-- ============================================================
+         Header
+    ============================================================ -->
+    <header id="site-header" class="site-header">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 h-14 sm:h-16 flex items-center justify-between gap-4">
+        <a href="#hero" class="flex items-center flex-shrink-0" aria-label="智方 CloudMatrix 首页">
+          <img src="assets/logo-zh.svg" alt="智方 CloudMatrix" style="height:28px" />
+        </a>
+        <nav class="hidden md:flex items-center gap-8 text-sm font-medium" aria-label="主导航">
+          <a href="#hero" class="nav-link is-active">首页</a>
+          <a href="#features" class="nav-link">特性</a>
+          <a href="#download-card" class="nav-link">下载</a>
+          <a href="#faq" class="nav-link">FAQ</a>
+          <a href="https://gitee.com/warpdrivelabs" target="_blank" rel="noopener" class="nav-link">Gitee</a>
+        </nav>
+        <div class="hidden md:flex items-center gap-3">
+          <a href="#download-card" class="btn-primary text-sm">
+            <i data-lucide="download" class="w-4 h-4"></i>
+            立即下载
+          </a>
+        </div>
+        <button id="menu-toggle" class="menu-toggle md:hidden" aria-label="打开菜单" aria-expanded="false" aria-controls="mobile-menu">
+          <i data-lucide="menu" class="w-5 h-5"></i>
+        </button>
+      </div>
+    </header>
+
+    <!-- 移动端菜单 -->
+    <nav id="mobile-menu" class="mobile-menu md:hidden" aria-label="移动端导航">
+      <a href="#hero">首页</a>
+      <a href="#features">特性</a>
+      <a href="#download-card">下载</a>
+      <a href="#faq">FAQ</a>
+      <a href="https://gitee.com/warpdrivelabs" target="_blank" rel="noopener">Gitee ↗</a>
+    </nav>
+
+    <!-- ============================================================
+         Hero
+    ============================================================ -->
+    <section id="hero" class="hero-section bg-qq-hero w-full min-h-[540px] flex items-center">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 w-full py-12 sm:py-16">
+        <div class="hero-content flex flex-col lg:flex-row items-center justify-between gap-10 lg:gap-12">
+          <div class="text-white max-w-xl text-center lg:text-left">
+            <p class="text-2xl font-semibold tracking-widest text-white mb-4" data-animate data-animate-delay="1">普联软件</p>
+            <h1 class="hero-title text-5xl sm:text-6xl font-bold tracking-tight mb-4" data-animate data-animate-delay="1">TrueMate</h1>
+            <p class="text-2xl sm:text-3xl font-medium mb-3 text-white" data-animate data-animate-delay="2">Work true. Mate true.</p>
+            <p class="text-lg text-white/80 mb-8" data-animate data-animate-delay="2">认真工作，真心搭档</p>
+            <div class="flex flex-wrap items-center gap-3 justify-center lg:justify-start" data-animate data-animate-delay="3">
+              <a href="#download-card" class="hero-cta">
+                <i data-lucide="download" class="w-4 h-4"></i>
+                立即下载
+              </a>
+              <a href="#features" class="hero-cta">
+                了解 TrueMate
+                <i data-lucide="arrow-right" class="w-4 h-4"></i>
+              </a>
+            </div>
+            <div class="flex items-center gap-6 mt-8 text-sm text-white/60 justify-center lg:justify-start" data-animate data-animate-delay="4">
+              <span class="flex items-center gap-1.5"><i data-lucide="shield-check" class="w-4 h-4"></i> 开源可审计</span>
+              <span class="flex items-center gap-1.5"><i data-lucide="zap" class="w-4 h-4"></i> 本地优先</span>
+              <span class="flex items-center gap-1.5"><i data-lucide="users" class="w-4 h-4"></i> 多端协作</span>
+            </div>
+          </div>
+          <div class="hero-visual" data-animate data-animate-delay="2">
+            <img src="assets/hero-banner-right-v2.svg" alt="TrueMate Agent" />
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         下载卡片
+    ============================================================ -->
+    <section id="download-card" class="relative z-10 px-4 sm:px-6 lg:px-8 -mt-8 sm:-mt-14 pb-20 sm:pb-24">
+      <div class="max-w-7xl mx-auto">
+        <div class="download-card max-w-4xl mx-auto" data-animate>
+          <h2 class="text-3xl sm:text-4xl font-bold text-foreground mb-2">TrueOnto</h2>
+          <p class="text-lg text-primary font-medium mb-1">Build true. Model true.</p>
+          <p class="text-muted-foreground mb-8 sm:mb-10">构建真实，模型真实 · 三端原生支持<span id="latest-meta"></span></p>
+
+          <div class="os-row flex flex-col sm:flex-row items-stretch sm:items-center justify-center gap-4 sm:gap-6 mb-8 sm:mb-10">
+            <button class="os-tile" data-os="linux" type="button">
+              <img src="assets/os-linux.svg" alt="Linux" />
+              <span class="os-name">Linux</span>
+              <span class="os-size">.deb 安装包</span>
+            </button>
+            <button class="os-tile" data-os="windows" type="button">
+              <img src="assets/os-windows.svg" alt="Windows" />
+              <span class="os-name">Windows</span>
+              <span class="os-size">.exe 安装程序</span>
+            </button>
+            <button class="os-tile" data-os="macos" type="button">
+              <img src="assets/os-macos.svg" alt="macOS" />
+              <span class="os-name">macOS</span>
+              <span class="os-size">.app.tar.gz 应用包</span>
+            </button>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-10 text-left">
+            <div class="flex items-start gap-3 p-4 rounded-xl bg-muted/60">
+              <i data-lucide="cpu" class="w-5 h-5 text-primary flex-shrink-0 mt-0.5"></i>
+              <div>
+                <p class="text-sm font-medium text-foreground">硬件要求</p>
+                <p class="text-xs text-muted-foreground mt-1">4 核 CPU · 8 GB 内存 · 5 GB 磁盘</p>
+              </div>
+            </div>
+            <div class="flex items-start gap-3 p-4 rounded-xl bg-muted/60">
+              <i data-lucide="check-circle" class="w-5 h-5 text-primary flex-shrink-0 mt-0.5"></i>
+              <div>
+                <p class="text-sm font-medium text-foreground">系统要求</p>
+                <p class="text-xs text-muted-foreground mt-1">Ubuntu 20.04+ / Win10+ / macOS 12+</p>
+              </div>
+            </div>
+            <div class="flex items-start gap-3 p-4 rounded-xl bg-muted/60">
+              <i data-lucide="file-text" class="w-5 h-5 text-primary flex-shrink-0 mt-0.5"></i>
+              <div>
+                <p class="text-sm font-medium text-foreground">协议</p>
+                <p class="text-xs text-muted-foreground mt-1">Apache-2.0 · 商用友好</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         特性
+    ============================================================ -->
+    <section id="features" class="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 bg-background">
+      <div class="max-w-7xl mx-auto">
+        <div class="text-center mb-12 sm:mb-16" data-animate>
+          <h2 class="text-3xl sm:text-4xl font-bold text-foreground mb-4">为什么选择 TrueMate</h2>
+          <p class="text-muted-foreground max-w-2xl mx-auto">围绕「真实」构建的智能体平台 —— 真实数据、真实模型、真实协作，让 Agent 真正落地。</p>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 sm:gap-6">
+          <article class="feature-card" data-animate data-animate-delay="1">
+            <div class="feature-icon"><i data-lucide="brain-circuit" class="w-6 h-6"></i></div>
+            <h3 class="text-lg font-semibold text-foreground mb-2">真实建模</h3>
+            <p class="text-sm text-muted-foreground">基于 TrueOnto 引擎，将业务流程沉淀为可复用的本体模型。</p>
+          </article>
+          <article class="feature-card" data-animate data-animate-delay="2">
+            <div class="feature-icon"><i data-lucide="network" class="w-6 h-6"></i></div>
+            <h3 class="text-lg font-semibold text-foreground mb-2">多端协作</h3>
+            <p class="text-sm text-muted-foreground">Linux / Windows / macOS 三端原生，数据本地优先，端到端加密同步。</p>
+          </article>
+          <article class="feature-card" data-animate data-animate-delay="3">
+            <div class="feature-icon"><i data-lucide="workflow" class="w-6 h-6"></i></div>
+            <h3 class="text-lg font-semibold text-foreground mb-2">工作流编排</h3>
+            <p class="text-sm text-muted-foreground">可视化拖拽编排任务，Agent 自动拆解、调度、回顾，可观测可回放。</p>
+          </article>
+          <article class="feature-card" data-animate data-animate-delay="4">
+            <div class="feature-icon"><i data-lucide="shield-check" class="w-6 h-6"></i></div>
+            <h3 class="text-lg font-semibold text-foreground mb-2">开源可审计</h3>
+            <p class="text-sm text-muted-foreground">Apache-2.0 协议，完整源码与构建链可复现，企业内网可独立部署。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         FAQ
+    ============================================================ -->
+    <section id="faq" class="py-16 sm:py-24 px-4 sm:px-6 lg:px-8 bg-background">
+      <div class="max-w-3xl mx-auto">
+        <div class="text-center mb-10 sm:mb-12" data-animate>
+          <p class="text-primary font-medium mb-3">常见问题</p>
+          <h2 class="text-3xl sm:text-4xl font-bold text-foreground mb-4">FAQ</h2>
+          <p class="text-muted-foreground">这里收录了使用过程中最常遇到的问题。</p>
+        </div>
+
+        <div class="space-y-3" data-animate data-animate-delay="1">
+          <div class="faq-item is-open">
+            <button class="faq-question" aria-expanded="true">
+              <span>TrueMate 和 TrueOnto 是什么关系？</span>
+              <i data-lucide="chevron-down" class="w-5 h-5 chev"></i>
+            </button>
+            <div class="faq-answer">
+              <div class="faq-answer-inner">
+                TrueOnto 是底层引擎与本体建模框架，TrueMate 是基于 TrueOnto 构建的、面向终端用户的智能体产品。简单理解：TrueOnto 提供能力，TrueMate 负责交付体验。
+              </div>
+            </div>
+          </div>
+
+          <div class="faq-item">
+            <button class="faq-question" aria-expanded="false">
+              <span>是否支持离线 / 内网部署？</span>
+              <i data-lucide="chevron-down" class="w-5 h-5 chev"></i>
+            </button>
+            <div class="faq-answer">
+              <div class="faq-answer-inner">
+                支持。TrueMate 采用本地优先架构，模型可全量离线加载，所有任务数据本地存储。企业内网可通过私有镜像源完成首次模型同步。
+              </div>
+            </div>
+          </div>
+
+          <div class="faq-item">
+            <button class="faq-question" aria-expanded="false">
+              <span>对硬件有什么要求？</span>
+              <i data-lucide="chevron-down" class="w-5 h-5 chev"></i>
+            </button>
+            <div class="faq-answer">
+              <div class="faq-answer-inner">
+                最低配置：4 核 CPU / 8 GB 内存 / 5 GB 磁盘。如需运行 7B 以上规模模型，建议 16 GB 内存并配置独立 GPU。轻量级任务在主流笔记本上均可流畅运行。
+              </div>
+            </div>
+          </div>
+
+          <div class="faq-item">
+            <button class="faq-question" aria-expanded="false">
+              <span>商用是否需要付费？</span>
+              <i data-lucide="chevron-down" class="w-5 h-5 chev"></i>
+            </button>
+            <div class="faq-answer">
+              <div class="faq-answer-inner">
+                基础版本遵循 Apache-2.0 协议，商用免费。企业版提供额外的 SSO、审计、私有模型市场与 SLA 支持，可联系商务团队获取许可。
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <p class="text-center text-sm text-muted-foreground mt-8" data-animate>
+          没有找到答案？
+          <a href="https://gitee.com/warpdrivelabs" target="_blank" rel="noopener" class="text-primary font-medium hover:underline">在 Gitee 提交 Issue →</a>
+        </p>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         Footer
+    ============================================================ -->
+    <footer id="footer" class="site-footer">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 py-12 sm:py-16 text-center">
+        <img src="assets/logo-zh.svg" alt="智方 CloudMatrix" class="mx-auto" style="height:28px; filter: brightness(0) invert(1);" />
+        <div class="border-t border-white/10 mt-8 pt-6 flex flex-col sm:flex-row items-center justify-center gap-3">
+          <p class="text-sm text-white/60">© 2026 普联软件. All rights reserved.</p>
+          <p class="text-sm font-medium">Powered by TrueOnto | 驱动真实世界模型</p>
+        </div>
+      </div>
+    </footer>
+  </main>
+
+  <!-- Toast -->
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <!-- 交互脚本 -->
+  <script src="js/main.js" defer></script>
+  <script>
+    // 等 lucide 与 DOM 就绪后再渲染图标。
+    // 注意：lucide 1.x 起 createIcons 为破坏性 API——必须显式传 { icons }，
+    // 无参调用会直接抛错（所有 <i data-lucide> 保持空白不渲染）。
+    window.addEventListener('load', () => {
+      if (window.lucide) window.lucide.createIcons({ icons: window.lucide.icons });
+    });
+  </script>
+</body>
+</html>
