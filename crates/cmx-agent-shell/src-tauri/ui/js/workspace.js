@@ -252,7 +252,9 @@ async function queryTrigger(inp,tr){
     if(!WORKSPACE_STATE.current){ POP.loading=false; renderPopover(); return; }
     POP.loading=true; renderPopover();
     try{
-      const r=await call({cmd:"search_workspace_files",query:tr.query,limit:50});
+      // 带上活动会话 id：后端按「会话所属空间」检索（跨空间任务的 @ 提示不能串到别的空间）；
+      // 首页输入框 CURRENT 为空 → 后端用当前空间，与新建任务的归属一致。
+      const r=await call({cmd:"search_workspace_files",query:tr.query,limit:50,session_id:CURRENT||null});
       if(token!==POP.token) return;
       POP.items=(r.ok&&r.data.files)||[];
       if(!r.ok) showToast(r.error?.message||"文件检索失败");

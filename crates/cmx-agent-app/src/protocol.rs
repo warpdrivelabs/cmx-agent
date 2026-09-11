@@ -50,12 +50,15 @@ pub enum AppRequest {
         #[serde(default)]
         id: Option<String>,
     },
-    /// 在当前工作空间内检索文件；@ 悬浮菜单用。
+    /// 检索文件供 @ 悬浮菜单选择；带 `session_id` 时按该会话所属空间检索（跨空间任务
+    /// 的 @ 提示不能看错根），缺省按当前空间。
     SearchWorkspaceFiles {
         #[serde(default)]
         query: String,
         #[serde(default)]
         limit: Option<usize>,
+        #[serde(default)]
+        session_id: Option<String>,
     },
     /// 列出可用技能（当前工具契约）；/ 悬浮菜单用。
     ListSkills,
@@ -266,8 +269,8 @@ async fn dispatch_inner(app: &AgentApp, req: AppRequest) -> Result<AppResponse, 
         AppRequest::SelectWorkspace { id } => Ok(AppResponse::ok(
             app.select_workspace(id.as_deref())?,
         )),
-        AppRequest::SearchWorkspaceFiles { query, limit } => {
-            let files = app.search_workspace_files(&query, limit).await?;
+        AppRequest::SearchWorkspaceFiles { query, limit, session_id } => {
+            let files = app.search_workspace_files(&query, limit, session_id.as_deref()).await?;
             Ok(AppResponse::ok(serde_json::json!({ "files": files })))
         }
         AppRequest::ListSkills => Ok(AppResponse::ok(app.list_skills())),

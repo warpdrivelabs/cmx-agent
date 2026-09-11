@@ -1138,6 +1138,10 @@ impl AgentApp {
             session = session.with_system(sys);
         }
 
+        // 会话可能属于非当前空间（切走当前空间后回到旧任务继续）：按会话所属空间定根，
+        // 保证本回合 fs 工具与 @ 提示解析到同一个工作空间。
+        self.root_agent_to_session_workspace(session_id)?;
+
         // 流式：加载完历史后挂 sink（历史用 push_restored 不触发 sink，故只流式本回合新事件）。
         // 同一个 sink 既是事件 EventSink（全量事件）又是 TurnObserver（文字增量）。
         let before = session.log.len();
@@ -1332,14 +1336,50 @@ impl AgentApp {
         &self,
         query: &str,
         limit: Option<usize>,
+        session_id: Option<&str>,
     ) -> AppResult<Vec<crate::workspace::WorkspaceFile>> {
         let registry = self.workspace_registry()?;
         let query = query.to_string();
         let limit = limit.unwrap_or(80).clamp(1, 200);
+        // @ 提示按「会话创建时所属空间」检索；无会话上下文（首页新建任务）时用当前空间——
+        // 新任务正是要在当前空间里创建，两者一致。
+        let workspace_id = match session_id {
+            Some(sid) => self
+                .store
+                .list()?
+                .into_iter()
+                .find(|m| m.id == sid)
+                .and_then(|m| m.workspace_id),
+            None => None,
+        };
         // 文件索引可能访问大目录；放在阻塞线程里，避免拖慢前端协议派发。
-        tokio::task::spawn_blocking(move || registry.search_files(&query, limit))
-            .await
-            .map_err(|e| AppError::Agent(format!("文件检索任务失败：{e}")))?
+        tokio::task::spawn_blocking(move || match workspace_id {
+            Some(id) => registry.search_files_in(&id, &query, limit),
+            None => registry.search_files(&query, limit),
+        })
+        .await
+        .map_err(|e| AppError::Agent(format!("文件检索任务失败：{e}")))?
+    }
+
+    /// 回合开始前把 agent 文件根切到「会话自己所属的空间」：任务可能属于非当前空间
+    /// （切走当前空间后回到旧任务继续发消息），fs 工具的路径解析必须与该会话的
+    /// @ 提示看同一个根。会话无记录 / 空间已移除时回落当前空间（任务模式语义）。
+    fn root_agent_to_session_workspace(&self, session_id: &str) -> AppResult<()> {
+        let registry = self.workspace_registry()?;
+        let workspace_id = self
+            .store
+            .list()?
+            .into_iter()
+            .find(|m| m.id == session_id)
+            .and_then(|m| m.workspace_id);
+        let rooted = match workspace_id {
+            Some(id) => registry.set_allowed_roots_for(&id, &self.agent)?,
+            None => false,
+        };
+        if !rooted {
+            registry.set_allowed_roots(&self.agent)?;
+        }
+        Ok(())
     }
 
     /// 技能 = 当前已注册工具。前端 / 菜单只做选择，发送后模型仍经工具契约与守卫执行。

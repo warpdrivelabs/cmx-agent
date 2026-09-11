@@ -260,11 +260,42 @@ impl WorkspaceRegistry {
         Ok(())
     }
 
+    /// 把 agent 文件根切到指定空间；空间不存在返回 `false`（调用方回落当前空间）。
+    /// 回合开始前按「会话所属空间」定根用，保证 fs 工具与 @ 提示看同一个根。
+    pub fn set_allowed_roots_for(&self, id: &str, agent: &cmx_agent_core::Agent) -> AppResult<bool> {
+        let path = {
+            let state = self.state.read().expect("workspace state");
+            state.items.iter().find(|w| w.id == id).map(|w| w.path.clone())
+        };
+        match path {
+            Some(path) => {
+                let mut policy = agent.policy();
+                policy.allowed_roots = vec![path];
+                agent.set_policy(policy);
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
     pub fn search_files(&self, query: &str, limit: usize) -> AppResult<Vec<WorkspaceFile>> {
         let Some(root) = self.current_path() else {
             return Ok(Vec::new());
         };
         search_workspace_dir(&root, query, limit)
+    }
+
+    /// 在指定空间内检索文件。@ 提示按「会话所属空间」搜，而非全局当前空间；
+    /// 空间已被移除时回落当前空间——与侧栏「空间已移除 → 任务组」的归组语义一致。
+    pub fn search_files_in(&self, id: &str, query: &str, limit: usize) -> AppResult<Vec<WorkspaceFile>> {
+        let root = {
+            let state = self.state.read().expect("workspace state");
+            state.items.iter().find(|w| w.id == id).map(|w| w.path.clone())
+        };
+        match root {
+            Some(root) => search_workspace_dir(&root, query, limit),
+            None => self.search_files(query, limit),
+        }
     }
 
     fn persist(&self) -> AppResult<()> {
@@ -594,6 +625,31 @@ mod tests {
         assert_eq!(reg.current_path().unwrap(), expected);
         assert!(expected.join("readme.md").is_file());
         assert!(!legacy.exists());
+        std::fs::remove_dir_all(tmp).ok();
+    }
+
+    #[test]
+    fn search_files_in_scopes_to_requested_workspace_not_current() {
+        let tmp = std::env::temp_dir().join(format!("cmx-ws-scope-{}", unique_suffix()));
+        let reg = WorkspaceRegistry::load_or_init(&tmp, None).unwrap();
+        let dir_a = tmp.join("a");
+        let dir_b = tmp.join("b");
+        std::fs::create_dir_all(&dir_a).unwrap();
+        std::fs::create_dir_all(&dir_b).unwrap();
+        std::fs::write(dir_a.join("alpha.txt"), "a").unwrap();
+        std::fs::write(dir_b.join("beta.txt"), "b").unwrap();
+        let added_a = reg.add_local(&dir_a.to_string_lossy(), Some("A")).unwrap();
+        let id_a = added_a["current"]["id"].as_str().unwrap().to_string();
+        let added_b = reg.add_local(&dir_b.to_string_lossy(), Some("B")).unwrap();
+        let id_b = added_b["current"]["id"].as_str().unwrap().to_string();
+        // 当前空间已切到 B；按会话所属的 A 空间检索只应看到 A 的文件。
+        reg.select(Some(&id_b)).unwrap();
+        let files_a = reg.search_files_in(&id_a, "txt", 50).unwrap();
+        assert!(files_a.iter().any(|f| f.name == "alpha.txt"));
+        assert!(files_a.iter().all(|f| f.name != "beta.txt"));
+        // 空间已被移除 → 回落当前空间（B）。
+        let fallback = reg.search_files_in("nope", "beta", 50).unwrap();
+        assert!(fallback.iter().any(|f| f.name == "beta.txt"));
         std::fs::remove_dir_all(tmp).ok();
     }
 
