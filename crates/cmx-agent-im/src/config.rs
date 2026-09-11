@@ -4,53 +4,58 @@
 //! 解析出的 [`ImConfig`] 经 CLI 装配成 `Arc<dyn ImProvider>` + 白名单，喂给 [`crate::ImBridge`]。
 //!
 //! 环境变量（IM 前缀 `CMX_AGENT_IM_*`）：
-//! - `CMX_AGENT_IM_KIND`：provider 类型，默认 `telegram`；可选 `feishu` / `qq`（企业微信/钉钉后续追加）。
+//! - `CMX_AGENT_IM_KIND`：provider 类型，默认 `feishu`；可选 `qq` / `wechat`。
 //! - `CMX_AGENT_IM_ALLOW`：逗号分隔的 chat_id 白名单（安全必需；CLI 无白名单拒启动）。
 //! - `CMX_AGENT_IM_NO_ALLOW`：设 `1` 显式放开白名单（仅测试/纯内网；生产勿用）。
-//! - Telegram：`CMX_AGENT_IM_TOKEN`（必需）+ 可选 `CMX_AGENT_IM_BASE`。
 //! - 飞书：`CMX_AGENT_IM_FEISHU_APP_ID` + `CMX_AGENT_IM_FEISHU_APP_SECRET`（必需）
 //!   + 可选 `CMX_AGENT_IM_FEISHU_BASE`（默认 `https://open.feishu.cn`，海外用 `https://open.larksuite.com`）。
 //! - QQ：`CMX_AGENT_IM_QQ_APP_ID` + `CMX_AGENT_IM_QQ_APP_SECRET`（必需）
 //!   + 可选 `CMX_AGENT_IM_QQ_BASE`（默认 `https://api.sgroup.qq.com`，沙箱 `https://sandbox.api.sgroup.qq.com`）。
+//! - 微信（ClawBot / iLink）：`CMX_AGENT_IM_WECHAT_BOT_TOKEN`（必需；`cmx-agent im-login`
+//!   扫码后写入 im.json，联调也可直接设 env）+ 可选 `CMX_AGENT_IM_WECHAT_BASE`。
 
 use std::collections::HashSet;
 
-use crate::{FeishuProvider, ImProvider, QqProvider, TelegramProvider};
+use crate::{FeishuProvider, ImProvider, QqProvider, WechatProvider};
 
 /// IM provider 类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImKind {
-    Telegram,
     Feishu,
+    /// QQ 官方机器人（q.qq.com 开放平台，AppID+Secret）。
     Qq,
+    /// 微信 ClawBot（iLink 长轮询）。
+    Wechat,
 }
 
 impl ImKind {
     /// 小写标签，用于会话命名前缀 `im-<label>-<chat>` 与日志。
     pub fn label(&self) -> &'static str {
         match self {
-            Self::Telegram => "telegram",
             Self::Feishu => "feishu",
             Self::Qq => "qq",
+            Self::Wechat => "wechat",
         }
     }
 }
 
 impl ImKind {
-    /// 解析 `CMX_AGENT_IM_KIND`（默认 `telegram`）。未知值返回 `Err`（带可用列表）。
+    /// 解析 `CMX_AGENT_IM_KIND`（默认 `feishu`）。未知值返回 `Err`（带可用列表）。
     pub fn from_env() -> Result<Self, String> {
-        let raw = std::env::var("CMX_AGENT_IM_KIND").unwrap_or_else(|_| "telegram".into());
+        let raw = std::env::var("CMX_AGENT_IM_KIND").unwrap_or_else(|_| "feishu".into());
         parse_kind(&raw)
     }
 }
 
-/// 纯函数：解析 kind 原始值（trim；空 → telegram）。`from_env` 与测试共用，避免 env 写入。
+/// 纯函数：解析 kind 原始值（trim；空 → feishu）。`from_env` 与测试共用，避免 env 写入。
 pub fn parse_kind(raw: &str) -> Result<ImKind, String> {
     match raw.trim() {
-        "" | "telegram" => Ok(ImKind::Telegram),
-        "feishu" => Ok(ImKind::Feishu),
+        "" | "feishu" => Ok(ImKind::Feishu),
         "qq" => Ok(ImKind::Qq),
-        other => Err(format!("未知 CMX_AGENT_IM_KIND: {other}（可选 telegram / feishu / qq）")),
+        "wechat" => Ok(ImKind::Wechat),
+        other => Err(format!(
+            "未知 CMX_AGENT_IM_KIND: {other}（可选 feishu / qq / wechat）"
+        )),
     }
 }
 
@@ -77,11 +82,6 @@ impl ImConfig {
     /// 按配置装配 provider（读各自凭证 env；缺凭证返回 `Err`，带缺哪个）。
     pub fn build_provider(&self) -> Result<std::sync::Arc<dyn ImProvider>, String> {
         let p: std::sync::Arc<dyn ImProvider> = match self.kind {
-            ImKind::Telegram => {
-                let p = TelegramProvider::from_env()
-                    .ok_or_else(|| "缺 CMX_AGENT_IM_TOKEN（Telegram bot token）".to_string())?;
-                std::sync::Arc::new(p)
-            }
             ImKind::Feishu => {
                 let p = FeishuProvider::from_env().ok_or_else(|| {
                     "缺 CMX_AGENT_IM_FEISHU_APP_ID / CMX_AGENT_IM_FEISHU_APP_SECRET".to_string()
@@ -91,6 +91,13 @@ impl ImConfig {
             ImKind::Qq => {
                 let p = QqProvider::from_env()
                     .ok_or_else(|| "缺 CMX_AGENT_IM_QQ_APP_ID / CMX_AGENT_IM_QQ_APP_SECRET".to_string())?;
+                std::sync::Arc::new(p)
+            }
+            ImKind::Wechat => {
+                let p = WechatProvider::from_env().ok_or_else(|| {
+                    "缺 CMX_AGENT_IM_WECHAT_BOT_TOKEN（微信 ClawBot：先运行 cmx-agent im-login 扫码，凭证落 im.json；联调可直接设该 env）"
+                        .to_string()
+                })?;
                 std::sync::Arc::new(p)
             }
         };
@@ -146,11 +153,13 @@ mod tests {
 
     #[test]
     fn kind_parses_values() {
-        assert_eq!(parse_kind("").unwrap(), ImKind::Telegram);
-        assert_eq!(parse_kind("telegram").unwrap(), ImKind::Telegram);
-        assert_eq!(parse_kind("feishu").unwrap(), ImKind::Feishu);
+        assert_eq!(parse_kind("").unwrap(), ImKind::Feishu);
         assert_eq!(parse_kind("  feishu  ").unwrap(), ImKind::Feishu);
         assert_eq!(parse_kind("qq").unwrap(), ImKind::Qq);
+        assert_eq!(parse_kind("wechat").unwrap(), ImKind::Wechat);
+        // 已下线的 kind（telegram/onebot）→ Err（带可选列表），旧 im.json 的 active 会过滤。
+        assert!(parse_kind("telegram").is_err());
+        assert!(parse_kind("onebot").is_err());
         assert!(parse_kind("bogus").is_err());
     }
 }

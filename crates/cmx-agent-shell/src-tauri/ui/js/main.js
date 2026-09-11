@@ -61,7 +61,7 @@ function userProfile(){ closeMenu();
   if(!u){ showToast("尚未登录。"); return; }
   infoDialog("账户信息", (u.nickname||u.username)+"（@"+u.username+"）\n用户 ID："+u.user_id+"\n角色："+((u.roles||[]).join("、")||"—")+"\n\n对接 cmx 门户统一认证（/api/auth）。"); }
 function userSwitch(){ closeMenu(); infoDialog("切换账户", "退出后重新登录即可切换账户/租户。"); }
-function userWorkspace(){ closeMenu(); infoDialog("工作空间（占位）", "管理沙箱工作区根目录与数据目录。"); }
+function userWorkspace(){ closeMenu(); newTask(); setTimeout(openWorkspaceMenu,30); }
 
 function userLogout(){ closeMenu();
   // 自制确认框替代原生 confirm（与主题一致）：取消/点遮罩关闭，确认走 logoutConfirm。
@@ -76,21 +76,14 @@ async function logoutConfirm(){
   location.hash = "#/login"; showLoginView(); // SPA：切登录视图（两壳统一）
 }
 
-// ── 结果面板操作按钮（复制/分享/点赞/差评）：仅图标 + 原生 tooltip（title），注入到 .tchead 右侧 ──
+// ── 结果操作按钮（复制/分享/点赞/差评）：仅图标 + 原生 tooltip（title）。
+// 只挂每回合最终回复的气泡底部（markFinalBubble）；工具执行行保持素净，不再注入按钮。──
 const TOOL_ACT_BTNS =
   `<button class="tcact" data-act="toolCopy" title="复制" aria-label="复制"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>`+
   `<button class="tcact" data-act="toolShare" title="分享" aria-label="分享"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg></button>`+
   `<button class="tcact" data-act="toolLike" title="点赞" aria-label="点赞"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg></button>`+
   `<button class="tcact" data-act="toolDislike" title="差评" aria-label="差评"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"/></svg></button>`;
-function addToolActions(card){
-  const head=card.querySelector(".tchead");
-  if(!head || head.querySelector(".tcacts")) return;
-  const acts=document.createElement("span"); acts.className="tcacts"; acts.innerHTML=TOOL_ACT_BTNS;
-  const meta=head.querySelector(".tcmeta");
-  if(meta){ meta.after(acts); }                              // 跟在「exit N / N 步」右侧
-  else { acts.style.marginLeft="auto"; head.appendChild(acts); }  // 无 meta 时按钮组自己靠右
-}
-// AI 文本气泡：把同款操作按钮作为底部行追加（气泡无表头，放底部）
+// 最终回复气泡：把同款操作按钮作为底部行追加（气泡无表头，放底部）
 function addBubbleActions(bubble){
   if(!bubble || !bubble.innerText.trim() || bubble.querySelector(":scope > .tcacts")) return;
   const acts=document.createElement("div"); acts.className="tcacts bubble-acts"; acts.innerHTML=TOOL_ACT_BTNS;
@@ -134,7 +127,7 @@ function showToast(msg){
 // 内联 onclick 属性全被拦截。用委托（监听在 document 上，由 nonce'd 脚本注册）在两壳都工作。
 const ACTIONS = { newTask, openConnectors, startFromHome, toggleSidebar, toggleTheme, checkUpdate, applyUpdate: updateBtnClick, toggleMenu, menuSettings, menuAbout, toggleVoice, toggleUserMenu, userProfile, userSwitch, userWorkspace, userLogout,
   toggleTabOverflow, tabCtxClose, tabCtxCloseOthers, tabCtxCloseRight, tabCtxCloseAll, winMinimize, winToggleMaximize, winClose,
-  closeSettings, scfgSecretLock: scfgToggleSecretLock, scfgTgLock: scfgToggleTgLock, scfgQqLock: scfgToggleQqLock, scfgSelect: scfgSelectChannel, imcfgSave,
+  closeSettings, scfgSecretLock: scfgToggleSecretLock, scfgQqLock: scfgToggleQqLock, scfgQqLogin, scfgSelect: scfgSelectChannel, scfgWechatLogin, imcfgSave,
   mcfgClose: closeModelConfig, mcfgKeyLock: mcfgToggleKeyLock, mcfgSave: saveModelConfig,
   mcfgNew: mcfgNew, mcfgDelete: deleteModelProvider,
   userChangePassword, pwdClose, pwdExit, pwdSave, logoutCancel, logoutConfirm };
@@ -178,7 +171,12 @@ document.addEventListener("click", e=>{
 
 // 设置面板：平台下拉的 change 委托管不了（click-only）→ 显式监听；点遮罩空白处关闭（target
 // 必须是遮罩自身，避免点进表单误关）。同样绕开被拦的内联 on* 属性。
-document.getElementById("scfg-kind").addEventListener("change", scfgSwitchKind);
+// scfg-kind 是旧设置面板遗留元素（现已不在 HTML 中）——必须判空，否则此处 TypeError 会
+// 中断 main.js 后续全部启动逻辑（主题恢复 / refreshUser / refreshTasks / SPA 回放兜底）。
+{
+  const _scfgKind = document.getElementById("scfg-kind");
+  if(_scfgKind) _scfgKind.addEventListener("change", scfgSwitchKind);
+}
 {
   const _scfgOverlay = document.getElementById("settings-overlay");
   _scfgOverlay.addEventListener("click", e => { if(e.target === _scfgOverlay) closeSettings(); });

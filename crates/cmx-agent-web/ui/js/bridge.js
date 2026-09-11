@@ -31,7 +31,7 @@ document.addEventListener('change', async e => {
 })();
 // ── 流式对话桥（同核多壳）：原生 Tauri 壳走 invoke("send_stream")+事件；Web 壳走 POST /api/stream 的 SSE。──
 // onEvent 收到每个会话事件（含终止标记 {kind:"stream_done"} / {kind:"stream_error",message}）。
-async function streamSend(sessionId, text, onEvent){
+async function streamSend(sessionId, text, onEvent, signal){
   if (window.__TAURI__ && window.__TAURI__.core){
     STREAMING.add(sessionId);   // 标记本地流式中 → session_event 监听跳过，避免双重渲染
     const chan = "agentstream-" + Date.now() + "-" + Math.random().toString(36).slice(2,8);
@@ -41,7 +41,7 @@ async function streamSend(sessionId, text, onEvent){
     return;
   }
   // Web：fetch + ReadableStream 手动解析 SSE（\n\n 分帧，取 data: 行）
-  const r = await fetch("/api/stream", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({session_id:sessionId, text})});
+    const r = await fetch("/api/stream", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({session_id:sessionId, text}), signal});
   const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = "";
   while(true){
     const {value, done} = await reader.read(); if(done) break;

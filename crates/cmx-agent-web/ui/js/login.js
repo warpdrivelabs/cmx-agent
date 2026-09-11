@@ -23,6 +23,17 @@ function routeByHash () {
   checkAuthAndRoute();
 }
 async function checkAuthAndRoute () {
+  // Tauri 壳：先等后台会话回放结束（成功/失败都放行），再查登录态——避免已登录用户
+  // 启动时回放未完成、current_user 暂空而闪一下登录页。断网时回放约 5s（connect_timeout）
+  // 结束；8s JS 兜底防命令悬挂，旧包无此命令（reject）也直接放行。
+  if (window.__TAURI__ && window.__TAURI__.core) {
+    try {
+      await Promise.race([
+        window.__TAURI__.core.invoke('session_restore_done'),
+        new Promise(res => setTimeout(res, 8000)),
+      ]);
+    } catch (e) { /* 旧包无此命令：直接路由 */ }
+  }
   try {
     // 调 whoami 判断是否已认证（bridge.js 的 call() 双桥兼容）
     const r = await call({ cmd: 'current_user' });

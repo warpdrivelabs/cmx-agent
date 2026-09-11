@@ -193,7 +193,7 @@ mod tests {
             "data": {
                 "items": [
                     { "user_id":"u1","provider":"feishu","open_id":"ou_abc","created_at":1700000000000i64,"im_username":"张三" },
-                    { "user_id":"u2","provider":"telegram","open_id":"tg_xyz","nickname":"Bob" },
+                    { "user_id":"u2","provider":"qq","open_id":"tg_xyz","nickname":"Bob" },
                     { "user_id":"u3","provider":"feishu","open_id":"ou_def" }
                 ]
             }

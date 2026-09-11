@@ -15,7 +15,13 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::{FeishuProvider, ImKind, ImProvider, QqProvider, TelegramProvider, config::parse_kind, config::ImConfig};
+use crate::wechat::{
+    WECHAT_BASE_DEFAULT, ResponseVerdict, apply_auth, apply_common, base_info, classify_response,
+};
+use crate::{
+    FeishuProvider, ImKind, ImProvider, QqProvider, WechatProvider,
+    config::ImConfig, config::parse_kind,
+};
 
 /// 飞书国内开放平台基址（与 `feishu.rs` 的默认一致；面板「区域」默认值用）。
 pub(crate) const FEISHU_BASE_CN: &str = "https://open.feishu.cn";
@@ -26,12 +32,13 @@ pub struct ImRemoconConfig {
     /// 总开关：false = 已保存凭证但停用（壳跳过 IM 桥）。
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// 主 provider 类型：`feishu` / `telegram` / `qq`。兼容保留字段——多通道语义见
+    /// 主 provider 类型：`feishu` / `qq` / `wechat`。兼容保留字段——多通道语义见
     /// [`Self::active`]；旧版本/手写的 im.json 只有本字段（单选），`resolve` 按它回落。
     #[serde(default)]
     pub kind: String,
-    /// **多通道**（2026-09-10）：同时启用的 provider 列表（`feishu`/`telegram`/`qq` 可组合）。
+    /// **多通道**（2026-09-10）：同时启用的 provider 列表（`feishu`/`qq`/`wechat` 可组合）。
     /// 空 = 旧版单选文件，回落 [`Self::kind`]。GUI set 恒写入本字段；`kind` 同步为首个启用项。
+    /// 旧文件里已不支持的 kind（telegram 等）读入时被 [`Self::active`] 过滤。
     #[serde(default)]
     pub active: Vec<String>,
     /// 个人模式（默认 true）：所有 IM 消息直接以桌面壳当前登录用户身份跑回合，
@@ -42,9 +49,10 @@ pub struct ImRemoconConfig {
     #[serde(default)]
     pub feishu: FeishuCreds,
     #[serde(default)]
-    pub telegram: TelegramCreds,
-    #[serde(default)]
     pub qq: QqCreds,
+    /// 微信 ClawBot（iLink）凭证：`cmx-agent im-login` 扫码后写入（bot_token 长期复用）。
+    #[serde(default)]
+    pub wechat: WechatCreds,
     /// chat_id 白名单；**空 = 不限**。个人模式下这是唯一的安全门（任何能发消息给
     /// 机器人的会话都会以登录人身份跑 agent）——群机器人建议配置。
     #[serde(default)]
@@ -63,16 +71,9 @@ pub struct FeishuCreds {
     pub base: String,
 }
 
-/// Telegram bot 凭证。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct TelegramCreds {
-    #[serde(default)]
-    pub token: String,
-    #[serde(default)]
-    pub base: String,
-}
-
 /// QQ 官方机器人开放平台凭证（q.qq.com 管理端「开发设置」页）。
+/// 注：Telegram 通道已于 2026-09-11 下线——旧 im.json 里的 `telegram` 字段被 serde
+/// 静默忽略，无需迁移。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct QqCreds {
     #[serde(default)]
@@ -80,6 +81,23 @@ pub struct QqCreds {
     #[serde(default)]
     pub app_secret: String,
     /// 空 = 默认正式 `https://api.sgroup.qq.com`；沙箱联调填 `https://sandbox.api.sgroup.qq.com`。
+    #[serde(default)]
+    pub base: String,
+}
+
+/// 微信 ClawBot（iLink）凭证：`cmx-agent im-login` 扫码登录后写入，长期复用。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WechatCreds {
+    /// 扫码获取的 bot_token（Bearer；有效期未文档化，失效后重登即可）。
+    #[serde(default)]
+    pub bot_token: String,
+    /// 机器人 id（`xxx@im.bot`，面板展示用）。
+    #[serde(default)]
+    pub bot_id: String,
+    /// 登录用户 id（展示用）。
+    #[serde(default)]
+    pub user_id: String,
+    /// 空 = 默认 `https://ilinkai.weixin.qq.com`（登录确认后会下发实际 baseurl）。
     #[serde(default)]
     pub base: String,
 }
@@ -114,8 +132,8 @@ impl Default for ImRemoconConfig {
             active: Vec::new(),
             personal: true,
             feishu: FeishuCreds::default(),
-            telegram: TelegramCreds::default(),
             qq: QqCreds::default(),
+            wechat: WechatCreds::default(),
             allow: Vec::new(),
         }
     }
@@ -152,10 +170,12 @@ impl ImRemoconConfig {
             "app_id": self.feishu.app_id,
             "app_secret_masked": mask_secret(&self.feishu.app_secret),
             "base": self.feishu.base,
-            "telegram_token_masked": mask_secret(&self.telegram.token),
             "qq_app_id": self.qq.app_id,
             "qq_secret_masked": mask_secret(&self.qq.app_secret),
             "qq_base": self.qq.base,
+            "wechat_bot_id": self.wechat.bot_id,
+            "wechat_token_masked": mask_secret(&self.wechat.bot_token),
+            "wechat_base": self.wechat.base,
             "allow": self.allow.join(", "),
         })
     }
@@ -178,13 +198,6 @@ impl ImRemoconConfig {
                     non_empty(&f.base),
                 ))
             }
-            ImKind::Telegram => {
-                let t = &self.telegram;
-                if t.token.trim().is_empty() {
-                    return Err("im.json 已选 telegram 但缺 Bot Token".into());
-                }
-                Arc::new(TelegramProvider::new(t.token.trim(), non_empty(&t.base)))
-            }
             ImKind::Qq => {
                 let q = &self.qq;
                 if q.app_id.trim().is_empty() {
@@ -194,6 +207,15 @@ impl ImRemoconConfig {
                     return Err("im.json 已选 qq 但缺 AppSecret".into());
                 }
                 Arc::new(QqProvider::new(q.app_id.trim(), q.app_secret.trim(), non_empty(&q.base)))
+            }
+            ImKind::Wechat => {
+                let w = &self.wechat;
+                if w.bot_token.trim().is_empty() {
+                    return Err(
+                        "im.json 已选 wechat 但未扫码登录（运行 cmx-agent im-login 获取 bot_token）".into(),
+                    );
+                }
+                Arc::new(WechatProvider::new(w.bot_token.trim(), non_empty(&w.base)))
             }
         };
         Ok((kind, provider))
@@ -411,6 +433,53 @@ pub async fn test_qq(app_id: &str, app_secret: &str, base: Option<&str>) -> Resu
     Ok("✓ 凭证有效，QQ 网关可用".into())
 }
 
+/// 微信 ClawBot 凭证连通性预检（面板「测试连接」备用，与 `test_feishu`/`test_qq` 同地位）：
+/// 空转一次 `getupdates`（3s 超时、空游标）——token 对不对当场暴露，不消费消息。
+pub async fn test_wechat(bot_token: &str, base: Option<&str>) -> Result<String, String> {
+    if bot_token.trim().is_empty() {
+        return Err("尚未扫码登录：先运行 `cmx-agent im-login` 获取微信 bot_token".into());
+    }
+    let base = base
+        .map(str::trim)
+        .filter(|b| !b.is_empty())
+        .unwrap_or(WECHAT_BASE_DEFAULT)
+        .trim_end_matches('/')
+        .to_string();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .map_err(|e| format!("构建 HTTP 客户端失败：{e}"))?;
+    let body = json!({ "get_updates_buf": "", "base_info": base_info() });
+    let rb = apply_auth(apply_common(client.post(format!("{base}/ilink/bot/getupdates"))), bot_token.trim());
+    let resp = rb
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("请求失败（网络不通或地址错）：{e}"))?;
+    if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Err("bot_token 已失效（401）：请重新运行 `cmx-agent im-login` 扫码".into());
+    }
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("getupdates HTTP {status}: {text}"));
+    }
+    let v: Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("响应解析失败：{e}"))?;
+    // 判读对齐官方 v2.4.8：ret/errcode 存在且 ≠0 才是错误（缺失 = 成功）。
+    match classify_response(&v) {
+        ResponseVerdict::Ok => Ok("✓ bot_token 有效，iLink 长轮询通道可用".into()),
+        ResponseVerdict::StaleToken => {
+            Err("iLink 返回 -14（bot_token 已失效）：请重新运行 `cmx-agent im-login` 扫码".into())
+        }
+        ResponseVerdict::Failed { code, errmsg } => {
+            Err(format!("iLink 返回 code={code}（msg={errmsg}）"))
+        }
+    }
+}
+
 /// trim 后非空才 `Some`（provider base 可选参数用）。
 fn non_empty(s: &str) -> Option<String> {
     let t = s.trim();
@@ -461,8 +530,13 @@ mod tests {
                 app_secret: "sec-secret-secret".into(),
                 base: String::new(),
             },
-            telegram: TelegramCreds::default(),
             qq: QqCreds { app_id: "10xx".into(), app_secret: "qq-secret".into(), base: String::new() },
+            wechat: WechatCreds {
+                bot_token: "wx-token-secret".into(),
+                bot_id: "bot@im.bot".into(),
+                user_id: "u9".into(),
+                base: String::new(),
+            },
             allow: vec!["oc_a".into(), "oc_b".into()],
         };
         save_im_config(&dir, &cfg).unwrap();
@@ -471,6 +545,8 @@ mod tests {
         assert_eq!(back.feishu.app_secret, "sec-secret-secret");
         assert_eq!(back.qq.app_id, "10xx");
         assert_eq!(back.qq.app_secret, "qq-secret");
+        assert_eq!(back.wechat.bot_token, "wx-token-secret");
+        assert_eq!(back.wechat.bot_id, "bot@im.bot");
         assert_eq!(back.kind, "qq");
         assert_eq!(back.active(), vec!["qq".to_string(), "feishu".to_string()]);
         assert_eq!(back.allow, vec!["oc_a", "oc_b"]);
@@ -516,12 +592,12 @@ mod tests {
     #[test]
     fn masked_hides_secret() {
         let cfg = ImRemoconConfig {
-            telegram: TelegramCreds { token: "1234567890abcd".into(), ..Default::default() },
+            qq: QqCreds { app_secret: "1234567890abcd".into(), ..Default::default() },
             ..Default::default()
         };
         let m = cfg.masked();
         assert_eq!(m["app_secret_masked"], ""); // 未配置 → 空串
-        assert_eq!(m["telegram_token_masked"], "...abcd");
+        assert_eq!(m["qq_secret_masked"], "...abcd");
         assert!(!m.to_string().contains("1234567890abcd"));
     }
 
@@ -544,9 +620,12 @@ mod tests {
         let (kind, _) = ok.resolve_one("feishu").unwrap();
         assert_eq!(kind, ImKind::Feishu);
 
-        // telegram 缺 token → Err
-        let tg = ImRemoconConfig { kind: "telegram".into(), ..Default::default() };
-        assert!(tg.resolve_one("telegram").is_err());
+        // 旧 kind（telegram，已下线）→ parse_kind Err，被 active() 过滤不炸
+        let legacy = ImRemoconConfig { kind: "telegram".into(), ..Default::default() };
+        assert!(
+            legacy.resolve_one("telegram").is_err() && legacy.active().is_empty(),
+            "已下线 kind 应被拒/过滤"
+        );
 
         // qq 缺 AppSecret → Err 带字段名
         let bad_qq = ImRemoconConfig {
@@ -568,6 +647,46 @@ mod tests {
         };
         let (kind, _) = ok_qq.resolve_one("qq").unwrap();
         assert_eq!(kind, ImKind::Qq);
+
+        // wechat 未扫码 → Err 带指引
+        let bad_wx = ImRemoconConfig { kind: "wechat".into(), ..Default::default() };
+        let err = match bad_wx.resolve_one("wechat") {
+            Err(e) => e,
+            Ok(_) => panic!("未扫码应 Err"),
+        };
+        assert!(err.contains("im-login"), "{err}");
+
+        // wechat 齐备 → Ok
+        let ok_wx = ImRemoconConfig {
+            kind: "wechat".into(),
+            wechat: WechatCreds { bot_token: "t".into(), ..Default::default() },
+            ..Default::default()
+        };
+        let (kind, _) = ok_wx.resolve_one("wechat").unwrap();
+        assert_eq!(kind, ImKind::Wechat);
+    }
+
+    #[test]
+    fn masked_hides_wechat_token() {
+        let cfg = ImRemoconConfig {
+            wechat: WechatCreds {
+                bot_token: "wx-secret-token-9999".into(),
+                bot_id: "bot@im.bot".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let m = cfg.masked();
+        assert_eq!(m["wechat_token_masked"], "...9999");
+        assert_eq!(m["wechat_bot_id"], "bot@im.bot");
+        assert!(!m.to_string().contains("wx-secret-token-9999"));
+    }
+
+    #[tokio::test]
+    async fn test_wechat_rejects_empty_token() {
+        // 纯参数校验（不触网）：空 token 直接 Err 带指引。
+        let err = test_wechat("", None).await.expect_err("空 token 应 Err");
+        assert!(err.contains("im-login"), "{err}");
     }
 
     #[test]

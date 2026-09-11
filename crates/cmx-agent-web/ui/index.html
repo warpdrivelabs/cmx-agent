@@ -163,7 +163,8 @@
       </div>
     </div>
   </div>
-  <!-- 设置面板（Modal）：IM 遥控连接配置（飞书/QQ/Telegram 凭证 → 后端 im.json；保存热重载即时生效）。
+  <!-- 设置面板（Modal）：IM 遥控连接配置（飞书/QQ/微信 凭证 → 后端 im.json；
+       保存热重载即时生效）。微信 bot_token 经面板内扫码登录写入。
        个人模式固定（消息以桌面登录账号身份跑回合，无验证码绑定）。复用模型面板的 mcfg-*
        样式；交互走 data-act 委托（内联 onclick 被两壳 CSP 拦截，勿用）；密文走「锁」交互
        （面板只回显掩码，解锁才能改，保存 keep/set 语义同 API Key）。 -->
@@ -197,8 +198,18 @@
           </div>
           <div id="scfg-qq-block" style="display:none">
             <div class="mcfg-row">
+              <label>扫码登录</label>
+              <div style="display:flex;align-items:center;gap:10px;min-width:0">
+                <button id="scfg-qq-btn" data-act="scfgQqLogin" style="padding:7px 18px;border-radius:8px;font-size:13px;cursor:pointer;border:1px solid var(--aqua);background:var(--aqua);color:#000;font-weight:600">扫码登录</button>
+                <span id="scfg-qq-status" style="font-size:11.5px;color:var(--muted)"></span>
+              </div>
+            </div>
+            <div id="scfg-qq-qr-wrap" style="display:none;text-align:center;margin:10px 0 4px">
+              <img id="scfg-qq-qr" alt="QQ 登录二维码" style="width:190px;height:190px;border:1px solid var(--border);border-radius:10px">
+            </div>
+            <div class="mcfg-row">
               <label>AppID</label>
-              <input id="scfg-qq-app-id" type="text" placeholder="10…（QQ 开放平台 q.qq.com · 开发设置）">
+              <input id="scfg-qq-app-id" type="text" placeholder="扫码后自动填入；或去 QQ 开放平台 q.qq.com 手动复制">
             </div>
             <div class="mcfg-row">
               <label>AppSecret</label>
@@ -207,24 +218,27 @@
                 <button id="scfg-qq-lock" data-act="scfgQqLock" title="解锁/锁定 AppSecret">🔒</button>
               </div>
             </div>
-            <div class="mcfg-row">
-              <label>环境</label>
-              <select id="scfg-qq-base">
-                <option value="">正式（api.sgroup.qq.com）</option>
-                <option value="https://sandbox.api.sgroup.qq.com">沙箱（sandbox.api.sgroup.qq.com）</option>
-              </select>
-            </div>
             <div style="font-size:11.5px;color:var(--muted);margin:2px 0 6px;line-height:1.5">
-              QQ 官方机器人仅支持被动回复：收到消息后 5 分钟内可回（群聊最多 5 条）；群聊使用需 @机器人。
+              官方推荐扫码：点「扫码登录」→ 用手机 QQ 扫码并确认 → 凭证自动获取（免开发者注册，一个 QQ 号最多 5 个机器人）。也可在 QQ 开放平台（q.qq.com）手动创建后填 AppID/Secret。
             </div>
           </div>
-          <div id="scfg-telegram-block" style="display:none">
+          <div id="scfg-wechat-block" style="display:none">
             <div class="mcfg-row">
-              <label>Bot Token</label>
-              <div class="mcfg-key-wrap">
-                <input id="scfg-tg-token" type="password" placeholder="（脱敏；点 🔓 解锁填写）" readonly>
-                <button id="scfg-tg-lock" data-act="scfgTgLock" title="解锁/锁定 Bot Token">🔒</button>
+              <label>登录状态</label>
+              <input id="scfg-wx-bot-id" type="text" readonly placeholder="（未扫码登录）">
+            </div>
+            <div class="mcfg-row">
+              <label>扫码登录</label>
+              <div style="display:flex;align-items:center;gap:10px;min-width:0">
+                <button id="scfg-wx-btn" data-act="scfgWechatLogin" style="padding:7px 18px;border-radius:8px;font-size:13px;cursor:pointer;border:1px solid var(--aqua);background:var(--aqua);color:#000;font-weight:600">扫码登录</button>
+                <span id="scfg-wx-status" style="font-size:11.5px;color:var(--muted)"></span>
               </div>
+            </div>
+            <div id="scfg-wx-qr-wrap" style="display:none;text-align:center;margin:10px 0 4px">
+              <img id="scfg-wx-qr" alt="微信登录二维码" style="width:190px;height:190px;border:1px solid var(--border);border-radius:10px">
+            </div>
+            <div style="font-size:11.5px;color:var(--muted);margin:2px 0 6px;line-height:1.5">
+              bot_token 仅能扫码获得（腾讯下发，无法手填）；一次登录长期有效，失效后回到这里重扫。二维码约 5 分钟过期，自动刷新。
             </div>
           </div>
           <div id="scfg-note" style="font-size:11.5px;color:var(--muted);margin:2px 0 6px;line-height:1.5"></div>
@@ -317,8 +331,8 @@
         <textarea id="inp" placeholder="今天帮你做些什么？  @ 引用文件 · / 调用技能 · ⏎ 发送 · ⇧⏎ 换行" rows="1"></textarea>
         <div class="crow">
           <button class="tool-ic" title="附件（占位）"><span>＋</span></button>
-          <button class="tool-ic" title="引用文件（占位）"><span>@</span></button>
-          <button class="tool-ic" title="调用技能（占位）"><span>/</span></button>
+          <button class="tool-ic" title="引用文件（@ 搜索工作空间文件）"><span>@</span></button>
+          <button class="tool-ic" title="调用技能（/ 唤起技能菜单）"><span>/</span></button>
           <div class="sp"></div>
           <button class="model" data-act="openModelMenu" title="模型选择"><span class="mdot">◎</span> <span class="mlabel">未配置</span> ▾</button>
           <button class="tool-ic voice" data-act="toggleVoice" title="语音输入（占位）"><span>🎙</span></button>
@@ -326,12 +340,9 @@
         </div>
       </div>
       <div class="selectors">
-        <div class="selbtn">🗂
-          <select id="workspace" title="工作空间 = 沙箱工作区根">
-            <option value="default">选择工作空间：默认工作区</option>
-            <option value="docs">文档工作区</option>
-          </select>
-        </div>
+        <button id="workspace-btn" class="selbtn workspace-btn" title="选择工作空间 = 沙箱工作区根">
+          <span class="wi">🗂</span><span id="workspace-label">加载中…</span><span class="chev">▾</span>
+        </button>
         <div class="selbtn">🛡
           <select id="perm" title="默认权限 = 两旋钮：沙箱能力 × 审批许可">
             <option value="workspace-write/on-request">默认权限：工作区可写 · 按需审批</option>
@@ -341,6 +352,18 @@
         </div>
       </div>
     </section>
+
+    <!-- 工作空间悬浮菜单：搜索 / 选择 / 新建托管空间 / 添加本地目录 / 不使用空间 -->
+    <div id="workspace-menu" class="floating-menu" hidden>
+      <div class="fm-search"><span>🔍</span><input id="workspace-search" type="search" placeholder="搜索工作空间" autocomplete="off"></div>
+      <div id="workspace-list" class="fm-list" role="listbox"></div>
+      <div id="workspace-form" class="fm-form" hidden></div>
+      <div class="fm-actions">
+        <button type="button" data-ws-action="create"><span class="wi">＋</span>新建工作空间</button>
+        <button type="button" data-ws-action="local"><span class="wi">📂</span>打开本地文件夹</button>
+        <button type="button" data-ws-action="none"><span class="wi">⊘</span>不使用工作空间</button>
+      </div>
+    </div>
 
     <!-- 每个 tab 的内容 DOM 挂这里（各自独立、保留状态；只 active 的显示）-->
     <div id="tabviews"></div>
@@ -354,8 +377,8 @@
             <textarea class="inp2" placeholder="继续对话…  @ 引用文件 · / 调用技能 · ⏎ 发送 · ⇧⏎ 换行" rows="1"></textarea>
             <div class="crow">
               <button class="tool-ic" title="附件（占位）"><span>＋</span></button>
-              <button class="tool-ic" title="引用文件（占位）"><span>@</span></button>
-              <button class="tool-ic" title="调用技能（占位）"><span>/</span></button>
+              <button class="tool-ic" title="引用文件（@ 搜索工作空间文件）"><span>@</span></button>
+              <button class="tool-ic" title="调用技能（/ 唤起技能菜单）"><span>/</span></button>
               <div class="sp"></div>
               <button class="model" data-act="openModelMenu" title="模型选择"><span class="mdot">◎</span> <span class="mlabel">未配置</span> ▾</button>
               <button class="tool-ic voice" data-act="toggleVoice" title="语音输入（占位）"><span>🎙</span></button>
@@ -419,7 +442,7 @@
       <div class="brand-content">
         <div class="brand-eyebrow"><span class="brand-eyebrow__dot"></span> TRUE PARTNER · 专注工作</div>
         <h1 class="brand-title"><span class="brand-title__text">True<span class="brand-title__accent">Mate</span></span></h1>
-        <p class="brand-desc">复刻并超越 WorkBuddy · 同核多壳架构<br>形（前门）/ 核（回合循环 + 五层守卫）/ 体（cmx 引擎连接器）</p>
+        <p class="brand-desc">同核多壳架构<br>形（前门）/ 核（回合循环 + 五层守卫）/ 体（cmx 引擎连接器）</p>
         <ul class="brand-features">
           <li><span class="feature-index">01</span><div class="feature-text"><strong>本地沙箱守卫</strong><em>工作区可写 · 高危拦截 · 人在环审批</em></div></li>
           <li><span class="feature-index">02</span><div class="feature-text"><strong>cmx 引擎连接器</strong><em>flow / onto / report 变成智能体的双手</em></div></li>
@@ -463,6 +486,10 @@
 <script src="js/session.js" defer></script>
 <script src="js/panels.js" defer></script>
 <script src="js/model.js" defer></script>
+<script src="js/workspace.js" defer></script>
+<!-- qrcode-generator 1.5.2（MIT，vendor）：微信扫码登录的二维码在前端渲染——
+     iLink 下发的 qrcode_img_content 是内容字符串（授权页 URL）而非图片，见 wechat.rs fetch_qr 注释。 -->
+<script src="js/vendor/qrcode.min.js" defer></script>
 <script src="js/im.js" defer></script>
 <script src="js/login.js" defer></script>
 <script src="js/update.js" defer></script>

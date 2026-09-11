@@ -284,13 +284,20 @@ impl DesktopAppBuilder {
         let agent = Arc::new(agent);
         sub_handle.attach(&agent); // 注入弱引用，task 工具据此跑子回合
 
-        let store = FileSessionStore::new(self.data_dir)?;
+        let data_dir = self.data_dir.clone();
+        let store = FileSessionStore::new(data_dir)?;
+        let workspaces = crate::workspace::WorkspaceRegistry::load_or_init(
+            &self.data_dir,
+            Some(&self.workdir),
+        )?;
+        workspaces.set_allowed_roots(&agent)?;
         let mut app = AgentApp::new(agent, Arc::new(store))
             .with_token_store(token_store)
             .with_plugins(plugin_summaries)
             .with_plugins_dir(plugins_dir)
             .with_plugin_market(plugin_market)
             .with_model(model_slot, model_config_dir);
+        app = app.with_workspace_registry(workspaces);
         if let Some(a) = interactive {
             app = app.with_approver(a);
         }

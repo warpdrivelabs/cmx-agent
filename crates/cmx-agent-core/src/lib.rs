@@ -14,7 +14,9 @@ pub mod model;
 pub mod session;
 pub mod tool;
 
-pub use agent::{Agent, AgentBuilder, ApprovalPolicy, Approver, AutoApprover, Policy, TurnOutcome};
+pub use agent::{
+    Agent, AgentBuilder, ApprovalPolicy, Approver, AutoApprover, Policy, TurnCancel, TurnOutcome,
+};
 pub use error::{AgentError, AgentResult};
 pub use event::{EventKind, EventSink, SessionEvent, SessionLog, StopReason};
 pub use guard::{

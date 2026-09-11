@@ -11,11 +11,20 @@ use tokio::sync::mpsc::UnboundedSender;
 /// 把每个会话事件序列化为 JSON 并发到通道的 sink。发送失败（接收端已断）静默忽略。
 pub struct ChannelSink {
     tx: UnboundedSender<serde_json::Value>,
+    cancel: Option<cmx_agent_core::TurnCancel>,
 }
 
 impl ChannelSink {
     pub fn new(tx: UnboundedSender<serde_json::Value>) -> Self {
-        Self { tx }
+        Self { tx, cancel: None }
+    }
+
+    /// 复用同一传输通道创建可中断观察器；原始 sink 保持可用。
+    pub fn with_cancel(&self, cancel: cmx_agent_core::TurnCancel) -> Self {
+        Self {
+            tx: self.tx.clone(),
+            cancel: Some(cancel),
+        }
     }
 }
 
@@ -39,5 +48,20 @@ impl TurnObserver for ChannelSink {
     fn on_stream_reset(&self) {
         // 流中断重试：前端清掉已显示的半截文字，等重试成功后再重新收增量。
         let _ = self.tx.send(serde_json::json!({ "kind": "text_reset" }));
+    }
+
+    /// 断流重试时思考过程与正文一样需要清空，避免两次尝试内容拼接。
+    fn on_reasoning_reset(&self) {
+        let _ = self
+            .tx
+            .send(serde_json::json!({ "kind": "reasoning_reset" }));
+    }
+
+    fn on_reasoning_delta(&self, delta: &str) {
+        let _ = self.tx.send(serde_json::json!({ "kind": "reasoning_delta", "text": delta }));
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancel.as_ref().is_some_and(|c| c.is_cancelled())
     }
 }

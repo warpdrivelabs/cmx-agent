@@ -7,6 +7,8 @@
     --blue:#3987e5; --aqua:#1fb182; --violet:#9085e9; --magenta:#d55181; --orange:#eb6834;
     --green:#22c55e; --red:#e5605f; --accent:#1fb182;
     --accent-soft:#17362b;
+    /* 代码 / 终端 / diff 块专用（双主题各一份；业务 css 禁止硬编码色值，一律引令牌） */
+    --bg2:#0d1420; --code-ink:#c8d3e0;
     --header-h:36px;
     --aside-w:270px;
   }
@@ -17,6 +19,8 @@
     --ink:#0b0b0b; --ink2:#52514e; --muted:#898781; --border:#e4e3dc; --border2:#d6d5ce;
     --blue:#2a78d6; --aqua:#1baf7a; --violet:#4a3aa7; --magenta:#e87ba4; --orange:#eb6834;
     --green:#0ca30c; --red:#e34948; --accent:#1baf7a; --accent-soft:#e3f5ee;
+    /* 亮色下的代码块：浅底深字（令牌名与暗色一致，随主题切换） */
+    --bg2:#efefea; --code-ink:#33332e;
   }
   *{box-sizing:border-box}
   html,body{height:100%;margin:0}

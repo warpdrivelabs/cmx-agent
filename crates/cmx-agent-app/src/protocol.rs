@@ -28,6 +28,32 @@ pub enum AppRequest {
     },
     /// 列出所有会话。
     ListSessions,
+    /// 列出工作空间与当前选择；前端输入区工作空间悬浮菜单用。
+    ListWorkspaces,
+    /// 新建托管工作空间（数据目录 `<data>/workspaces/<id>`）。
+    CreateWorkspace { name: String },
+    /// 添加一个用户显式给出的本地目录作为工作空间。
+    AddLocalWorkspace {
+        path: String,
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// 选择工作空间；`id=None` 表示“不使用工作空间”（普通任务）。
+    SelectWorkspace {
+        #[serde(default)]
+        id: Option<String>,
+    },
+    /// 在当前工作空间内检索文件；@ 悬浮菜单用。
+    SearchWorkspaceFiles {
+        #[serde(default)]
+        query: String,
+        #[serde(default)]
+        limit: Option<usize>,
+    },
+    /// 列出可用技能（当前工具契约）；/ 悬浮菜单用。
+    ListSkills,
+    /// 中断当前会话正在执行的回合。
+    CancelSession { session_id: String },
     /// 删除会话。
     DeleteSession { session_id: String },
     /// 列出连接器（描述 + live 健康）——侧栏「专家·技能·连接器」面板用。
@@ -210,6 +236,22 @@ async fn dispatch_inner(app: &AgentApp, req: AppRequest) -> Result<AppResponse, 
             let sessions: Vec<SessionMeta> = app.list_sessions()?;
             Ok(AppResponse::ok(serde_json::json!({ "sessions": sessions })))
         }
+        AppRequest::ListWorkspaces => Ok(AppResponse::ok(app.list_workspaces()?)),
+        AppRequest::CreateWorkspace { name } => Ok(AppResponse::ok(app.create_workspace(&name)?)),
+        AppRequest::AddLocalWorkspace { path, name } => {
+            Ok(AppResponse::ok(app.add_local_workspace(&path, name.as_deref())?))
+        }
+        AppRequest::SelectWorkspace { id } => Ok(AppResponse::ok(
+            app.select_workspace(id.as_deref())?,
+        )),
+        AppRequest::SearchWorkspaceFiles { query, limit } => {
+            let files = app.search_workspace_files(&query, limit).await?;
+            Ok(AppResponse::ok(serde_json::json!({ "files": files })))
+        }
+        AppRequest::ListSkills => Ok(AppResponse::ok(app.list_skills())),
+        AppRequest::CancelSession { session_id } => Ok(AppResponse::ok(
+            serde_json::json!({ "cancelled": app.cancel_session_turn(&session_id) }),
+        )),
         AppRequest::DeleteSession { session_id } => {
             app.delete_session(&session_id)?;
             Ok(AppResponse::ok(

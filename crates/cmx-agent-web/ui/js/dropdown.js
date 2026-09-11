@@ -32,13 +32,18 @@ function cmxInitDropdown (sel) {
     // 关掉其他打开的 dropdown
     document.querySelectorAll(".cmx-dd-list.on").forEach(l => { l.classList.remove("on"); l.closest(".cmx-dd")?.classList.remove("on"); });
     buildItems();
-    // 视口底部溢出检测：trigger 底部 + 弹出列表高 > viewport → 向上弹
+    // 挂 body + fixed 定位（悬浮框）：absolute 列表会被弹框的 overflow:auto 容器
+    // （如设置面板 .mcfg-detail）裁剪——列表只在 trigger 下方露出一条。脱离容器即根治。
+    document.body.appendChild(list);
     const rect = trigger.getBoundingClientRect();
-    list.style.top = ""; list.style.bottom = "";
     const listH = Math.min(Array.from(sel.options).length * 38 + 8, 260); // 近似高度（item ~38px + padding）
+    list.style.left = rect.left + "px";
+    list.style.width = rect.width + "px";
+    // 视口底部溢出检测：trigger 底部 + 弹出列表高 > viewport → 向上弹
     if (rect.bottom + listH > window.innerHeight && rect.top > listH) {
-      list.style.top = "auto";
-      list.style.bottom = "calc(100% + 4px)";
+      list.style.top = (rect.top - listH - 4) + "px";
+    } else {
+      list.style.top = (rect.bottom + 4) + "px";
     }
     list.classList.add("on");
     wrap.classList.add("on");
@@ -126,4 +131,11 @@ document.addEventListener("click", (e) => {
   document.querySelectorAll(".cmx-dd.on").forEach(wrap => {
     if (!wrap.contains(e.target) && wrap._cmxClose) wrap._cmxClose();
   });
+});
+// 悬浮列表挂 body + fixed 定位：容器滚动 / 窗口缩放会让坐标失准 → 统一关闭（capture 捕获容器内滚动）。
+window.addEventListener("scroll", () => {
+  document.querySelectorAll(".cmx-dd.on").forEach(w => w._cmxClose && w._cmxClose());
+}, true);
+window.addEventListener("resize", () => {
+  document.querySelectorAll(".cmx-dd.on").forEach(w => w._cmxClose && w._cmxClose());
 });

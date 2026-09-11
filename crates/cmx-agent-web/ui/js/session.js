@@ -1,4 +1,4 @@
-﻿// ── 侧栏会话列表（从 tabs.js 挪入）──
+// ── 侧栏会话列表（从 tabs.js 挪入）──
 async function refreshTasks(){
   const resp = await call({cmd:"list_sessions"});
   const list = (resp.ok && resp.data.sessions) || [];
@@ -17,58 +17,15 @@ async function refreshTasks(){
 function ago(iso){ const d=(Date.now()-new Date(iso).getTime())/86400000;
   if(d<1) return "今天"; if(d<2) return "昨天"; return Math.floor(d)+"天前"; }
 
-// ── 会话渲染（渲染到指定 log 容器）──
-// 打字机：text_delta 累加到 log._raw，rAF 节流渲染——每帧最多一次 markdown 重渲，
-// 长回复不再逐字全量 innerHTML（避免几千字回复每 token 都重排 DOM）。
-function renderEvent(log, ev, sid){
-  const k=ev.kind;
-  if(k==="text_delta"){
-    if(!log._sb){ const r=el("row"); const b=el("bubble md"); r.append(el("avatar a","AI"),b); log.append(r); log._sb=b; log._raw=""; }
-    log._raw=(log._raw||"")+(ev.text||"");
-    if(!log._raf){ log._raf=requestAnimationFrame(()=>{ log._raf=null; log._sb.innerHTML=renderMarkdown(log._raw); log.scrollTop=1e9; }); }
-    log.scrollTop=1e9; return;
-  }
-  if(k==="user_message"){
-    if(log._skipUser){ log._skipUser=false; return; }   // 已乐观渲染，跳过流里的回显
-    log._sb=null; const r=el("row user"); r.append(el("avatar u","你"),el("bubble",esc(ev.text))); log.append(r);
-  }
-  else if(k==="model_message"){
-    let bub=null;
-    if(log._raf){ cancelAnimationFrame(log._raf); log._raf=null; }  // 取消 pending rAF，避免收尾后又渲一次
-    if(log._sb){ log._sb.innerHTML=renderMarkdown(log._raw||ev.text||""); bub=log._sb; log._sb=null; }  // 收尾：定稿 markdown
-    else if(ev.text){ const r=el("row"); const b=el("bubble md"); b.innerHTML=renderMarkdown(ev.text); r.append(el("avatar a","AI"),b); log.append(r); bub=b; }
-    if(bub) addBubbleActions(bub);   // AI 文本气泡也挂操作按钮（底部行）
-  }
-  else if(k==="tool_invoked"){ log._sb=null; const t=el("tool"); t.innerHTML=renderToolInvoke(ev.call||{}); addToolActions(t); log.append(t); }
-  else if(k==="tool_result"){ const t=el("tool"+(ev.ok?"":" denied")); t.innerHTML=renderToolResult(ev); if(ev.ok) addToolActions(t); log.append(t); }
-  else if(k==="approval_requested"){ log._sb=null;
-    const t=el("tool approval"); t.dataset.callid=ev.call_id||""; t.dataset.sid=sid||"";
-    t.innerHTML=`<div class="tchead">⏸ <b>需要审批</b> <span class="tcpath">${esc(ev.tool||"")}</span></div>`
-      +`<div class="apreason">${esc(ev.reason||"该操作需人工确认")}</div>`
-      +`<div class="aprow">`
-      +`<button class="apbtn reject" data-act="approveTool" data-callid="${esc(ev.call_id||"")}" data-ok="0" data-all="0">✕ 拒绝</button>`
-      +`<button class="apbtn allow" data-act="approveTool" data-callid="${esc(ev.call_id||"")}" data-ok="1" data-all="0">✓ 允许</button>`
-      +`<button class="apbtn allowall" data-act="approveTool" data-callid="${esc(ev.call_id||"")}" data-ok="1" data-all="1" title="本对话后续需审批的操作不再逐次询问">🔓 本对话全部允许</button>`
-      +`</div>`;
-    log.append(t); }
-  else if(k==="approval_resolved"){
-    let matched=false;
-    log.querySelectorAll(".tool.approval").forEach(c=>{ if(c.dataset.callid===ev.call_id){ matched=true;
-      const row=c.querySelector(".aprow"); if(row) row.remove();
-      const prev=c.querySelector(".apresolved"); if(prev) prev.remove();
-      const st=el("apresolved "+(ev.approved?"ok":"no"), ev.approved?("✓ 已允许"+(ev.by&&ev.by!=='user'?"（"+esc(ev.by)+"）":"")):"✕ 已拒绝");
-      c.appendChild(st);
-    }});
-    // 「本对话全部允许」后的自动放行：无对应审批卡 → 追加一条低调审计提示，而非弹卡。
-    if(!matched && ev.approved && (ev.by||"").indexOf("auto")===0){
-      log.append(el("meta apauto","🔓 已自动允许（本对话全部允许）"));
-    }
-  }
-  else if(k==="turn_ended"){ log._sb=null; log.append(el("meta","— 回合 #"+ev.turn+" 结束（"+ev.reason+"，"+ev.steps+" 步）—")); }
-  // Note：内核注记，回合出错时把错误文案作为 Note 追加（与飞书回发同一份内容，保证两端一致）。
-  else if(k==="note"){ log._sb=null; log.append(el("meta note",esc(ev.text||""))); }
-  log.scrollTop=1e9;
+// 每个回合一个 timeline item；后续事件都挂到当前卡片里。
+function ensureTurn(log){
+  // 历史分片还没挂到 document 时 isConnected 为 false；这时只看引用，避免一次回放被拆散。
+  if(!log._turn || (!log._history && !log._turn.isConnected)){ log._turn=el("turn"); log.append(log._turn); }
+  return log._turn;
 }
+// 会话事件渲染（renderEvent）真源在 render.js（opencode 式工具卡/思考行/上下文组）。
+// ⚠ 本文件脚本晚于 render.js 加载——**禁止**在此重复定义 renderEvent，否则会静默覆盖新实现
+// （曾因此历史回放调用已删除的 renderToolInvoke 抛异常，表现为点开任务页面卡死）。
 
 // ── 会话事件总线实时通道（U16）──
 // 后端常驻 task 把 AgentApp 的 SessionEventBus 广播成全局 `session_event` Tauri 事件；前端监听后
@@ -120,6 +77,8 @@ function openSessionLive(sessionId){
   // 模板里的 .mlabel 是硬编码"未配置"（惰性 DOM，querySelectorAll 不到）→ 克隆后用当前值覆盖
   t.view.querySelectorAll(".model .mlabel").forEach(s=>s.textContent=_modelLabel);
   const inp=t.view.querySelector(".inp2");
+  attachComposer(inp);
+  bindComposerButtons();
   inp.addEventListener("keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendChatTab(t);} });
   inp.addEventListener("input",e=>autoGrow(e.target));
   t.view.querySelector(".tab-send").onclick=()=>sendChatTab(t);
@@ -131,13 +90,14 @@ function openSessionLive(sessionId){
     const d=(resp&&resp.ok&&resp.data)||{}; const evs=d.events||[];
     const frag=document.createDocumentFragment();
     if((d.start||0)>0) frag.append(makeLoadMore(log, sessionId, d.start, d.total||0));
+    const tmp=document.createElement('div'); tmp._sb=null; tmp._history=true;
     evs.forEach(ev=>{
       if(log._seqs.has(ev.seq)) return;
-      const tmp=document.createElement('div'); tmp._sb=null;
       const s=tmp._skipUser; tmp._skipUser=false; renderEvent(tmp, ev, sessionId); tmp._skipUser=s;
       while(tmp.firstChild) frag.append(tmp.firstChild);
       log._seqs.add(ev.seq);
     });
+    settlePendingCards(frag);
     log.prepend(frag);
     if(d.title){ t.title=d.title||sessionId; renderTabs(); }
   });
@@ -207,6 +167,7 @@ const HIST_PAGE = 300;
 // 把一段事件渲染进临时容器再整体搬入目标（一次性插入，避免逐条重排）。
 function renderInto(target, sid, events){
   const tmp=document.createElement('div'); tmp._sb=null;
+  tmp._history=true;
   // 历史回放无视 _skipUser（那是本地乐观渲染专用标志，残留会误吞历史首条用户消息）。
   events.forEach(ev=>{ const s=tmp._skipUser; tmp._skipUser=false; renderEvent(tmp, ev, sid); tmp._skipUser=s; (target._seqs=target._seqs||new Set()).add(ev.seq); });
   while(tmp.firstChild) target.append(tmp.firstChild);
@@ -220,7 +181,13 @@ function makeLoadMore(log, sid, start, total){
   const frag=document.createDocumentFragment();
   if(start>0) frag.append(makeLoadMore(log, sid, start, total));   // 上方还有更早的
   renderInto(frag, sid, events);
-  log.innerHTML=""; log.append(frag);
+  settlePendingCards(frag);              // 回放结束仍 pending 的卡=中断/截断，收敛避免永久转圈
+  log.innerHTML=""; log._tools=new Map(); log._turn=null; log._typing=null;
+  log._sb=null; log._raw=""; log._raf=null; log._rsb=null; log._rraw=""; log._rraf=null;
+  log._rcard=null; log._ctx=null; log._intMarked=false;   // 全量渲染前清状态，防旧引用串场
+  stopWorkDurTick(log); log._durRow=null; log._durTick=null; log._turnStartTs=null;  // 实时计时行一并清（防旧 interval 改新 DOM）
+  log._closed=false;
+  log.append(frag);
 }
 async function loadEarlier(log, btn){
   const sid=btn.dataset.sid, before=parseInt(btn.dataset.before||"0",10);
@@ -230,6 +197,7 @@ async function loadEarlier(log, btn){
   const prevH=log.scrollHeight, prevTop=log.scrollTop;   // 锚点：插入更早内容后维持视口
   const frag=document.createDocumentFragment();
   renderInto(frag, sid, evs);
+  settlePendingCards(frag);
   btn.after(frag);
   if((d.start||0)>0){ btn.dataset.before=d.start; btn.textContent="↑ 加载更早的对话（共 "+d.total+" 条）"; }
   else btn.remove();
@@ -246,8 +214,10 @@ async function openSession(sessionId, autoPrompt){
     t.view.className="tabview";
     t.view.append(node);
     t.view.querySelectorAll(".model .mlabel").forEach(s=>s.textContent=_modelLabel);
-    const inp=t.view.querySelector(".inp2");
-    inp.addEventListener("keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendChatTab(t);} });
+  const inp=t.view.querySelector(".inp2");
+  attachComposer(inp);
+  bindComposerButtons();
+  inp.addEventListener("keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendChatTab(t);} });
     inp.addEventListener("input",e=>autoGrow(e.target));
     t.view.querySelector(".tab-send").onclick=()=>sendChatTab(t);
     // 载入历史：只取最近一屏（大会话不再解析/渲染全量）；标题随响应返回，免再查 list_sessions。
@@ -270,33 +240,110 @@ async function openSession(sessionId, autoPrompt){
 
 async function doSendTab(t, text){
   const log=t.view.querySelector(".log");
+  // 同会话等待队列：当前回合未结束时，后发消息按顺序排队，不并发写同一会话。
+  if(t._busy){
+    t._queue=t._queue||[];
+    t._queue.push(text);
+    queueNote(log,"⏳ 已加入会话等待队列（第 "+t._queue.length+" 条）");
+    return;
+  }
+  t._busy=true;
+  if(STREAMING && STREAMING.add) STREAMING.add(t.sessionId);
+  setSessionBusy(t,true);
   // 取消标记：tab 关闭后不再渲染事件（streamSend 回调检查此 flag）
   let _cancelled = false;
-  t._streamCancel = () => { _cancelled = true; };
+  t._streamCancel = () => {
+    _cancelled = true;
+    if(t._streamAbort) t._streamAbort.abort();
+  };
   // 1) 立即乐观渲染用户气泡，并让流里的 user_message 事件跳过一次，避免重复。
   renderEvent(log, {kind:"user_message", text}, t.sessionId);
   log._skipUser = true;
   // 2) 打字等待指示器：立即出现，覆盖「发送→首个 token」的等待。
   showTyping(log);
-  await streamSend(t.sessionId, text, (ev)=>{
-    if(_cancelled) return;
-    if(ev.kind==="stream_done"){ hideTyping(log); return; }
-    if(ev.kind==="stream_error"){ hideTyping(log); renderEvent(log,{kind:"model_message",text:"⚠ "+(ev.message||"错误")}, t.sessionId); return; }
-    // 有可见输出（文字流/工具卡/模型消息）到达 → 先撤等待动画，再渲染。
-    if(ev.kind==="text_delta" || ev.kind==="tool_invoked" || ev.kind==="model_message") hideTyping(log);
-    renderEvent(log, ev, t.sessionId);
-    // 工具刚出结果 → 模型将继续思考，重新显示等待动画（这是之前缺失的多步等待提示）。
-    if(ev.kind==="tool_result") showTyping(log);
-    else if(ev.kind==="turn_ended" || ev.kind==="approval_requested") hideTyping(log);
-  });
-  hideTyping(log);
+  t._streamAbort=new AbortController();
+  try {
+    await streamSend(t.sessionId, text, (ev)=>{
+      if(_cancelled){
+        // 已点中断：丢弃中途事件，但 turn_ended（后端权威收尾）照渲——负责「已中断」分隔条与关回合。
+        if(ev.kind==="turn_ended") renderEvent(log, ev, t.sessionId);
+        return;
+      }
+      if(ev.kind==="stream_done"){ hideTyping(log); return; }
+      if(ev.kind==="stream_error"){ hideTyping(log); renderEvent(log,{kind:"model_message",text:"⚠ "+(ev.message||"错误")}, t.sessionId); return; }
+      // 落库事件按 seq 去重并注册：与 session_event 通道共用 _seqs。流结束 STREAMING 放行后，
+      // 总线迟到重播的同一条事件（如 reasoning 回执）若不在此注册，会被再渲一遍（重复思考卡）。
+      if(ev.seq != null){
+        log._seqs = log._seqs || new Set();
+        if(log._seqs.has(ev.seq)) return;
+        log._seqs.add(ev.seq);
+      }
+      // 有可见输出（文字流/工具卡/模型消息）到达 → 先撤等待动画，再渲染。
+      if(ev.kind==="text_delta" || ev.kind==="tool_invoked" || ev.kind==="model_message") hideTyping(log);
+      renderEvent(log, ev, t.sessionId);
+      // 工具刚出结果 → 模型将继续思考，重新显示等待行（多步等待提示）。
+      if(ev.kind==="tool_result") showTyping(log);
+      else if(ev.kind==="turn_ended" || ev.kind==="approval_requested") hideTyping(log);
+    });
+  } catch(e) {
+    if(!_cancelled){ closeCtxGroup(log); renderEvent(log,{kind:"note",text:"⚠ 连接中断："+(e&&e.message||e)},t.sessionId); }
+  } finally {
+    hideTyping(log);
+    t._busy=false; setSessionBusy(t,false);
+    if(STREAMING && STREAMING.delete) STREAMING.delete(t.sessionId);
+  }
   const m=(await call({cmd:"list_sessions"})).data.sessions.find(x=>x.id===t.sessionId);
   if(m){ t.title=m.title||t.sessionId; renderTabs(); }
   scheduleRefreshTasks();
+  const next=(t._queue||[]).shift();
+  if(next && !_cancelled) doSendTab(t,next);
+  else if(_cancelled && (t._queue||[]).length){
+    t._queue=[]; queueNote(log,"🛑 已中断，等待队列已清空。");
+  }
+}
+// 直接挂到 log 的提示行（回合已关闭时不新开一张空回合卡）
+function queueNote(log, text){
+  const host=log._turn||log;
+  host.append(el("meta note",esc(text)));
+  log.scrollTop=1e9;
 }
 async function sendChatTab(t){
   const box=t.view.querySelector(".inp2"); const text=box.value.trim(); if(!text) return;
   box.value=""; autoGrow(box); await doSendTab(t, text);
+}
+function setSessionBusy(t,busy){
+  const btn=t.view.querySelector(".tab-send");
+  if(!btn) return;
+  btn.classList.toggle("stop",busy);
+  // 停止方块用几何绘制：■ 字形在字体 em-box 内基线偏移，flex 居不住（视觉偏离按钮中心）
+  btn.innerHTML=busy?'<span class="stop-ico"></span>':"<span>↑</span>";
+  btn.title=busy?((t._queue&&t._queue.length)?("已排队 "+t._queue.length+" 条 · "):"")+"中断 ⎋":"发送 ⏎";
+  btn.onclick=busy?()=>stopSession(t):()=>sendChatTab(t);
+}
+// 立即中断反馈：撤等待行、折叠思考、关上下文组、当前回合补「⎋ 已中断」分隔条并关闭。
+// 后端随后到达的 turn_ended(stopped) 经 _intMarked 去重，不会画第二条。
+function closeInterruptedTurn(log){
+  hideTyping(log);
+  if(log._raf){ cancelAnimationFrame(log._raf); log._raf=null; }
+  if(log._rraf){ cancelAnimationFrame(log._rraf); log._rraf=null; }
+  stopWorkDurTick(log);                                  // 停实时计时；turn_ended 后到时不重复定格
+  if(log._durRow){ const t=log._durRow.querySelector(".wd-t"); if(t) t.textContent="已中断"; log._durRow=null; }
+  log._closed=true; log._turnStartTs=null;               // 关回合：后到事件不再拉起新的计时行/回合卡
+  closeCtxGroup(log);
+  closeReasoning(log);
+  log._sb=null;
+  if(log._turn){
+    log._turn.append(el("turn-divider int","⎋ 已中断"));
+    log._intMarked=true;
+    log._turn=null;
+  }
+}
+async function stopSession(t){
+  if(t._streamCancel) t._streamCancel();
+  const log=t.view.querySelector(".log");
+  if(log) closeInterruptedTurn(log);
+  try{ await call({cmd:"cancel_session",session_id:t.sessionId}); showToast("已请求中断"); }
+  catch(e){ showToast("中断请求失败："+(e&&e.message||e)); }
 }
 async function startFromHome(){
   const box=document.getElementById("inp");
@@ -327,4 +374,16 @@ function toggleVoice(btn){
 }
 document.getElementById("inp").addEventListener("keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();startFromHome();} });
 document.getElementById("inp").addEventListener("input",e=>autoGrow(e.target));
+
+// Esc 中断当前会话（对齐 codex「esc to interrupt」）：浮窗/弹层/输入弹层开着时让位，只在会话 tab 忙时触发。
+document.addEventListener("keydown",e=>{
+  if(e.key!=="Escape") return;
+  const pop=document.getElementById("input-popover");
+  if(pop&&!pop.hidden) return;                                       // 输入弹层先关（attachComposer 已处理）
+  if(document.querySelector(".floating-menu:not([hidden])")) return; // 工作空间菜单先关
+  if(document.querySelector(".mcfg-overlay:not(.hidden)")) return;   // 模态框先关
+  if(document.querySelector(".cmxmenu.on")) return;                  // 下拉菜单先关
+  const t=TABS.find(x=>x.kind==="session"&&x.view.classList.contains("active"));
+  if(t&&t._busy){ e.preventDefault(); stopSession(t); }
+});
 

@@ -1,6 +1,6 @@
 # cmx-agent
 
-**企业桌面智能体微服务** —— 复刻并超越腾讯云 WorkBuddy。
+**企业桌面智能体微服务** 
 
 > 方案：[`../docs/20260902_WorkBuddy复刻方案_基于Codex与dsh的企业桌面智能体.md`](../docs/20260902_WorkBuddy复刻方案_基于Codex与dsh的企业桌面智能体.md)
 > 「形 / 核 / 体」三层混合：**形**借 DeepSeek Harness（前门+编排+会话日志），**核**借 Codex-rs

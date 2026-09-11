@@ -124,6 +124,7 @@ fn list_sorts_by_updated_desc() {
             created_at: t0,
             updated_at: t0 + chrono::Duration::seconds(i as i64),
             event_count: 0,
+            workspace_id: None,
         };
         store.put_meta(&meta).unwrap();
     }
@@ -317,6 +318,7 @@ fn load_events_window_tails_pages_and_full() {
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
             event_count: n,
+            workspace_id: None,
         })
         .unwrap();
 

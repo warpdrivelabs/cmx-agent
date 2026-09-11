@@ -16,6 +16,8 @@ use tokio::sync::oneshot;
 /// 交互式审批者。待决审批以 `call_id` → oneshot 发送端登记。
 pub struct InteractiveApprover {
     pending: Mutex<HashMap<String, oneshot::Sender<bool>>>,
+    /// call_id → session_id：会话中断时需精准拒绝该会话的所有待决审批。
+    pending_sessions: Mutex<HashMap<String, String>>,
     /// 已授予「本对话全部允许」的会话 id 集合——命中则内核跳过审批直接放行（不弹卡）。
     /// 进程内内存态：App 重启即清空（重启后不应静默沿用旧授权，需重新确认）。
     allow_all: Mutex<HashSet<String>>,
@@ -32,6 +34,7 @@ impl InteractiveApprover {
     pub fn new(timeout: Duration) -> Self {
         Self {
             pending: Mutex::new(HashMap::new()),
+            pending_sessions: Mutex::new(HashMap::new()),
             allow_all: Mutex::new(HashSet::new()),
             timeout,
         }
@@ -40,6 +43,7 @@ impl InteractiveApprover {
     /// 前端送回决定：弹出该 `call_id` 的等待端并唤醒（同步，不需运行时）。返回是否命中一个待决审批。
     pub fn decide(&self, call_id: &str, approved: bool) -> bool {
         let tx = self.pending.lock().expect("pending lock").remove(call_id);
+        self.pending_sessions.lock().expect("pending sessions lock").remove(call_id);
         match tx {
             Some(tx) => tx.send(approved).is_ok(),
             None => false,
@@ -68,22 +72,37 @@ impl InteractiveApprover {
 #[async_trait]
 impl Approver for InteractiveApprover {
     async fn resolve(&self, call: &ToolCall, _reason: &str) -> (bool, String) {
+        self.resolve_for_session("", call, _reason).await
+    }
+
+    async fn resolve_for_session(
+        &self,
+        session_id: &str,
+        call: &ToolCall,
+        _reason: &str,
+    ) -> (bool, String) {
         let (tx, rx) = oneshot::channel::<bool>();
         {
             let mut p = self.pending.lock().expect("pending lock");
             // 同一 call_id 若已有待决（不应发生），丢弃旧的（其接收端会得到 Err → 视为拒绝）。
             p.insert(call.id.clone(), tx);
         }
+        self.pending_sessions
+            .lock()
+            .expect("pending sessions lock")
+            .insert(call.id.clone(), session_id.to_string());
         // 挂起等前端决定；超时按拒绝。
         match tokio::time::timeout(self.timeout, rx).await {
             Ok(Ok(approved)) => (approved, "user".into()),
             Ok(Err(_canceled)) => {
                 // 发送端被丢弃（如被同 id 覆盖）→ 拒绝
                 self.pending.lock().expect("pending lock").remove(&call.id);
+                self.pending_sessions.lock().expect("pending sessions lock").remove(&call.id);
                 (false, "canceled".into())
             }
             Err(_timeout) => {
                 self.pending.lock().expect("pending lock").remove(&call.id);
+                self.pending_sessions.lock().expect("pending sessions lock").remove(&call.id);
                 (false, "timeout".into())
             }
         }
@@ -92,6 +111,20 @@ impl Approver for InteractiveApprover {
     /// 本会话是否已授予「全部允许」。
     fn is_preapproved(&self, session_id: &str) -> bool {
         self.allow_all.lock().expect("allow_all lock").contains(session_id)
+    }
+
+    fn cancel_session(&self, session_id: &str) {
+        let ids: Vec<String> = self
+            .pending_sessions
+            .lock()
+            .expect("pending sessions lock")
+            .iter()
+            .filter(|(_, sid)| *sid == session_id)
+            .map(|(call_id, _)| call_id.clone())
+            .collect();
+        for call_id in ids {
+            let _ = self.decide(&call_id, false);
+        }
     }
 }
 

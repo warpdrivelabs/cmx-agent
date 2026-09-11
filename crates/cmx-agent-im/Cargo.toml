@@ -22,5 +22,11 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 # 飞书 Stream（长连接）：websocket 客户端，rustls 免系统 TLS 依赖。拉取失败见计划「风险与退路」。
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
+# 微信 ClawBot（iLink）：QR data-url / X-WECHAT-UIN 编码（lock 已有 0.22.1，离线缓存命中）
+base64 = "0.22"
+# 微信 ClawBot（iLink）：X-WECHAT-UIN 防重放随机数（lock 已有 0.2.17，离线缓存命中）
+getrandom = "0.2"
+# QQ 机器人扫码绑定：q.qq.com 下发的 AppSecret 为 AES-256-GCM 密文（aes-gcm-0.10.3 离线缓存命中）
+aes-gcm = "0.10"
 
 [dev-dependencies]

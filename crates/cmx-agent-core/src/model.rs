@@ -47,6 +47,9 @@ pub enum ModelMessage {
 pub struct ModelResponse {
     #[serde(default)]
     pub text: Option<String>,
+    /// 推理模型可返回的思考摘要/原文；不进入下一轮模型上下文。
+    #[serde(default)]
+    pub reasoning: Option<String>,
     #[serde(default)]
     pub tool_calls: Vec<ToolCall>,
 }
@@ -56,6 +59,7 @@ impl ModelResponse {
     pub fn text(t: impl Into<String>) -> Self {
         Self {
             text: Some(t.into()),
+            reasoning: None,
             tool_calls: vec![],
         }
     }
@@ -64,6 +68,7 @@ impl ModelResponse {
     pub fn calls(tool_calls: Vec<ToolCall>) -> Self {
         Self {
             text: None,
+            reasoning: None,
             tool_calls,
         }
     }
@@ -91,6 +96,17 @@ pub trait TurnObserver: Send + Sync {
     /// 流式中断后决定重试时调用：前端应**丢弃**此前收到的所有 `on_text_delta` 半截文字，
     /// 等重试成功后再重新接收增量（避免重试时文字重复/错位）。默认空实现——未重试的模型/调用方无需改动。
     fn on_stream_reset(&self) {}
+
+    /// 推理模型的思考过程增量；deltas 不落日志，最终完整内容仍以 Reasoning 事件落库。
+    fn on_reasoning_delta(&self, _delta: &str) {}
+
+    /// 流重试时同时清空已收思考增量。默认空实现。
+    fn on_reasoning_reset(&self) {}
+
+    /// 外部中断探测：模型流读取器据此尽快停止请求与重试。
+    fn is_cancelled(&self) -> bool {
+        false
+    }
 }
 
 /// 模型缝 trait。`complete` = 给定上下文，产出下一步响应。

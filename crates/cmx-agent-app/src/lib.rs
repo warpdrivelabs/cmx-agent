@@ -21,6 +21,7 @@ pub mod model_slot;
 pub mod protocol;
 pub mod store;
 pub mod stream;
+pub mod workspace;
 
 pub use app::{AgentApp, AuthSessionFile, SendOutcome, read_auth_session, write_auth_session};
 pub use approval::InteractiveApprover;
@@ -31,6 +32,7 @@ pub use demo_model::DemoModel;
 pub use model_select::select_model;
 pub use model_slot::ModelSlot;
 pub use stream::ChannelSink;
+pub use workspace::{WorkspaceFile, WorkspaceRegistry};
 pub use error::{AppError, AppResult};
 pub use protocol::{AppRequest, AppResponse, dispatch, dispatch_json};
 pub use store::{FileSessionStore, SessionMeta, SessionStore};

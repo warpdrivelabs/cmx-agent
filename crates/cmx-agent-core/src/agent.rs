@@ -6,6 +6,7 @@
 //! 再据日志重建下一步上下文——见 [`crate::session::Session::model_context`]。
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::error::{AgentError, AgentResult};
@@ -41,6 +42,19 @@ pub trait Approver: Send + Sync {
     fn is_preapproved(&self, _session_id: &str) -> bool {
         false
     }
+
+    /// 按会话等待审批，默认退化为不区分会话的 [`Approver::resolve`]。
+    async fn resolve_for_session(
+        &self,
+        _session_id: &str,
+        call: &ToolCall,
+        reason: &str,
+    ) -> (bool, String) {
+        self.resolve(call, reason).await
+    }
+
+    /// 中断会话时拒绝其全部待决审批，避免回合卡在审批等待。默认无待决可撤。
+    fn cancel_session(&self, _session_id: &str) {}
 }
 
 /// 自动审批者（测试/自动化）：按固定答案回应。
@@ -103,6 +117,25 @@ pub struct TurnOutcome {
     pub steps: usize,
     /// 最后一条模型文本（便于前门直接展示）。
     pub final_text: Option<String>,
+}
+
+/// 单回合中断旗标。由应用层注册到活动回合表，取消时置位；
+/// 内核在模型步边界检查，模型流读取器可提前停止 HTTP 消费。
+#[derive(Debug, Clone, Default)]
+pub struct TurnCancel(Arc<AtomicBool>);
+
+impl TurnCancel {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Relaxed)
+    }
 }
 
 /// 智能体内核。
@@ -179,6 +212,19 @@ impl Agent {
         observer: Option<&dyn crate::model::TurnObserver>,
         turn_subject: Option<&crate::guard::Subject>,
     ) -> AgentResult<TurnOutcome> {
+        self.run_turn_observed_as_cancellable(session, user_input, observer, turn_subject, None)
+            .await
+    }
+
+    /// [`Self::run_turn_observed_as`] 的可中断版：不传旗标时行为完全一致。
+    pub async fn run_turn_observed_as_cancellable(
+        &self,
+        session: &mut Session,
+        user_input: &str,
+        observer: Option<&dyn crate::model::TurnObserver>,
+        turn_subject: Option<&crate::guard::Subject>,
+        cancel: Option<&TurnCancel>,
+    ) -> AgentResult<TurnOutcome> {
         let turn = session.next_turn_no();
         session.log.append(EventKind::TurnStarted {
             turn,
@@ -191,6 +237,9 @@ impl Agent {
         let mut steps = 0usize;
         let mut final_text = None;
         let reason = loop {
+            if cancel.is_some_and(|c| c.is_cancelled()) {
+                break StopReason::Stopped;
+            }
             if steps >= self.policy().max_steps {
                 break StopReason::MaxSteps;
             }
@@ -198,19 +247,24 @@ impl Agent {
 
             // ① 模型推理（上下文只从日志派生）。有 observer → 走流式，文字增量实时回调。
             let ctx = session.model_context(self.tools.specs());
-            let resp: ModelResponse = match observer {
-                Some(obs) => self
-                    .model
-                    .complete_streaming(&ctx, obs)
-                    .await
-                    .map_err(|e| AgentError::Model(e.0))?,
-                None => self
-                    .model
-                    .complete(&ctx)
-                    .await
-                    .map_err(|e| AgentError::Model(e.0))?,
+            let model_result = match observer {
+                Some(obs) => self.model.complete_streaming(&ctx, obs).await,
+                None => self.model.complete(&ctx).await,
+            };
+            let resp: ModelResponse = match model_result {
+                Ok(resp) => resp,
+                Err(_e) if cancel.is_some_and(|c| c.is_cancelled()) => break StopReason::Stopped,
+                Err(e) => return Err(AgentError::Model(e.0)),
             };
 
+            // 思考过程可审计/可回放，但不进入 model_context。
+            if let Some(text) = resp.reasoning.as_deref()
+                && !text.trim().is_empty()
+            {
+                session
+                    .log
+                    .append(EventKind::Reasoning { text: text.to_string() });
+            }
             // 记录模型输出（模型可见 → 必落日志）
             session.log.append(EventKind::ModelMessage {
                 text: resp.text.clone(),
@@ -225,10 +279,18 @@ impl Agent {
                 break StopReason::Completed;
             }
 
+            if cancel.is_some_and(|c| c.is_cancelled()) {
+                break StopReason::Stopped;
+            }
+
             // ②–⑥ 处理工具调用：一步内的多个调用**并发执行**（真并行 fan-out）。
             // 前置(路由/守卫/审批)与结果回灌仍按序（借用 &mut session + 保持日志有序），
             // 只有工具体 invoke() 并发——子智能体/网络 I/O 型调用总耗时≈最慢者而非累加。
             self.handle_tool_calls_as(session, &resp.tool_calls, turn_subject).await;
+
+            if cancel.is_some_and(|c| c.is_cancelled()) {
+                break StopReason::Stopped;
+            }
         };
 
         session.log.append(EventKind::TurnEnded {
@@ -440,7 +502,10 @@ impl Agent {
             tool: tool.to_string(),
             reason: reason.to_string(),
         });
-        let (approved, by) = self.approver.resolve(call, reason).await;
+        let (approved, by) = self
+            .approver
+            .resolve_for_session(&session.id, call, reason)
+            .await;
         session.log.append(EventKind::ApprovalResolved {
             call_id: call.id.clone(),
             approved,
@@ -508,5 +573,32 @@ impl AgentBuilder {
                 .unwrap_or_else(|| Arc::new(AutoApprover::reject())),
             policy: std::sync::RwLock::new(self.policy),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::event::EventKind;
+    use crate::model::MockModel;
+
+    #[tokio::test]
+    async fn cancelled_turn_is_persisted_as_stopped() {
+        let agent = Agent::builder()
+            .model(Arc::new(MockModel::saying("不应执行")))
+            .build()
+            .unwrap();
+        let cancel = TurnCancel::new();
+        cancel.cancel();
+        let mut session = Session::new("s-cancel");
+        let outcome = agent
+            .run_turn_observed_as_cancellable(&mut session, "长任务", None, None, Some(&cancel))
+            .await
+            .unwrap();
+        assert_eq!(outcome.reason, StopReason::Stopped);
+        assert!(matches!(
+            session.log.events().last().unwrap().kind,
+            EventKind::TurnEnded { reason: StopReason::Stopped, .. }
+        ));
     }
 }

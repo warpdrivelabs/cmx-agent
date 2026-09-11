@@ -25,6 +25,11 @@ pub enum EventKind {
         #[serde(default)]
         tool_calls: Vec<ToolCall>,
     },
+    /// 推理模型的思考过程（不回灌上下文，但审计/回放/界面需要）。
+    Reasoning {
+        #[serde(default)]
+        text: String,
+    },
     /// 工具被派发（进入守卫管道之前登记，保证"意图"可审计）。
     ToolInvoked { call: ToolCall },
     /// 守卫裁决（某一相 pre/execute/post 的第一个非 Allow 结果，或最终 Allow）。

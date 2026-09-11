@@ -5,6 +5,8 @@
 //! 待 tauri 联网装好后，可无缝换成原生 WebView 壳（业务零改动）。
 //!
 //! 用法：`cargo run --offline -p cmx-agent-web`（自动开窗）；`--no-open` 只起服务不开窗。
+//! 端口固定 8099（引擎段 8091-8098 / launcher 8100 之外的空位，联调可预期）；
+//! `--port N` 或 `CMX_AGENT_WEB_PORT` 可覆盖；端口被占用（如双开实例）回退随机端口。
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -14,6 +16,9 @@ use axum::extract::State;
 use axum::response::{Html, IntoResponse};
 use axum::routing::{get, post};
 use cmx_agent_app::{AgentApp, DesktopAppBuilder, dispatch_json};
+
+/// 默认固定端口：与各引擎/门户/launcher 的已占段错开，双壳/浏览器书签/代理配置都好写死。
+const DEFAULT_PORT: u16 = 8099;
 
 /// 前端单页 SPA（内嵌，css/js 拆分为静态资源经 include_bytes! 内嵌）。
 const INDEX_HTML: &str = include_str!("../ui/index.html");
@@ -33,11 +38,15 @@ async fn main() {
         .init();
 
     let no_open = std::env::args().any(|a| a == "--no-open");
+    let want_port = resolve_port(
+        &std::env::args().collect::<Vec<_>>(),
+        std::env::var("CMX_AGENT_WEB_PORT").ok().as_deref(),
+    );
 
     // 数据根 & 工作区（沙箱根）：与 Tauri 壳同一数据根（ProjectDirs，CMX_AGENT_DATA_DIR 可覆盖）——
     // model.json / 会话双壳共享，配置一次两壳生效。此前落 %TEMP% 会被清临时目录连坐丢失。
     let data_dir = cmx_agent_app::shared_data_dir();
-    let workdir = data_dir.join("workspace");
+    let workdir = data_dir.join("workspaces").join("default");
     std::fs::create_dir_all(&workdir).expect("create workdir");
 
     let app = build_app(&workdir, &data_dir).await;
@@ -53,10 +62,16 @@ async fn main() {
         .route("/health", get(|| async { "ok" }))
         .with_state(state);
 
-    // 绑定随机可用端口（127.0.0.1，本机独占，不对外）。
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind loopback");
+    // 绑定固定端口（默认 8099）：被占用（如双开实例）时告警并回退随机端口，保证总能打开界面。
+    let listener = match tokio::net::TcpListener::bind(("127.0.0.1", want_port)).await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::warn!("固定端口 {want_port} 被占用（{e}），回退随机端口。可用 --port / CMX_AGENT_WEB_PORT 换一个。");
+            tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind loopback")
+        }
+    };
     let addr: SocketAddr = listener.local_addr().expect("local addr");
     let url = format!("http://{addr}/");
     tracing::info!("cmx-agent 桌面界面已就绪：{url}");
@@ -120,6 +135,7 @@ async fn css_asset(
         "chat.css" => include_bytes!("../ui/css/chat.css"),
         "panels.css" => include_bytes!("../ui/css/panels.css"),
         "login.css" => include_bytes!("../ui/css/login.css"),
+        "dropdown.css" => include_bytes!("../ui/css/dropdown.css"),
         _ => return axum::http::StatusCode::NOT_FOUND.into_response(),
     };
     (
@@ -138,11 +154,16 @@ async fn js_asset(
         "tabs.js" => include_bytes!("../ui/js/tabs.js"),
         "markdown.js" => include_bytes!("../ui/js/markdown.js"),
         "render.js" => include_bytes!("../ui/js/render.js"),
+        "dropdown.js" => include_bytes!("../ui/js/dropdown.js"),
         "session.js" => include_bytes!("../ui/js/session.js"),
         "panels.js" => include_bytes!("../ui/js/panels.js"),
         "model.js" => include_bytes!("../ui/js/model.js"),
+        "workspace.js" => include_bytes!("../ui/js/workspace.js"),
         "im.js" => include_bytes!("../ui/js/im.js"),
+        "vendor/qrcode.min.js" => include_bytes!("../ui/js/vendor/qrcode.min.js"),
         "login.js" => include_bytes!("../ui/js/login.js"),
+        "update.js" => include_bytes!("../ui/js/update.js"),
+        "platform.js" => include_bytes!("../ui/js/platform.js"),
         "main.js" => include_bytes!("../ui/js/main.js"),
         _ => return axum::http::StatusCode::NOT_FOUND.into_response(),
     };
@@ -206,6 +227,26 @@ async fn api_stream(
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
+/// 端口解析：`--port N` 参数 > `CMX_AGENT_WEB_PORT` 环境变量 > 默认 [`DEFAULT_PORT`]。
+/// 非法值不报错，回退下一优先级（桌面应用启动路径宁可用默认端口也别崩）。
+fn resolve_port(args: &[String], env: Option<&str>) -> u16 {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        let raw = if a == "--port" {
+            it.next().map(String::as_str)
+        } else {
+            a.strip_prefix("--port=")
+        };
+        if let Some(p) = raw.and_then(|v| v.trim().parse::<u16>().ok()) {
+            return p;
+        }
+    }
+    if let Some(p) = env.and_then(|s| s.trim().parse::<u16>().ok()) {
+        return p;
+    }
+    DEFAULT_PORT
+}
+
 /// 用 Chrome `--app=` 模式开一个无边框独立窗口（观感=桌面 App）。找不到 Chrome 则退回默认浏览器。
 fn open_desktop_window(url: &str) {
     #[cfg(target_os = "macos")]
@@ -265,4 +306,42 @@ fn spawn_chromium_app(program: &std::path::Path, url: &str) -> bool {
         .arg("--no-default-browser-check")
         .spawn()
         .is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn workspace_ui_script_is_embedded_and_served() {
+        let response = js_asset(axum::extract::Path("workspace.js".to_string()))
+            .await
+            .into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        assert!(!body.is_empty());
+        let source = String::from_utf8_lossy(&body);
+        assert!(source.contains("function initWorkspaceUI()"));
+    }
+
+    #[test]
+    fn resolve_port_prefers_flag_then_env_then_default() {
+        let args = |v: &[&str]| -> Vec<String> { v.iter().map(|s| (*s).to_string()).collect() };
+        // 参数两种写法
+        assert_eq!(resolve_port(&args(&["prog", "--port", "9001"]), None), 9001);
+        assert_eq!(resolve_port(&args(&["prog", "--port=9002"]), None), 9002);
+        // 环境变量（含空白容忍）
+        assert_eq!(resolve_port(&args(&["prog"]), Some(" 9003 ")), 9003);
+        // 缺省固定端口
+        assert_eq!(resolve_port(&args(&["prog"]), None), DEFAULT_PORT);
+        assert_eq!(DEFAULT_PORT, 8099);
+        // 非法值回退下一优先级
+        assert_eq!(resolve_port(&args(&["prog", "--port", "abc"]), None), DEFAULT_PORT);
+        assert_eq!(resolve_port(&args(&["prog", "--port", "abc"]), Some("9004")), 9004);
+        assert_eq!(resolve_port(&args(&["prog"]), Some("bad")), DEFAULT_PORT);
+        // `--port` 缺值也回退
+        assert_eq!(resolve_port(&args(&["prog", "--port"]), None), DEFAULT_PORT);
+    }
 }

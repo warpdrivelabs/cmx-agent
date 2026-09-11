@@ -26,7 +26,6 @@
   .tab-dd-item .ddx{margin-left:auto;color:var(--muted);opacity:.6} .tab-dd-item .ddx:hover{color:var(--red);opacity:1}
   /* tab 右键菜单复用 .cmxmenu，但用固定定位（JS 设 left/top）*/
   .tabctx{position:fixed;bottom:auto}
-
   /* 空态默认内容（无 tab 时显示）*/
   #home{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 40px;overflow:auto}
   #home.off{display:none}
@@ -55,11 +54,12 @@
   .composer .send{width:34px;height:34px;border-radius:50%;background:var(--surface);color:var(--ink);
     display:flex;align-items:center;justify-content:center;font-size:15px}
   .composer .send:hover{background:var(--aqua);color:#052} .composer .send:disabled{opacity:.4}
-  .selectors{display:flex;gap:14px;margin-top:12px;max-width:820px;width:100%}
-  .selbtn{display:flex;align-items:center;gap:7px;padding:7px 12px;border-radius:9px;color:var(--ink2);font-size:13px;border:1px solid transparent}
-  .selbtn:hover{background:var(--panel2);border-color:var(--border)}
+  .selectors{display:flex;gap:10px;margin-top:12px;max-width:820px;width:100%}
+  /* 壳即 chip 本体（与 .workspace-btn 同规格）；内层 cmx-dd-trigger 透明化，防双层 padding 撑出大块 */
+  .selbtn{display:flex;align-items:center;gap:7px;padding:5px 11px;border-radius:9px;color:var(--ink2);font-size:12.5px;
+    border:1px solid var(--border2);background:var(--panel2);transition:background .12s,border-color .12s,color .12s}
+  .selbtn:hover{background:var(--hover);border-color:var(--aqua);color:var(--ink)}
   .selbtn select{background:none;border:none;color:var(--ink2);font-family:inherit;font-size:13px;outline:none;cursor:pointer}
-  
 
   /* 会话态 */
   /* tab 内容容器：每个 tab 一个 .tabview，只 active 的显示 */
@@ -76,9 +76,13 @@
   .im-center
   @keyframes imspin{to{transform:rotate(360deg)}}
   .session-view{flex:1;display:flex;flex-direction:column;min-height:0}
-  .log{flex:1;overflow:auto;padding:22px;display:flex;flex-direction:column;gap:11px}
+  /* 会话时间线：紧凑文档式（贴参考图）——行间距收紧、内容整体细一号 */
+  .log{flex:1;overflow:auto;padding:20px 24px;display:flex;flex-direction:column;gap:3px}
   .row{display:flex;gap:10px}
-  .row.user{align-self:flex-end;flex-direction:row-reverse;max-width:80%}
+  /* 用户消息：右上小气泡条（参考图位置），无头像。margin-left:auto 在 block 容器内右对齐 */
+  .user-chip{width:fit-content;margin:6px 0 4px auto;max-width:78%;
+    background:var(--blue);color:#fff;border-radius:14px 14px 4px 14px;padding:8px 13px;
+    font-size:13.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
   /* AI 气泡撑满该行（与工具卡片同宽），使整列内容左对齐、右边界一致；用户气泡仍随内容收缩 */
   .row:not(.user){align-self:stretch}
   .row:not(.user) .bubble{flex:1 1 auto;min-width:0}
@@ -96,23 +100,24 @@
   .bubble.md .md-quote{margin:8px 0;padding:4px 12px;border-left:3px solid var(--aqua);color:var(--ink2);background:var(--panel2);border-radius:0 8px 8px 0}
   .bubble.md .md-hr{border:none;border-top:1px solid var(--border);margin:12px 0}
   .bubble.md code{font-family:"SF Mono",Menlo,monospace;font-size:12.5px;background:var(--panel2);border:1px solid var(--border);border-radius:5px;padding:1px 5px}
-  .bubble.md .md-pre{margin:10px 0;background:var(--bg2,#0d1420);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow:auto}
-  .bubble.md .md-pre code{background:none;border:none;padding:0;font-size:12.5px;line-height:1.5;color:var(--ink);white-space:pre}
+  .bubble.md .md-pre{margin:10px 0;background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow:auto}
+  .bubble.md .md-pre code{background:none;border:none;padding:0;font-size:12.5px;line-height:1.5;color:var(--code-ink);white-space:pre}
   .bubble.md a{color:var(--aqua);text-decoration:none} .bubble.md a:hover{text-decoration:underline}
   .bubble.md .md-table{border-collapse:collapse;margin:10px 0;font-size:13px;display:block;overflow-x:auto}
   .bubble.md .md-table th,.bubble.md .md-table td{border:1px solid var(--border2);padding:6px 11px;text-align:left}
   .bubble.md .md-table th{background:var(--panel2);font-weight:700;color:var(--ink)}
   .bubble.md .md-table tr:nth-child(even) td{background:var(--panel2)}
   .row.user .bubble{background:var(--blue);color:#fff;border-color:transparent}
-  .tool{align-self:flex-start;width:calc(100% - 40px);margin-left:40px;min-width:0;background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:8px 12px;font-size:12.5px;color:var(--ink2)}
+  /* 工具基础：最终样式在文件末尾「参考图式时间线」块（纯行化，无卡片底） */
+  .tool{min-width:0}
   .tool.denied{border-color:var(--red)}
   .tool .tchead{display:flex;align-items:center;gap:7px;font-size:12.5px} .tool .tchead b{color:var(--aqua)} .tool.denied .tchead b{color:var(--red)}
   .tool .tcpath{font-family:"SF Mono",Menlo,monospace;font-size:11.5px;color:var(--ink2)} .tool .tcmeta{margin-left:auto;color:var(--muted);font-size:11px}
-  .tool .tterm{margin:7px 0 2px;background:#0a0e14;border:1px solid var(--border);border-radius:8px;padding:9px 12px;
-    font-family:"SF Mono",Menlo,monospace;font-size:11.5px;line-height:1.5;color:#c8d3e0;white-space:pre;overflow:auto;max-height:340px}
+  .tool .tterm{margin:7px 0 2px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;
+    font-family:"SF Mono",Menlo,monospace;font-size:11.5px;line-height:1.5;color:var(--code-ink);white-space:pre;overflow:auto;max-height:340px}
   .tool .tterm.tterr{color:var(--red)}
-  .tool .tcode{margin:7px 0 2px;background:var(--bg2,#0d1420);border:1px solid var(--border);border-radius:8px;padding:9px 12px;
-    font-family:"SF Mono",Menlo,monospace;font-size:11.5px;line-height:1.5;color:var(--ink);white-space:pre;overflow:auto;max-height:340px}
+  .tool .tcode{margin:7px 0 2px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;
+    font-family:"SF Mono",Menlo,monospace;font-size:11.5px;line-height:1.5;color:var(--code-ink);white-space:pre;overflow:auto;max-height:340px}
   .tool .tcempty{color:var(--muted);font-size:11.5px;margin-top:5px}
   /* U10 web_search 结果条 + web_fetch 页头 */
   .tool .wsr{margin:8px 0;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface)}
@@ -135,26 +140,28 @@
   .tool .tdata th,.tool .tdata td{border:1px solid var(--border2);padding:4px 9px;text-align:left;color:var(--ink2)}
   .tool .tdata th{background:var(--panel2);color:var(--ink);font-weight:700}
   /* U5 红绿 diff（fs_edit / apply_patch）*/
-  .tool .tdiff{margin:7px 0 2px;background:#0a0e14;border:1px solid var(--border);border-radius:8px;padding:8px 0;
+  .tool .tdiff{margin:7px 0 2px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:8px 0;
     font-family:"SF Mono",Menlo,monospace;font-size:11.5px;line-height:1.55;overflow:auto;max-height:360px}
   .tool .tdiff .dl{display:block;padding:0 12px;white-space:pre-wrap;word-break:break-word}
-  .tool .tdiff .add{color:#7ee2b8;background:rgba(34,197,94,.12)}
-  .tool .tdiff .del{color:#f0a0a0;background:rgba(229,96,95,.12)}
+  .tool .tdiff .add{color:var(--green);background:rgba(34,197,94,.12)}
+  .tool .tdiff .del{color:var(--red);background:rgba(229,96,95,.12)}
   .tool .tdiff .hunk{color:var(--violet)} .tool .tdiff .ctx{color:var(--ink2)}
   /* 子智能体 task 块：任务描述 + 最终回答 */
   .tool .tcsub{margin:7px 0 2px;background:var(--panel);border:1px solid var(--violet);border-left:3px solid var(--violet);
     border-radius:8px;padding:9px 12px;font-size:12.5px;color:var(--ink2);line-height:1.55}
   .tool .tcsub.md{color:var(--ink)}
-  /* 人在环审批卡片（X4）*/
-  .tool.approval{border-color:var(--gold);background:linear-gradient(180deg,rgba(229,185,95,.06),transparent)}
+  /* 人在环审批（X4）：素净条状——中性淡底 + 左侧金色细线，不再整块染色 */
+  .tool.approval{border:1px solid var(--border2);border-left:3px solid var(--gold);background:var(--panel2);
+    border-radius:0 9px 9px 0;padding:8px 12px;margin:3px 0}
   .tool.approval .tchead b{color:var(--gold)}
-  .tool .apreason{margin:6px 0 10px;font-size:12.5px;color:var(--ink2);line-height:1.5}
-  .tool .aprow{display:flex;gap:9px}
-  .tool .apbtn{flex:0 0 auto;padding:7px 18px;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer;border:1px solid var(--border2);background:var(--panel)}
-  .tool .apbtn.allow{background:linear-gradient(135deg,var(--aqua),var(--green2));color:#fff;border-color:transparent}
+  .tool .apreason{margin:4px 0 8px;font-size:12px;color:var(--muted);line-height:1.5}
+  .tool .aprow{display:flex;gap:8px}
+  .tool .apbtn{flex:0 0 auto;padding:5px 14px;border-radius:8px;font-size:12.5px;font-weight:600;cursor:pointer;border:1px solid var(--border2);background:var(--panel);transition:border-color .12s,filter .12s}
+  .tool .apbtn.allow{background:var(--aqua);color:#fff;border-color:transparent}
   .tool .apbtn.allow:hover{filter:brightness(1.08)}
   .tool .apbtn.reject{color:var(--ink2)} .tool .apbtn.reject:hover{border-color:var(--red);color:var(--red)}
-  .tool .apbtn.allowall{color:var(--gold);border-color:var(--border2)} .tool .apbtn.allowall:hover{border-color:var(--gold);background:rgba(229,185,95,.10)}
+  .tool .apbtn.allowall{color:var(--gold);border-color:var(--border2);font-weight:500} .tool .apbtn.allowall:hover{border-color:var(--gold);background:rgba(229,185,95,.10)}
+  .tool .apresolved{margin-top:5px;font-size:12px;font-weight:500} .tool .apresolved.ok{color:var(--green2)} .tool .apresolved.no{color:var(--red)}
   .meta.apauto{color:var(--gold);opacity:.85}
   .loadmore{align-self:center;margin:2px 0 12px;padding:6px 16px;border-radius:999px;font-size:12.5px;color:var(--ink2);background:var(--panel);border:1px solid var(--border2);cursor:pointer}
   .loadmore:hover{border-color:var(--aqua);color:var(--aqua)}
@@ -213,7 +220,8 @@
   .inp2,#inp2{width:100%;background:none;border:none;outline:none;color:var(--ink);font-size:15px;line-height:1.55;
     resize:none;font-family:inherit;min-height:26px;max-height:200px;overflow-y:auto}
   .inp2::placeholder,#inp2::placeholder{color:var(--muted)}
-  .chat-composer .crow{display:flex;align-items:center;height:32px;margin-top:8px;padding-top:8px;gap:6px;border-top:1px solid var(--border)}
+  /* min-height 而非 height：height+padding 会把 28~30px 高的按钮挤出行内容盒（按钮视觉偏移） */
+  .chat-composer .crow{display:flex;align-items:center;min-height:32px;margin-top:8px;padding-top:8px;gap:6px;border-top:1px solid var(--border)}
   .tool-ic{display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:8px;
     color:var(--ink2);font-size:14px;background:transparent;border:1px solid transparent}
   .tool-ic:hover{background:var(--hover);color:var(--ink)}
@@ -225,4 +233,129 @@
   .chat-composer .send{width:30px;height:30px;border-radius:9px;background:var(--aqua);color:#fff;
     display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;margin-left:2px}
   .chat-composer .send:hover{filter:brightness(1.1)} .chat-composer .send:disabled{opacity:.35;cursor:default}
-
+
+/* ── 回合聚合 item：参考界面式连续文档线程——无卡片底、无头像；回合间以留白分隔。
+   计时行/思考行/工具行/折叠等样式统一在文件末尾「参考图式时间线」块 ── */
+.turn{position:relative;margin:14px 0 6px;padding:0;overflow-wrap:anywhere}
+.turn .meta:last-child{margin-bottom:0}
+/* 助手正文：裸排版（无气泡底），markdown 内部样式沿用 .bubble.md 规则 */
+.bubble.bare{background:transparent;border:0;border-radius:0;padding:0}
+
+/* 中断态发送键：方块为几何绘制（.stop-ico），随 flex 绝对居中 */
+.chat-composer .send.stop{background:var(--red);color:#fff}
+.chat-composer .send .stop-ico{width:10px;height:10px;border-radius:2px;background:currentColor;display:block}
+
+/* ══════ 参考图式时间线（纯文本行，无卡片底）══════ */
+
+/* ── 工具行：一行纯文本（图标 + 名称 + 等宽参数 + 状态点），无背景无边框；
+   点击展开详情体（缩进 + 左细线）；无 chevron（ZCode 式素净行）── */
+.tool{align-self:flex-start;width:100%;margin:0;padding:0;border:0;background:none;
+  border-radius:0;font-size:12px;color:var(--ink2)}
+.tool.denied .tc-name{color:var(--red)}
+.tool.tcard .tc-trig{display:flex;align-items:baseline;gap:7px;width:100%;padding:2px 7px;margin:0 -7px;
+  border:0;background:transparent;color:inherit;font-size:12px;font-family:inherit;
+  text-align:left;cursor:pointer;min-width:0;border-radius:7px;transition:background .12s}
+.tool.tcard .tc-trig:hover{background:var(--hover)}
+.tool.tcard .tc-trig:hover .tc-name{color:var(--ink)}
+.tool.tcard.run .tc-trig{cursor:default}
+.tool.tcard.run .tc-trig:hover{background:transparent}
+.tool.tcard:not(.open) .tc-trig .tc-chev{transform:rotate(-90deg)}
+.tool.tcard.run .tc-chev{display:none}
+.tool .tc-st{width:13px;height:13px;flex:0 0 13px;align-self:center;display:inline-flex;align-items:center;justify-content:center}
+.tool .tc-st svg{width:11px;height:11px;display:block}
+.tool .tc-st.ok{color:var(--green)} .tool .tc-st.bad{color:var(--red)}
+.tool .tc-spin{width:9px;height:9px;border-radius:50%;border:1.5px solid var(--border2);border-top-color:var(--aqua);
+  animation:tcsSpin .8s linear infinite;display:block}
+@keyframes tcsSpin{to{transform:rotate(360deg)}}
+.tool .tc-g{flex:0 0 auto;font-size:11px;align-self:center;opacity:.9}
+.tool .tc-name{flex:0 0 auto;font-weight:600;font-size:12px;color:var(--ink2)}
+.tool .tc-sub{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:"SF Mono",Menlo,Consolas,monospace;font-size:11px;color:var(--muted)}
+.tool .tc-arg{flex:0 0 auto;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:"SF Mono",Menlo,Consolas,monospace;font-size:10.5px;color:var(--muted);opacity:.85}
+/* 展开详情体：缩进 + 左侧细线（不再有卡片头） */
+.tool.tcard .tc-body{padding:2px 0 4px 20px;border-left:2px solid var(--border);margin:1px 0 4px 6px}
+.tool.tcard .tc-body .tcmeta{display:block;margin-bottom:3px}
+.tool .tcmeta.ok{color:var(--green)} .tool .tcmeta.bad{color:var(--red)}
+.tool.tcard .tcacts{margin-left:4px;align-self:center}
+/* 终端/代码/diff 块：缩小字号，无外边距堆积 */
+.tool .tterm,.tool .tcode{margin:3px 0;border:1px solid var(--border);border-radius:6px;
+  font-size:11px;line-height:1.45;max-height:300px}
+.tool .tdiff{margin:3px 0;font-size:11px;line-height:1.45;max-height:300px;border-radius:6px}
+
+/* ── 上下文引用组：同样纯行「🔍 已引用 N 处 ▾」，chevron 紧跟文字 ── */
+.tc-chev{color:var(--muted);opacity:.6;transition:transform .16s;flex:0 0 auto;font-size:10px;align-self:center}
+.ctxgroup{align-self:flex-start;width:100%;margin:0;padding:0;border:0;background:none}
+.ctxgroup .cg-head{display:flex;align-items:center;gap:7px;width:fit-content;max-width:100%;padding:2px 7px;margin:0 -7px;border:0;
+  background:transparent;color:var(--muted);font-size:12px;font-family:inherit;text-align:left;cursor:pointer;
+  border-radius:7px;transition:background .12s}
+.ctxgroup .cg-head:hover{background:var(--hover);color:var(--ink2)}
+.ctxgroup .cg-g{font-size:11px}
+.ctxgroup .cg-label b{color:var(--ink2);font-weight:600}
+.ctxgroup:not(.open) .cg-head .tc-chev{transform:rotate(-90deg)}
+.cg-list{padding:0 0 0 20px;border-left:2px solid var(--border);margin:1px 0 4px 6px;display:flex;flex-direction:column;gap:1px}
+.cg-list[hidden]{display:none}   /* display:flex 会压过 hidden 的 UA 样式，须显式抵消 */
+.cg-item{display:flex;align-items:baseline;gap:7px;padding:0;color:var(--muted);font-size:11.5px;cursor:pointer;flex-wrap:wrap}
+.cg-item:hover{color:var(--ink2)}
+.cg-item .cg-st{flex:0 0 auto;font-size:10.5px}
+.cg-item .cg-st.ok{color:var(--green)}
+.cg-item .cg-st.bad{color:var(--red);opacity:.75}
+.cg-item .cg-name{color:var(--ink2);font-weight:600;font-size:11.5px}
+.cg-item .cg-sub{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:"SF Mono",Menlo,Consolas,monospace;font-size:10.5px;color:var(--muted)}
+.cg-fail{flex:0 0 auto;font-size:10.5px;color:var(--red);opacity:.75}
+.cg-body{flex-basis:100%}
+.cg-body .tool.tcard{width:100%}
+.cg-body .tool.tcard .tc-trig{display:none}
+.cg-body .tool.tcard .tc-body{border-left:0;margin-left:0;padding-left:2px}
+
+/* ── 思考行：纯行「🧠 思考 · 持续了 N 秒 ▾」（chevron 紧跟文字，不推到行尾），展开体缩进 ── */
+.reasoning{margin:0;padding:0;border:0;background:none;border-radius:0;overflow:visible}
+.reasoning-head{display:flex;align-items:center;gap:7px;width:fit-content;max-width:100%;min-height:20px;padding:2px 7px;margin:0 -7px;
+  border:0;background:transparent;color:var(--muted);font-size:12px;font-family:inherit;text-align:left;
+  cursor:pointer;border-radius:7px;transition:background .12s}
+.reasoning-head:hover{background:var(--hover);color:var(--ink2)}
+.reasoning-head .chev{color:var(--muted);opacity:.6;transition:transform .16s;font-size:10px}
+.reasoning-body{padding:2px 0 4px 20px;color:var(--muted);font-size:11.5px;line-height:1.55;
+  white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;
+  border-left:2px solid var(--border);margin:1px 0 4px 6px}
+.reasoning.closed .chev{transform:rotate(-90deg)}
+.reasoning.closed .reasoning-body{display:none}
+
+/* ── 等待行（busy）：纯行小字 ── */
+.thinking-row{display:flex;align-items:center;gap:7px;padding:1px 0;font-size:12px;color:var(--muted)}
+.thinking-row .th-ico{color:var(--muted);font-size:11px;animation:thPulse 1.4s ease-in-out infinite}
+@keyframes thPulse{0%,100%{opacity:.45}50%{opacity:1}}
+.shimmer{background:linear-gradient(90deg,var(--muted) 0%,var(--ink2) 50%,var(--muted) 100%);
+  background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;
+  animation:shimmerSlide 1.8s linear infinite}
+@keyframes shimmerSlide{to{background-position:-200% 0}}
+
+/* ── 回合计时行 + 折叠 ── */
+.work-dur{display:flex;align-items:center;gap:6px;margin:0 -7px 4px;padding:2px 7px;
+  font-size:12px;color:var(--muted);cursor:pointer;user-select:none;width:fit-content;
+  border-radius:7px;transition:background .12s}
+.work-dur:hover{background:var(--hover);color:var(--ink2)}
+.work-dur .chev{transition:transform .16s;font-size:10px;opacity:.6}
+.turn.folded .work-dur .chev{transform:rotate(-90deg)}
+.turn.folded .reasoning,.turn.folded .tool.tcard,.turn.folded .ctxgroup,.turn.folded .thinking-row{display:none}
+
+/* ── 回合分隔条（中断）：轻量一行小字，不画贯穿横线（920px 列宽下横线太抢眼）── */
+.turn-divider{align-self:flex-start;width:fit-content;display:flex;align-items:center;gap:6px;
+  font-size:11.5px;color:var(--muted);margin:2px 0}
+.turn-divider.int{color:var(--orange);opacity:.9}
+.meta.note.bad{color:var(--red)}
+
+/* ── 审批卡：全时间线里唯一保留卡片态的元素（需要用户注意的交互）── */
+.tool.approval{border:1px solid var(--gold);border-radius:10px;padding:8px 12px;margin:4px 0;
+  background:linear-gradient(180deg,rgba(229,185,95,.06),transparent)}
+.tool.approval .tchead{display:flex;align-items:center;gap:7px;font-size:12.5px}
+.tool.approval .tchead b{color:var(--gold)}
+/* 旧式兜底结果卡（跨分页无配对时）：给个轻缩进，内容块自带样式 */
+.tool:not(.tcard):not(.approval) .tchead{display:flex;align-items:center;gap:7px;font-size:12px}
+.tool:not(.tcard):not(.approval) .tchead b{color:var(--ink2)}
+
+/* ── 时间线两侧留白（ZCode 式）：内容列固定宽度居中，两侧按屏幕比例均分留白；窄窗口自动让位。
+   width:100% 必须显式——flex 子项一旦带 auto margin 就失去默认 stretch，会塌成内容宽 ── */
+.log>*{width:100%;max-width:min(920px,100%);margin-left:auto;margin-right:auto}
+.log>.loadmore{width:fit-content}

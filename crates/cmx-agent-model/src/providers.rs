@@ -50,19 +50,109 @@ pub fn new_id() -> String {
         .unwrap_or(0))
 }
 
+/// base_url 归一化：去 scheme/尾斜杠、小写。匹配规则：互为前缀即视为同一 provider
+/// （旧 model.json 常写 `https://api.deepseek.com`，预设是 `…/v1`）。
+fn normalize_base(u: &str) -> String {
+    u.trim()
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_end_matches('/')
+        .to_ascii_lowercase()
+}
+
 impl ProviderFile {
     /// 读 `<dir>/providers.json`；不存在/解析失败则**播种**（不落盘——写发生在首次 save）：
     /// 内置预设常驻；model.json 的 key/model/base_url 合入命中 base_url 的内置条目
     /// （未命中则作为「默认」内置条目追加）；model.json 未配置则尝试 env 同样合并；
     /// 都没有 → 空表（demo 兜底）。
+    ///
+    /// **已存在的文件同样合并 legacy（model.json/env）凭据**：内置条目 key 恒空（不入仓库），
+    /// 若只在播种时合并，面板热切模型会拿无 key 配置调网关（网关报「未提供令牌」）。
+    /// 读已有文件时 `force=false`：只补空缺，不覆盖用户在面板里显式填过的 key/model。
     pub fn load(dir: &Path) -> Self {
+        Self::load_with_inherit(dir, None)
+    }
+
+    /// [`Self::load`] 的继承变体：`inherit_from`（如登录态 per-user 目录对应的全局配置目录）
+    /// 里存在 providers.json 时，把**同网关**（base_url 归一化匹配）条目的 key 补给本表空 key 条目。
+    /// 场景：用户在共享域填过 key，登录后 effective 目录切到 per-user、其条目 key 为空，
+    /// 不继承则面板热切模型会拿空凭据调网关（网关报「未提供令牌」）。只补空缺，不覆盖显式配置。
+    pub fn load_with_inherit(dir: &Path, inherit_from: Option<&Path>) -> Self {
         if let Ok(s) = std::fs::read_to_string(dir.join("providers.json"))
             && let Ok(mut pf) = serde_json::from_str::<ProviderFile>(&s)
         {
             pf.prune_removed_builtins();
+            if let Some(legacy) = Self::read_legacy(dir) {
+                pf.merge_legacy(legacy, false);
+            }
+            if let Some(base) = inherit_from {
+                pf.inherit_keys_from(base);
+            }
             return Self::ensure_builtins(pf);
         }
         Self::seed(dir)
+    }
+
+    /// 从基准目录的 providers.json 同网关条目**只补空 key**（model 等其余配置不动、不落盘）。
+    fn inherit_keys_from(&mut self, base_dir: &Path) {
+        let Ok(s) = std::fs::read_to_string(base_dir.join("providers.json")) else {
+            return;
+        };
+        let Ok(base_pf) = serde_json::from_str::<ProviderFile>(&s) else {
+            return;
+        };
+        for p in self.providers.iter_mut().filter(|p| p.config.api_key.is_empty()) {
+            let b = normalize_base(&p.config.base_url);
+            if b.is_empty() {
+                continue;
+            }
+            if let Some(src) = base_pf.providers.iter().find(|x| {
+                normalize_base(&x.config.base_url) == b && !x.config.api_key.is_empty()
+            }) {
+                p.config.api_key = src.config.api_key.clone();
+            }
+        }
+    }
+
+    /// 旧配置读取：model.json 优先，其次 env（哪个有值用哪个）。
+    fn read_legacy(dir: &Path) -> Option<ModelProviderConfig> {
+        std::fs::read_to_string(dir.join("model.json"))
+            .ok()
+            .and_then(|s| ModelProviderConfig::from_json_str(&s))
+            .or_else(ModelProviderConfig::from_env)
+    }
+
+    /// 把 legacy 配置合并进命中 base_url 的条目。返回命中/新增条目 id（未命中且不追加时为 None）。
+    /// `force=true`（播种）：key/model 直接覆盖，未命中追加「默认」条目；
+    /// `force=false`（读已有文件）：只补空缺，不覆盖用户显式配置，未命中不追加。
+    fn merge_legacy(&mut self, cfg: ModelProviderConfig, force: bool) -> Option<String> {
+        let key = normalize_base(&cfg.base_url);
+        let hit = self.providers.iter_mut().find(|p| {
+            let b = normalize_base(&p.config.base_url);
+            !key.is_empty() && !b.is_empty() && (b.starts_with(&key) || key.starts_with(&b))
+        });
+        match hit {
+            Some(p) => {
+                if force || p.config.api_key.is_empty() {
+                    p.config.api_key = cfg.api_key.clone();
+                }
+                if force || p.config.model.is_empty() {
+                    p.config.model = cfg.model.clone();
+                }
+                Some(p.id.clone())
+            }
+            None if force => {
+                let id = "builtin-default".to_string();
+                self.providers.push(NamedProvider {
+                    id: id.clone(),
+                    name: "默认".into(),
+                    builtin: true,
+                    config: cfg,
+                });
+                Some(id)
+            }
+            None => None,
+        }
     }
 
     /// 旧版本内置条目剪除（2026-09-10 收敛为仅 MLamp 一条）：已发布的旧版文件里留有
@@ -86,47 +176,12 @@ impl ProviderFile {
         }
     }
 
-    /// 播种：内置预设打底 + model.json / env 合并。
+    /// 播种：内置预设打底 + model.json / env 合并（合并命中条目后设为激活）。
     fn seed(dir: &Path) -> Self {
         let mut pf = Self::ensure_builtins(Self::default());
-        // 旧 model.json / env 配置（哪个有值用哪个）合并成默认激活条目。
-        let legacy = std::fs::read_to_string(dir.join("model.json"))
-            .ok()
-            .and_then(|s| ModelProviderConfig::from_json_str(&s))
-            .or_else(ModelProviderConfig::from_env);
-        if let Some(cfg) = legacy {
-            // base_url 命中内置预设 → 把 key/model 并进去；否则追加「默认」条目。
-            // 归一化比较：去 scheme/尾斜杠后互为前缀即视为同一 provider
-            //（旧 model.json 常写 `https://api.deepseek.com`，预设是 `…/v1`）。
-            let norm = |u: &str| {
-                u.trim()
-                    .trim_start_matches("https://")
-                    .trim_start_matches("http://")
-                    .trim_end_matches('/')
-                    .to_ascii_lowercase()
-            };
-            let key = norm(&cfg.base_url);
-            let hit = pf.providers.iter_mut().find(|p| {
-                let b = norm(&p.config.base_url);
-                !key.is_empty() && !b.is_empty() && (b.starts_with(&key) || key.starts_with(&b))
-            });
-            let id = match hit {
-                Some(p) => {
-                    p.config.api_key = cfg.api_key.clone();
-                    p.config.model = cfg.model.clone();
-                    p.id.clone()
-                }
-                None => {
-                    let id = "builtin-default".to_string();
-                    pf.providers.push(NamedProvider {
-                        id: id.clone(),
-                        name: "默认".into(),
-                        builtin: true,
-                        config: cfg,
-                    });
-                    id
-                }
-            };
+        if let Some(cfg) = Self::read_legacy(dir)
+            && let Some(id) = pf.merge_legacy(cfg, true)
+        {
             pf.active = Some(id);
         }
         pf
@@ -312,6 +367,58 @@ mod tests {
         let p = pf.active().unwrap();
         assert_eq!(p.name, "默认");
         assert_eq!(p.config.model, "kimi-v1");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    // 注意：本测试假定运行环境未设 CMX_AGENT_MODEL_* / DEEPSEEK_API_KEY。
+    #[test]
+    fn load_merges_legacy_key_into_existing_providers_file() {
+        // 已有 providers.json（内置条目 key 空）+ model.json 同网关凭据：
+        // 读路径也必须合并（base_url 归一化后互为前缀即命中），否则面板热切模型无 key 可用。
+        let d = tmpdir("merge-existing");
+        std::fs::write(
+            d.join("providers.json"),
+            r#"{"active":"builtin-mlamp","providers":[
+                {"id":"builtin-mlamp","name":"MLamp","builtin":true,"base_url":"https://llmgw-bz.mlamp.cn/v1","api_key":"","model":"mlamp/glm-5.2"}]}"#,
+        )
+        .unwrap();
+        // model.json 不带 /v1（覆盖归一化匹配），model 名故意不同 → force=false 不应覆盖条目模型。
+        std::fs::write(
+            d.join("model.json"),
+            r#"{"base_url":"https://llmgw-bz.mlamp.cn","api_key":"sk-legacy","model":"mlamp/deepseek-v4-flash"}"#,
+        )
+        .unwrap();
+        let pf = ProviderFile::load(&d);
+        let m = pf.get("builtin-mlamp").unwrap();
+        assert_eq!(m.config.api_key, "sk-legacy", "空 key 应由 legacy 补上");
+        assert_eq!(
+            m.config.model, "mlamp/glm-5.2",
+            "非播种路径不得覆盖用户已选模型"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    // 注意：同上，假定无 env 配置。
+    #[test]
+    fn load_never_overwrites_explicit_user_key() {
+        let d = tmpdir("merge-keep");
+        std::fs::write(
+            d.join("providers.json"),
+            r#"{"active":"builtin-mlamp","providers":[
+                {"id":"builtin-mlamp","name":"MLamp","builtin":true,"base_url":"https://llmgw-bz.mlamp.cn/v1","api_key":"sk-user","model":"mlamp/glm-5.2"}]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            d.join("model.json"),
+            r#"{"base_url":"https://llmgw-bz.mlamp.cn/v1","api_key":"sk-legacy","model":"mlamp/deepseek-v4-flash"}"#,
+        )
+        .unwrap();
+        let pf = ProviderFile::load(&d);
+        assert_eq!(
+            pf.get("builtin-mlamp").unwrap().config.api_key,
+            "sk-user",
+            "用户显式配置的 key 优先于 legacy"
+        );
         std::fs::remove_dir_all(&d).ok();
     }
 

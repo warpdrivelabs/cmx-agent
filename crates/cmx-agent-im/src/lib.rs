@@ -2,7 +2,8 @@
 //! 从 IM 收到消息 → 映射到一个 agent 会话 → 鉴权 → 跑一个回合 → 把回复分段发回 IM。
 //!
 //! **transport 无关**：核心是 [`ImProvider`] trait（拉取 + 发送）+ [`ImBridge`] 编排。
-//! 参考实现 [`TelegramProvider`]（长轮询）；企业微信/飞书/钉钉/自建网关按同一 trait 追加即可。
+//! 参考实现 [`FeishuProvider`]（Stream 长连接）；QQ 官方机器人（WS）、微信 ClawBot
+//! （iLink 长轮询）均已按同一 trait 落地，自建网关/企业微信按同法追加即可。
 //!
 //! **用户绑定**：配了 [`ImBindingResolver`]（`ImBridge::with_bindings`）时按 **发送者**（飞书 open_id）
 //! 鉴权——已绑定 → 以绑定用户身份跑回合（`AgentApp::send_as`，数据权限按此人）；未绑定 → 回提示；
@@ -23,20 +24,26 @@ use cmx_agent_app::AgentApp;
 use tokio::sync::watch;
 pub use cmx_agent_connectors::im_binding::BoundIdentity;
 
-mod telegram;
 mod feishu;
 mod qq;
+mod qqlogin;
+mod wechat;
 mod config;
 mod remocon;
 pub mod binding;
-pub use telegram::TelegramProvider;
 pub use feishu::FeishuProvider;
 pub use qq::QqProvider;
+pub use qqlogin::{
+    QqBindEvent, QqBindSession, connect_url, create_bind_task, generate_bind_key,
+    poll_bind_result,
+};
+pub use wechat::{QrEvent, WechatLogin, WechatProvider, WechatQrSession, qr_login_html};
 pub use config::{ImConfig, ImKind, parse_allow};
 pub use binding::{ImBindingResolver, MockBindingResolver, PortalBindingResolver};
 pub use remocon::{
-    FeishuCreds, ImRemoconConfig, QqCreds, ResolvedChannel, ResolvedIm, TelegramCreds, env_active,
-    im_config_path, load_im_config, resolve, save_im_config, test_feishu, test_qq,
+    FeishuCreds, ImRemoconConfig, QqCreds, ResolvedChannel, ResolvedIm,
+    WechatCreds, env_active, im_config_path, load_im_config, resolve, save_im_config,
+    test_feishu, test_qq, test_wechat,
 };
 
 /// 一条入站 IM 消息。

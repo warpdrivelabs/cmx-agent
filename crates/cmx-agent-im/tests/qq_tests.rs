@@ -70,7 +70,7 @@ async fn qq_same_chat_reuses_session_with_qq_prefix() {
     prov.inject("usr_42", "第二句").await;
     bridge.tick().await.unwrap();
 
-    // kind 前缀 qq：会话名 im-qq-usr_42，与飞书/telegram 不撞名。
+    // kind 前缀 qq：会话名 im-qq-usr_42，与飞书 不撞名。
     let evs = app.get_events("im-qq-usr_42").unwrap();
     let turns = evs
         .iter()

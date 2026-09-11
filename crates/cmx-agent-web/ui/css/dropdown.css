@@ -1,4 +1,4 @@
-﻿/* ── 自绘下拉组件（cmx-dd）──
+/* ── 自绘下拉组件（cmx-dd）──
    替换原生 <select> 的弹出列表（OS 渲染无法主题化）。
    原生 select 隐藏（.cmx-dd-native），自绘 trigger + option list 完全可控。
    兼容：select.value 读写 + change 事件照常工作。 */
@@ -21,7 +21,7 @@
 
 /* 弹出列表 */
 .cmx-dd-list{
-  position:absolute;top:calc(100% + 4px);left:0;min-width:100%;z-index:1000;
+  position:fixed;z-index:1000; /* 悬浮框：展开时挂 body、由 JS 按 trigger 视口坐标定位（不受弹框 overflow 裁剪） */
   background:var(--panel);border:1px solid var(--border2);border-radius:10px;
   padding:4px;box-shadow:0 8px 28px rgba(0,0,0,.4);
   display:none;max-height:260px;overflow-y:auto;
@@ -38,10 +38,61 @@
 .cmx-dd-item .dd-check{margin-left:auto;flex-shrink:0;opacity:0}
 .cmx-dd-item.active .dd-check{opacity:1}
 
-/* .selbtn 场景：trigger 继承 selbtn 的 chip 风格 */
-.selbtn .cmx-dd-trigger{background:var(--panel2);border-color:var(--border2);border-radius:9px;padding:7px 12px;color:var(--ink2);font-size:13px}
-.selbtn .cmx-dd-trigger:hover{background:var(--hover);border-color:var(--aqua);color:var(--ink)}
+/* .selbtn 场景：壳是 chip 本体，trigger 全透明融入（悬停反馈由壳给出） */
+.selbtn .cmx-dd-trigger{background:none;border:none;border-radius:0;padding:0;color:inherit;font-size:inherit}
+.selbtn .cmx-dd-trigger:hover{background:none;border:none;color:var(--ink)}
 
-/* .mcfg-row /
-.mcfg-row .cmx-dd-trigger,
-.mcfg-row .cmx-dd-list,
+/* .mcfg-row 的下拉覆盖已随模态样式移交 modals.css（原此处有一条未闭合注释吞掉规则，已清理） */
+
+/* ── 工作空间菜单 + @ / 输入悬浮列表 ── */
+.workspace-btn{display:inline-flex;align-items:center;gap:8px;max-width:min(420px,58vw);
+  background:var(--panel2);border:1px solid var(--border2);border-radius:9px;color:var(--ink2);
+  padding:5px 11px;font-size:12.5px;font-family:inherit}
+.workspace-btn:hover{background:var(--hover);border-color:var(--aqua);color:var(--ink)}
+.workspace-btn #workspace-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.workspace-btn .chev{color:var(--muted)}
+.floating-menu{position:fixed;z-index:1200;width:min(356px,calc(100vw - 24px));background:var(--panel);
+  border:1px solid var(--border2);border-radius:14px;box-shadow:0 18px 50px rgba(0,0,0,.34);
+  overflow:hidden;opacity:0;transform:translateY(6px) scale(.98);pointer-events:none;
+  transition:opacity .14s ease,transform .14s ease,color .14s ease}
+.floating-menu.on{opacity:1;transform:translateY(0) scale(1);pointer-events:auto}
+.floating-menu[hidden]{display:none!important}
+.fm-search{display:flex;align-items:center;gap:8px;padding:11px 12px;border-bottom:1px solid var(--border)}
+.fm-search input,.fm-form input{flex:1;width:100%;background:var(--surface);border:1px solid var(--border2);
+  border-radius:9px;padding:8px 10px;color:var(--ink);font-size:13px;font-family:inherit;outline:none}
+.fm-search input:focus,.fm-form input:focus{border-color:var(--aqua)}
+.fm-list{max-height:min(320px,42vh);overflow:auto;padding:6px}
+.fm-empty{padding:18px 10px;text-align:center;color:var(--muted);font-size:12.5px}
+.fm-item{display:flex;align-items:center;gap:10px;min-height:40px;padding:7px 9px;border-radius:9px;
+  color:var(--ink2);cursor:pointer}
+.fm-item:hover,.fm-item.active{background:var(--hover);color:var(--ink)}
+.fm-item.selected{background:var(--accent-soft);color:var(--ink)}
+.fm-item .wi{width:18px;text-align:center;flex:0 0 18px}
+.fm-item .fm-main{min-width:0;flex:1}
+.fm-item .fm-title{display:block;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fm-item .fm-sub{display:block;margin-top:2px;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fm-item .check{color:var(--aqua);font-weight:700;opacity:0}
+.fm-item.selected .check,.fm-item.active .check{opacity:1}
+.fm-actions{display:flex;flex-direction:column;border-top:1px solid var(--border);padding:5px}
+.fm-actions button{display:flex;align-items:center;gap:10px;min-height:38px;padding:7px 9px;border:0;border-radius:8px;
+  background:transparent;color:var(--ink2);text-align:left;font-size:13px;font-family:inherit}
+.fm-actions button:hover{background:var(--hover);color:var(--ink)}
+.fm-form{padding:10px 12px 12px;border-top:1px solid var(--border);background:var(--panel2)}
+.fm-form label{display:block;color:var(--ink2);font-size:12px;margin:2px 0 5px}
+.fm-form label.mt{margin-top:9px}
+.form-ops{display:flex;justify-content:flex-end;gap:7px;margin-top:10px}
+.form-ops button{border:1px solid var(--border2);background:var(--surface);color:var(--ink);
+  border-radius:8px;padding:6px 11px;font-size:12.5px;font-family:inherit}
+.form-ops button:hover{border-color:var(--aqua)}
+.form-ops button.primary{background:var(--aqua);border-color:var(--aqua);color:#fff;font-weight:650}
+/* @ / 输入弹层（opencode PromptPopover 行式布局）：目录灰字 + 文件名亮字；/技能行带描述与 badge */
+#input-popover{width:auto;max-height:min(330px,42vh);overflow:auto;padding:6px}
+#input-popover .fm-item{min-height:32px;padding:5px 9px}
+.fm-line{display:flex;align-items:baseline;flex:0 1 auto;min-width:0;overflow:hidden}
+.fm-dir{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:0 1 auto;min-width:0}
+.fm-leaf{color:var(--ink);font-weight:600;white-space:nowrap;flex:0 0 auto}
+.fm-item.active .fm-leaf{color:var(--aqua)}
+.fm-desc{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  color:var(--muted);font-size:12px;margin-left:10px}
+.fm-badge{flex:0 0 auto;margin-left:8px;font-size:10.5px;padding:1px 7px;border-radius:999px;
+  background:var(--accent-soft);color:var(--aqua)}

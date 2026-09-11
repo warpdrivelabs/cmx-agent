@@ -163,13 +163,24 @@ pub fn parse_response(v: &Value) -> Result<ModelResponse, ModelError> {
         }
     }
 
-    Ok(ModelResponse { text, tool_calls })
+    let reasoning = msg
+        .get("reasoning_content")
+        .and_then(|c| c.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
+    Ok(ModelResponse {
+        text,
+        reasoning,
+        tool_calls,
+    })
 }
 
 /// 流式累加器：跨 SSE 增量拼接文字与工具调用（工具的 arguments 会分片到达，按 index 拼）。
 #[derive(Default)]
 struct StreamAcc {
     text: String,
+    reasoning: String,
     tools: Vec<ToolAcc>,
     /// 是否已收到服务端的 `finish_reason`（生成真正结束，含 stop / tool_calls / length）。
     finished: bool,
@@ -209,15 +220,31 @@ impl StreamAcc {
                 ToolCall::with_id(id, t.name, input)
             })
             .collect();
-        ModelResponse { text, tool_calls }
+        let reasoning = if self.reasoning.is_empty() {
+            None
+        } else {
+            Some(self.reasoning)
+        };
+        ModelResponse {
+            text,
+            reasoning,
+            tool_calls,
+        }
     }
+}
+
+/// 流式增量类型：正文与思考过程分开回调，避免推理内容污染回复气泡。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum StreamDelta {
+    Text(String),
+    Reasoning(String),
 }
 
 /// 把一个流式 chunk 应用到累加器；返回本次的文字增量（若有），供打字机回调。纯函数，可测。
 ///
 /// 同时记录是否收到 `finish_reason`（服务端明确宣告生成结束）。GLM/DeepSeek 等推理模型会先流
 /// `reasoning_content`（本函数**忽略**，不进入 text/tool 拼装），再流 `content`/`tool_calls`。
-fn apply_stream_chunk(acc: &mut StreamAcc, v: &Value) -> Option<String> {
+fn apply_stream_chunk(acc: &mut StreamAcc, v: &Value) -> Option<StreamDelta> {
     let choice = v
         .get("choices")
         .and_then(|c| c.as_array())
@@ -254,11 +281,21 @@ fn apply_stream_chunk(acc: &mut StreamAcc, v: &Value) -> Option<String> {
         }
     }
 
+    // 思考过程增量：先于正文/工具调用到达，单独累计并回调。
+    if let Some(content) = delta
+        .get("reasoning_content")
+        .and_then(|c| c.as_str())
+        && !content.is_empty()
+    {
+        acc.reasoning.push_str(content);
+        return Some(StreamDelta::Reasoning(content.to_string()));
+    }
+
     // 文字增量
     if let Some(content) = delta.get("content").and_then(|c| c.as_str())
         && !content.is_empty() {
             acc.text.push_str(content);
-            return Some(content.to_string());
+            return Some(StreamDelta::Text(content.to_string()));
         }
     None
 }
@@ -277,6 +314,9 @@ async fn read_sse_once(
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let bytes = chunk.map_err(|e| ModelError(format!("读取流失败: {e}")))?;
+        if observer.is_cancelled() {
+            return Err(ModelError("__turn_cancelled__".to_string()));
+        }
         buf.extend_from_slice(&bytes);
         while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
             let line_bytes: Vec<u8> = buf.drain(..=pos).collect();
@@ -291,8 +331,14 @@ async fn read_sse_once(
             }
             if let Ok(v) = serde_json::from_str::<Value>(data)
                 && let Some(delta) = apply_stream_chunk(acc, &v)
-                    && !delta.is_empty() {
-                        observer.on_text_delta(&delta);
+            {
+                match delta {
+                    StreamDelta::Text(text) if !text.is_empty() => observer.on_text_delta(&text),
+                    StreamDelta::Reasoning(text) if !text.is_empty() => {
+                        observer.on_reasoning_delta(&text)
+                    }
+                    _ => {}
+                }
                     }
         }
     }
@@ -346,6 +392,10 @@ impl ModelSeam for OpenAiCompatModel {
         loop {
             attempt += 1;
 
+            if observer.is_cancelled() {
+                return Err(ModelError("__turn_cancelled__".to_string()));
+            }
+
             let mut req = self.client.post(&url).json(&body);
             if !self.cfg.api_key.is_empty() {
                 req = req.bearer_auth(&self.cfg.api_key);
@@ -364,6 +414,9 @@ impl ModelSeam for OpenAiCompatModel {
                         if acc.finished {
                             // 服务端已宣告生成结束：掐断只影响收尾标记，已收内容语义完整，采纳。
                             return Ok(acc.into_response());
+                        }
+                        if observer.is_cancelled() {
+                            return Err(ModelError("__turn_cancelled__".to_string()));
                         }
                         last_err = Some(e); // 中途断且未完成 → 记下错误，走整轮重试
                         None
@@ -390,6 +443,7 @@ impl ModelSeam for OpenAiCompatModel {
             }
             // 重试前清掉前端已显示的半截文字，避免重试后重复/错位。
             observer.on_stream_reset();
+            observer.on_reasoning_reset();
         }
     }
 }
@@ -614,7 +668,14 @@ mod tests {
                 deltas.push(d);
             }
         }
-        assert_eq!(deltas, vec!["你", "好", "，世界"]);
+        assert_eq!(
+            deltas,
+            vec![
+                StreamDelta::Text("你".into()),
+                StreamDelta::Text("好".into()),
+                StreamDelta::Text("，世界".into())
+            ]
+        );
         let r = acc.into_response();
         assert_eq!(r.text.as_deref(), Some("你好，世界"));
         assert!(r.tool_calls.is_empty());

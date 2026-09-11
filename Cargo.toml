@@ -1,4 +1,4 @@
-# cmx-agent —— 企业桌面智能体微服务（复刻并超越腾讯云 WorkBuddy）。
+# cmx-agent —— 企业桌面智能体微服务。
 #
 # 方案见 docs/20260902_WorkBuddy复刻方案_基于Codex与dsh的企业桌面智能体.md（形/核/体三层混合）。
 # 本 workspace 承载与平台/框架解耦的**智能体内核**（core）+ 工具（tools）+ 前门（cli/headless），
@@ -59,3 +59,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 directories = "5"
 tokio = { version = "1.41", features = ["full"] }
 tokio-stream = "0.1"
+walkdir = "2.5"

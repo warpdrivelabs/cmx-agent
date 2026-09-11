@@ -1,12 +1,14 @@
-// ── 设置 → IM 遥控连接配置（后端 im.json；Tauri 壳 invoke("im_config"）· 多通道：飞书/QQ/Telegram 可同时在线 ──
-let _scfgSecretUnlocked=false, _scfgTgUnlocked=false, _scfgQqUnlocked=false;
+// ── 设置 → IM 遥控连接配置（后端 im.json；Tauri 壳 invoke("im_config"）· 多通道：飞书/QQ/微信 可同时在线 ──
+let _scfgSecretUnlocked=false, _scfgQqUnlocked=false;
 let _scfgSel="feishu"; // 当前选中的通道（左列高亮 + 右侧详情），独立于勾选启用态
 // 各通道勾选启用态（暂存源：勾选框在左列动态生成，每次重渲染按此回填）。
-let _scfgEnabled = { feishu:false, qq:false, telegram:false };
+let _scfgEnabled = { feishu:false, qq:false, wechat:false };
+let _scfgWxPolling=false; // 微信扫码轮询进行中（关面板/登录成功/终态错误时置停）
+// credEl = 凭证状态徽标读取的输入框（有值 = 已配；微信是只读 bot_id，扫码后才非空）。
 const SCFG_CHANNELS=[
-  {id:"feishu",   name:"飞书",      block:"scfg-feishu-block",   credKey:"app_secret_masked",     credField:"app_id"},
-  {id:"qq",       name:"QQ 机器人", block:"scfg-qq-block",       credKey:"qq_secret_masked",      credField:"qq_app_id"},
-  {id:"telegram", name:"Telegram", block:"scfg-telegram-block", credKey:"telegram_token_masked", credField:null},
+  {id:"feishu",   name:"飞书",      block:"scfg-feishu-block",   credKey:"app_secret_masked",     credEl:"scfg-app-id"},
+  {id:"qq",       name:"QQ 机器人", block:"scfg-qq-block",       credKey:"qq_secret_masked",      credEl:"scfg-qq-app-id"},
+  {id:"wechat",   name:"微信",      block:"scfg-wechat-block",   credKey:"wechat_token_masked",   credEl:"scfg-wx-bot-id"},
 ];
 async function menuSettings(){
   closeMenu();
@@ -21,15 +23,21 @@ async function menuSettings(){
   // 多通道：回显 active 勾选；旧文件无 active 时按 kind 单通道回显。
   // 先把「启用态」记到暂存变量——勾选框是 scfgRenderList 动态生成的，此时还不存在。
   const active = (d.active&&d.active.length) ? d.active : (d.kind?[d.kind]:[]);
-  _scfgEnabled = { feishu:active.includes("feishu"), qq:active.includes("qq"), telegram:active.includes("telegram") };
+  _scfgEnabled = { feishu:active.includes("feishu"), qq:active.includes("qq"), wechat:active.includes("wechat") };
   document.getElementById("scfg-enabled").checked= d.enabled!==false;
   document.getElementById("scfg-app-id").value  = d.app_id||"";
   document.getElementById("scfg-app-secret").value = d.app_secret_masked||"";
   document.getElementById("scfg-base").value    = d.base||"";
-  document.getElementById("scfg-tg-token").value= d.telegram_token_masked||"";
   document.getElementById("scfg-qq-app-id").value = d.qq_app_id||"";
   document.getElementById("scfg-qq-secret").value = d.qq_secret_masked||"";
-  document.getElementById("scfg-qq-base").value   = d.qq_base||"";
+  document.getElementById("scfg-wx-bot-id").value = d.wechat_bot_id||"";
+  // 微信/QQ 扫码 UI 复位（上次会话的二维码/状态不残留）。
+  document.getElementById("scfg-wx-qr-wrap").style.display="none";
+  document.getElementById("scfg-wx-status").textContent="";
+  _scfgWxPolling=false;
+  document.getElementById("scfg-qq-qr-wrap").style.display="none";
+  document.getElementById("scfg-qq-status").textContent="";
+  _scfgQqPolling=false;
   const note=[];
   if(d.env_active) note.push("⚠ 检测到环境变量 CMX_AGENT_IM_*（开发模式）优先生效，此处保存的配置暂不生效。");
   if(!d.configured) note.push("尚未配置：勾选通道并填入凭证，保存即启用遥控。勾选的通道同时在线。");
@@ -45,8 +53,7 @@ function scfgRenderList(){
   const list=document.getElementById("scfg-list");
   list.innerHTML=SCFG_CHANNELS.map(ch=>{
     const en=!!_scfgEnabled[ch.id];
-    const hasCred = ch.credField ? !!document.getElementById(ch.credField==="app_id"?"scfg-app-id":"scfg-qq-app-id").value.trim()
-                                 : !!document.getElementById("scfg-tg-token").value.trim();
+    const hasCred = !!document.getElementById(ch.credEl).value.trim();
     const on=ch.id===_scfgSel;
     return `<div class="mcfg-list-item${on?' on':''}" data-act="scfgSelect" data-id="${ch.id}">`
       +`<div style="min-width:0;display:flex;align-items:center;gap:7px">`
@@ -76,14 +83,12 @@ function scfgSwitchKind(){
     el.classList.toggle("on", el.dataset.id===_scfgSel);
   });
 }
-function closeSettings(){ document.getElementById("settings-overlay").classList.add("hidden"); }
+function closeSettings(){ _scfgWxPolling=false; _scfgQqPolling=false; document.getElementById("settings-overlay").classList.add("hidden"); }
 function scfgResetLocks(){
-  _scfgSecretUnlocked=false; _scfgTgUnlocked=false; _scfgQqUnlocked=false;
+  _scfgSecretUnlocked=false; _scfgQqUnlocked=false;
   const s=document.getElementById("scfg-app-secret"), sb=document.getElementById("scfg-secret-lock");
-  const t=document.getElementById("scfg-tg-token"),  tb=document.getElementById("scfg-tg-lock");
   const q=document.getElementById("scfg-qq-secret"), qb=document.getElementById("scfg-qq-lock");
   s.readOnly=true; s.type="password"; s.value=""; sb.textContent="🔒";
-  t.readOnly=true; t.type="password"; t.value=""; tb.textContent="🔒";
   q.readOnly=true; q.type="password"; q.value=""; qb.textContent="🔒";
 }
 function scfgToggleSecretLock(){
@@ -91,17 +96,123 @@ function scfgToggleSecretLock(){
   if(_scfgSecretUnlocked){ input.readOnly=true; input.type="password"; input.value=""; btn.textContent="🔒"; _scfgSecretUnlocked=false; }
   else { input.readOnly=false; input.type="text"; input.value=""; btn.textContent="🔓"; _scfgSecretUnlocked=true; input.focus(); }
 }
-function scfgToggleTgLock(){
-  const input=document.getElementById("scfg-tg-token"), btn=document.getElementById("scfg-tg-lock");
-  if(_scfgTgUnlocked){ input.readOnly=true; input.type="password"; input.value=""; btn.textContent="🔒"; _scfgTgUnlocked=false; }
-  else { input.readOnly=false; input.type="text"; input.value=""; btn.textContent="🔓"; _scfgTgUnlocked=true; input.focus(); }
-}
 function scfgToggleQqLock(){
   const input=document.getElementById("scfg-qq-secret"), btn=document.getElementById("scfg-qq-lock");
   if(_scfgQqUnlocked){ input.readOnly=true; input.type="password"; input.value=""; btn.textContent="🔒"; _scfgQqUnlocked=false; }
   else { input.readOnly=false; input.type="text"; input.value=""; btn.textContent="🔓"; _scfgQqUnlocked=true; input.focus(); }
 }
 // 通道勾选/选中切换由 scfgRenderList / scfgSelectChannel 负责（左列动态生成，显式监听）。
+// ── 扫码登录共用：内容 → 二维码图（GIF data-url；组件未加载/编码失败在状态行兜底提示）。
+// 微信（iLink）与 QQ（OpenClaw 绑定）的二维码内容都是**字符串**（URL），前端渲染。 ──
+function scfgRenderQr(content, img, wrap, st){
+  if(typeof qrcode==="undefined"){ st.textContent="二维码组件未加载（js/vendor/qrcode.min.js）"; return false; }
+  try{
+    const q=qrcode(0,"M"); q.addData(content); q.make();
+    img.onload=()=>{ wrap.style.display=""; };
+    img.onerror=()=>{ st.textContent="二维码渲染失败"; };
+    img.src=q.createDataURL(6,8);
+    wrap.style.display="";
+    return true;
+  }catch(e){ st.textContent="二维码渲染失败"; return false; }
+}
+// ── 微信扫码登录（iLink）：bot_token 只能扫码获得，无法手填。后端只下发二维码**内容
+// 字符串**（qrcode_img_content 实测是授权页 URL，非图片）→ 前端用 vendor 的 qrcode-generator
+// 渲染成 data-url。start 取码展示 → ~2s 一次 poll（waiting/scaned/refreshed/confirmed）。
+// confirmed 后端已把凭证落盘 im.json 并热重载（note 带结果说明），这里同步勾选态 +
+// 回显 bot_id——用户点「保存」只固化其余字段，不点也已生效。 ──
+async function scfgWechatLogin(){
+  if(_scfgWxPolling){ showToast("扫码进行中，请稍候"); return; }
+  const btn=document.getElementById("scfg-wx-btn"), st=document.getElementById("scfg-wx-status");
+  const wrap=document.getElementById("scfg-wx-qr-wrap"), img=document.getElementById("scfg-wx-qr");
+  btn.disabled=true; st.textContent="正在获取二维码…"; wrap.style.display="none";
+  let r=null;
+  try{ r=JSON.parse(await window.__TAURI__.core.invoke("im_wechat_login",{action:"start"})); }
+  catch(e){ const m="获取二维码失败："+e; btn.disabled=false; st.textContent=m; return showToast(m); }
+  if(!r||!r.ok){
+    const m="获取二维码失败："+((r&&r.error&&r.error.message)||"未知");
+    btn.disabled=false; st.textContent=m; return showToast(m);
+  }
+  if(!scfgRenderQr(r.data.qr, img, wrap, st)){ btn.disabled=false; return; }
+  st.textContent="等待扫码…（微信扫一扫 → 手机确认）";
+  _scfgWxPolling=true;
+  while(_scfgWxPolling){
+    await new Promise(res=>setTimeout(res,2000));
+    if(!_scfgWxPolling) break; // 面板已关闭
+    let p=null;
+    try{ p=JSON.parse(await window.__TAURI__.core.invoke("im_wechat_login",{action:"poll"})); }
+    catch(e){ continue; } // 单次网络抖动不中断，下轮再试
+    if(!p||!p.ok){
+      // 终态错误（二维码多次过期 / 10 分钟超时 / 服务异常）：停止轮询，可重按按钮重来。
+      // 完整原因常驻状态行（toast 1.6s 不够读），方便用户回报。
+      const m="登录失败："+((p&&p.error&&p.error.message)||"未知");
+      _scfgWxPolling=false; st.textContent=m;
+      showToast(m); break;
+    }
+    const s=p.data&&p.data.status;
+    if(s==="scaned"){ st.textContent="已扫码：请在手机上确认"; }
+    else if(s==="refreshed"){ if(p.data.qr) scfgRenderQr(p.data.qr, img, wrap, st); st.textContent="二维码已过期，已自动刷新"; }
+    else if(s==="confirmed"){
+      _scfgWxPolling=false;
+      wrap.style.display="none"; // 登录成功：二维码使命完成，不再展示
+      st.textContent="✓ 已登录";
+      document.getElementById("scfg-wx-bot-id").value=(p.data.bot_id||"");
+      _scfgEnabled.wechat=true; scfgRenderList(); // 左列微信自动勾选（保存时随 active 落盘）
+      showToast("✓ 微信登录成功："+((p.data&&p.data.note)||"已启用"));
+      break;
+    } else if(s==="idle"){
+      _scfgWxPolling=false; st.textContent="扫码会话已失效，请重试"; break;
+    }
+  }
+  btn.disabled=false;
+}
+// ── QQ 机器人扫码登录（官方 OpenClaw 通道）：二维码内容 = q.qq.com 授权页 URL，手机 QQ
+// 扫码打开并确认 → 后端拿到官方下发的 AppID/AppSecret（secret 经绑定密钥 AES-GCM 解密）
+// 自动落盘 im.json 并热重载。AppID 只读输入框同步回填；无需再手动去开放平台复制凭证。 ──
+let _scfgQqPolling=false; // QQ 扫码轮询进行中（关面板/终态时置停）
+async function scfgQqLogin(){
+  if(_scfgQqPolling){ showToast("扫码进行中，请稍候"); return; }
+  const btn=document.getElementById("scfg-qq-btn"), st=document.getElementById("scfg-qq-status");
+  const wrap=document.getElementById("scfg-qq-qr-wrap"), img=document.getElementById("scfg-qq-qr");
+  btn.disabled=true; st.textContent="正在获取二维码…"; wrap.style.display="none";
+  let r=null;
+  try{ r=JSON.parse(await window.__TAURI__.core.invoke("im_qq_login",{action:"start"})); }
+  catch(e){ const m="获取二维码失败："+e; btn.disabled=false; st.textContent=m; return showToast(m); }
+  if(!r||!r.ok){
+    const m="获取二维码失败："+((r&&r.error&&r.error.message)||"未知");
+    btn.disabled=false; st.textContent=m; return showToast(m);
+  }
+  if(!scfgRenderQr(r.data.qr, img, wrap, st)){ btn.disabled=false; return; }
+  st.textContent="等待扫码…（手机 QQ 扫一扫 → 打开页面确认）";
+  _scfgQqPolling=true;
+  while(_scfgQqPolling){
+    await new Promise(res=>setTimeout(res,2000));
+    if(!_scfgQqPolling) break; // 面板已关闭
+    let p=null;
+    try{ p=JSON.parse(await window.__TAURI__.core.invoke("im_qq_login",{action:"poll"})); }
+    catch(e){ continue; } // 单次网络抖动不中断，下轮再试
+    if(!p||!p.ok){
+      // 终态（二维码过期等）：停止轮询，可重按「扫码登录」重来。原因常驻状态行。
+      const m="登录失败："+((p&&p.error&&p.error.message)||"未知");
+      _scfgQqPolling=false; st.textContent=m;
+      showToast(m); break;
+    }
+    const s=p.data&&p.data.status;
+    if(s==="waiting"){ /* 未扫码/未确认：继续轮 */ }
+    else if(s==="confirmed"){
+      _scfgQqPolling=false;
+      wrap.style.display="none";
+      st.textContent="✓ 凭证已获取";
+      document.getElementById("scfg-qq-app-id").value=(p.data.app_id||"");
+      document.getElementById("scfg-qq-secret").value="（已写入，无需填写）";
+      _scfgEnabled.qq=true; scfgRenderList(); // 左列 QQ 自动勾选
+      showToast("✓ QQ 登录成功："+((p.data&&p.data.note)||"已启用"));
+      break;
+    } else if(s==="idle"){
+      _scfgQqPolling=false; st.textContent="扫码会话已失效，请重试"; break;
+    }
+  }
+  btn.disabled=false;
+}
 async function imcfgSave(){
   const active=SCFG_CHANNELS.filter(ch=>_scfgEnabled[ch.id]).map(ch=>ch.id);
   const payload={
@@ -112,13 +223,10 @@ async function imcfgSave(){
     app_id:document.getElementById("scfg-app-id").value.trim(),
     base:document.getElementById("scfg-base").value,
     app_secret_action:_scfgSecretUnlocked?"set":"keep",
-    telegram_token_action:_scfgTgUnlocked?"set":"keep",
     qq_app_id:document.getElementById("scfg-qq-app-id").value.trim(),
-    qq_base:document.getElementById("scfg-qq-base").value,
     qq_secret_action:_scfgQqUnlocked?"set":"keep",
   };
   if(_scfgSecretUnlocked) payload.app_secret_value=document.getElementById("scfg-app-secret").value.trim();
-  if(_scfgTgUnlocked)     payload.telegram_token_value=document.getElementById("scfg-tg-token").value.trim();
   if(_scfgQqUnlocked)     payload.qq_secret_value=document.getElementById("scfg-qq-secret").value.trim();
   if(document.getElementById("scfg-enabled").checked && active.length===0){
     showToast("请至少勾选一个 IM 通道（或取消「启用遥控」）"); return;
@@ -130,7 +238,7 @@ async function imcfgSave(){
   else { showToast("保存失败："+((r&&r.error&&r.error.message)||"未知")); }
 }
 
-function menuAbout(){ closeMenu(); infoDialog("关于 TrueMate", "版本 " + APP_VERSION + "\n\n复刻并超越 WorkBuddy · 同核多壳架构\n形(前门) / 核(回合循环+守卫) / 体(cmx 引擎连接器)"); }
+function menuAbout(){ closeMenu(); infoDialog("关于 TrueMate", "版本 " + APP_VERSION + "\n\n同核多壳架构\n形(前门) / 核(回合循环+守卫) / 体(cmx 引擎连接器)"); }
 
 // ── 修改密码（门户 /api/auth/change-password）：用户菜单入口 + 登录后 must_change_password 强制弹框 ──
 // 门户改密成功即吊销该用户全部 token（后端 change_password 已同步本地登出）→ 前端引导重新登录。

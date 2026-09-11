@@ -16,6 +16,9 @@ use std::sync::OnceLock;
 use cmx_agent_app::{AgentApp, AuthConfig, DesktopAppBuilder, dispatch_json};
 use tauri::{Emitter, Manager, State};
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 mod update_common;
 
 /// 门户地址·构建期烧录（唯一来源）：build.rs 从仓库根 `.env` 的 CMX_AGENT_PORTAL_BASE 读取注入
@@ -67,8 +70,8 @@ fn stop_im_bridge() {
 }
 
 /// IM 遥控装配（U16）：读 `CMX_AGENT_IM_*` env（开发联调）或 `<data_dir>/im.json`（GUI 设置面板），
-/// 配了就为**每个启用的通道**（飞书/QQ/Telegram 可多选）启动一个 `ImBridge` 后台 task，
-/// 与桌面 UI 共用同一 `AgentApp`。IM 消息跑同一回合循环 → 事件经 SessionEventBus →
+/// 配了就为**每个启用的通道**（飞书/QQ/微信 可多选）启动一个
+/// `ImBridge` 后台 task，与桌面 UI 共用同一 `AgentApp`。IM 消息跑同一回合循环 → 事件经 SessionEventBus →
 /// `session_event` Tauri 事件实时推前端，回复经 ImBridge 回发 IM。
 /// 未配 / 装配失败 → 仅打日志 + 记状态，不阻断桌面 UI（IM 是可选遥控通道）。
 /// **热重载**：启动前先停全部旧桥——设置面板保存后直接重调本函数即可换配置，无需重启应用。
@@ -110,7 +113,7 @@ fn start_im_if_configured(rt: &'static tokio::runtime::Runtime, app: Arc<AgentAp
         let bindings = cmx_agent_im::PortalBindingResolver::new(portal_base.clone());
         let allow = allow.clone();
         rt.spawn(async move {
-            // 飞书 Stream：起常驻后台 task；Telegram 长轮询：trait 默认 no-op。
+            // 飞书 Stream：起常驻后台 task；微信长轮询：trait 默认 no-op。
             if let Err(e) = provider.start().await {
                 eprintln!("[im] provider[{kind_label}].start 失败：{e}");
                 return;
@@ -154,10 +157,12 @@ async fn im_config(
                         "app_id": "",
                         "app_secret_masked": "",
                         "base": "",
-                        "telegram_token_masked": "",
                         "qq_app_id": "",
                         "qq_secret_masked": "",
                         "qq_base": "",
+                        "wechat_bot_id": "",
+                        "wechat_token_masked": "",
+                        "wechat_base": "",
                     })
                 });
             let mut data = data;
@@ -198,15 +203,10 @@ async fn im_config(
             if get_str("app_secret_action").as_deref() == Some("set") {
                 cfg.feishu.app_secret = get_str("app_secret_value").unwrap_or_default();
             }
-            if get_str("telegram_token_action").as_deref() == Some("set") {
-                cfg.telegram.token = get_str("telegram_token_value").unwrap_or_default();
-            }
-            // QQ：字段名 qq_*（与飞书的 app_id/base 区分，面板按 kind 分块提交）。
+            // QQ：字段名 qq_*（与飞书的 app_id 区分，面板按 kind 分块提交）。
+            // 沙箱/正式基址不进面板（正式用默认 api.sgroup.qq.com；联调沙箱手工改 im.json 的 qq.base）。
             if let Some(qq_app_id) = get_str("qq_app_id") {
                 cfg.qq.app_id = qq_app_id;
-            }
-            if let Some(qq_base) = get_str("qq_base") {
-                cfg.qq.base = qq_base;
             }
             if get_str("qq_secret_action").as_deref() == Some("set") {
                 cfg.qq.app_secret = get_str("qq_secret_value").unwrap_or_default();
@@ -215,13 +215,16 @@ async fn im_config(
             // 门户服务器地址：运行期不可改（构建期烧录），set 请求里的 portal_base 一律忽略。
             // 启用态下按通道逐个校验凭证齐备（禁用态允许存半成品）。
             // 多通道：任一勾选通道缺凭证即拒——避免「以为两个都在线，其实只起了一个」。
+            // wechat 凭证不进面板（im-login 扫码写入）；GUI set 不触碰 cfg.wechat，此处只校验。
             if cfg.enabled {
                 let missing = cfg.active().into_iter().find_map(|k| match k.as_str() {
-                    "telegram" if cfg.telegram.token.is_empty() => Some("Telegram Bot Token"),
                     "feishu" if cfg.feishu.app_id.is_empty() => Some("飞书 App ID"),
                     "feishu" if cfg.feishu.app_secret.is_empty() => Some("飞书 App Secret"),
                     "qq" if cfg.qq.app_id.is_empty() => Some("QQ AppID"),
                     "qq" if cfg.qq.app_secret.is_empty() => Some("QQ AppSecret"),
+                    "wechat" if cfg.wechat.bot_token.is_empty() => {
+                        Some("微信 bot_token（先运行 cmx-agent im-login 扫码登录）")
+                    }
                     _ => None,
                 });
                 if let Some(field) = missing {
@@ -244,13 +247,226 @@ async fn im_config(
     }
 }
 
+/// 微信扫码登录会话槽（GUI 分步驱动：`start` 取码入槽 → 前端 ~2s 一次 `poll`；
+/// `confirmed` 落盘后出槽，终态错误作废会话）。
+static WECHAT_QR: std::sync::Mutex<Option<cmx_agent_im::WechatQrSession>> = std::sync::Mutex::new(None);
+
+/// QQ 机器人扫码绑定会话槽（官方 `q.qq.com/lite` 绑定任务：task_id + bind_key）。
+/// 分步驱动与 [`WECHAT_QR`] 同款：`start` 入槽 → 前端 ~2s 一次 `poll` → confirmed 作废。
+static QQ_BIND: std::sync::Mutex<Option<cmx_agent_im::QqBindSession>> = std::sync::Mutex::new(None);
+
+/// QQ 机器人扫码登录（设置 → IM 遥控 → QQ 卡片「扫码登录」；官方 OpenClaw 通道）。
+/// `action`：
+/// - `start`：创建绑定任务，返回 `{status:"qr", qr:<授权页 URL>}`（前端渲染成二维码，
+///   手机 QQ 扫码打开并确认；重开会覆盖旧会话）。
+/// - `poll`：轮询一次，返回 `{status:"waiting"}|{status:"confirmed", app_id}`；
+///   二维码过期等终态走错误信封（前端据此停止轮询，可重按「扫码登录」）。
+///
+/// confirmed 时解密出的 AppID/AppSecret 写入 im.json `qq` 字段并把 `qq` 追加进 `active`
+/// （官方 WebSocket 接入协议不变，只是凭证来源从手填变成扫码下发），启用态下立即热重载。
+/// 网络统一走 `net_rt()`（理由见 [`im_wechat_login`] 注释）。
+#[tauri::command]
+async fn im_qq_login(action: String, state: State<'_, AppState>) -> Result<String, String> {
+    let data_dir = cmx_agent_app::shared_data_dir();
+    let app = Arc::clone(&state.app);
+    tauri::async_runtime::spawn_blocking(move || {
+        net_rt().block_on(async move {
+            match action.as_str() {
+                "start" => {
+                    let sess = cmx_agent_im::create_bind_task(None).await.map_err(|e| {
+                        tracing::warn!("im_qq_login start 失败：{e}");
+                        err_json("login_failed", &e)
+                    })?;
+                    let qr = cmx_agent_im::connect_url(&sess.task_id, None);
+                    if let Ok(mut slot) = QQ_BIND.lock() {
+                        *slot = Some(sess);
+                    }
+                    Ok(serde_json::json!({ "ok": true, "data": { "status": "qr", "qr": qr } }).to_string())
+                }
+                "poll" => {
+                    // 锁不跨 await：先 take 出会话，按结果放回（继续轮询）或作废。
+                    let sess = QQ_BIND.lock().ok().and_then(|mut s| s.take());
+                    let Some(sess) = sess else {
+                        return Ok(
+                            serde_json::json!({ "ok": true, "data": { "status": "idle" } }).to_string()
+                        );
+                    };
+                    match cmx_agent_im::poll_bind_result(&sess, None).await {
+                        Ok(cmx_agent_im::QqBindEvent::Pending) => {
+                            if let Ok(mut slot) = QQ_BIND.lock() {
+                                *slot = Some(sess);
+                            }
+                            Ok(serde_json::json!({ "ok": true, "data": { "status": "waiting" } }).to_string())
+                        }
+                        Ok(cmx_agent_im::QqBindEvent::Expired) => {
+                            // 任务过期：会话已作废（终态），前端停轮询，可重按「扫码登录」。
+                            Ok(err_json("login_failed", "二维码已过期，请重新扫码"))
+                        }
+                        Ok(cmx_agent_im::QqBindEvent::Completed { app_id, secret }) => {
+                            // 凭证落盘 im.json + qq 追加进 active（官方 WS 接入协议不变）。
+                            let mut cfg = cmx_agent_im::load_im_config(&data_dir).unwrap_or_default();
+                            cfg.qq.app_id = app_id.clone();
+                            cfg.qq.app_secret = secret;
+                            if !cfg.active.iter().any(|k| k == "qq") {
+                                cfg.active.push("qq".into());
+                            }
+                            if cfg.kind.trim().is_empty() {
+                                cfg.kind = "qq".into();
+                            }
+                            cmx_agent_im::save_im_config(&data_dir, &cfg)
+                                .map_err(|e| err_json("login_failed", &e))?;
+                            // 启用态且 env 未接管 → 立即热重载（扫码即上线，无需再点保存）。
+                            let note = if !cfg.enabled {
+                                "已保存（遥控总开关当前关闭，启用后生效）"
+                            } else if cmx_agent_im::env_active() {
+                                "已保存。⚠ 检测到环境变量 CMX_AGENT_IM_* 优先生效，im.json 暂不生效。"
+                            } else {
+                                start_im_if_configured(net_rt(), app);
+                                "已保存，QQ 通道已上线"
+                            };
+                            Ok(serde_json::json!({
+                                "ok": true,
+                                "data": { "status": "confirmed", "app_id": app_id, "note": note }
+                            }).to_string())
+                        }
+                        Err(e) => {
+                            // 轮询单次失败（网络抖动）：会话放回 + 返回 waiting 让前端继续轮，
+                            // 错误只进日志——err_json 会当终态停轮询，把正常登录打死。
+                            if let Ok(mut slot) = QQ_BIND.lock() {
+                                *slot = Some(sess);
+                            }
+                            tracing::warn!("im_qq_login 轮询失败（下轮重试）：{e}");
+                            Ok(serde_json::json!({ "ok": true, "data": { "status": "waiting" } }).to_string())
+                        }
+                    }
+                }
+                other => Ok(err_json("bad_request", &format!("未知 action：{other}"))),
+            }
+        })
+    })
+    .await
+    .map_err(|e| format!("task failed: {e}"))?
+}
+
+/// 微信扫码登录（设置 → IM 遥控 → 微信卡片「扫码登录」）。`action`：
+/// - `start`：取二维码，返回 `{status:"qr", qr:<PNG data-url>}`（重开会覆盖旧会话）。
+/// - `poll`：轮询一次，返回 `{status:"waiting"|"scaned"|"refreshed"(带新 qr)|
+///   "confirmed"(带 bot_id)}`；过期/超时等终态错误走错误信封（前端据此停止轮询）。
+///
+/// confirmed 时凭证写入 im.json `wechat` 字段并把 `wechat` 追加进 `active`（与 CLI
+/// `im-login` 同款），启用态下立即热重载 IM 桥（env 激活时 im.json 不生效，不动桥）。
+/// 网络统一走 `net_rt()`（Tauri 异步驱动上直接跑 reqwest 会挂起，见 [`net_rt`] 注释）。
+#[tauri::command]
+async fn im_wechat_login(action: String, state: State<'_, AppState>) -> Result<String, String> {
+    let data_dir = cmx_agent_app::shared_data_dir();
+    let app = Arc::clone(&state.app);
+    tauri::async_runtime::spawn_blocking(move || {
+        net_rt().block_on(async move {
+            match action.as_str() {
+                "start" => {
+                    let base = cmx_agent_im::load_im_config(&data_dir)
+                        .map(|c| c.wechat.base)
+                        .filter(|b| !b.trim().is_empty());
+                    let provider = cmx_agent_im::WechatProvider::new("", base);
+                    let sess = provider
+                        .qr_begin()
+                        .await
+                        .map_err(|e| {
+                            tracing::warn!("im_wechat_login start 失败：{e}");
+                            err_json("login_failed", &e)
+                        })?;
+                    let qr = sess.qr_content().to_string();
+                    if let Ok(mut slot) = WECHAT_QR.lock() {
+                        *slot = Some(sess);
+                    }
+                    Ok(serde_json::json!({ "ok": true, "data": { "status": "qr", "qr": qr } }).to_string())
+                }
+                "poll" => {
+                    // 锁不跨 await：先 take 出会话，按结果放回（继续轮询）或作废。
+                    let sess = WECHAT_QR.lock().ok().and_then(|mut s| s.take());
+                    let Some(mut sess) = sess else {
+                        return Ok(
+                            serde_json::json!({ "ok": true, "data": { "status": "idle" } }).to_string()
+                        );
+                    };
+                    match sess.poll_once().await {
+                        Ok(cmx_agent_im::QrEvent::Confirmed(login)) => {
+                            // 凭证落盘 im.json + wechat 追加进 active（与 CLI im-login 同款）。
+                            let mut cfg = cmx_agent_im::load_im_config(&data_dir).unwrap_or_default();
+                            cfg.wechat = cmx_agent_im::WechatCreds {
+                                bot_token: login.bot_token,
+                                bot_id: login.bot_id.clone(),
+                                user_id: login.user_id,
+                                base: login.base,
+                            };
+                            if !cfg.active.iter().any(|k| k == "wechat") {
+                                cfg.active.push("wechat".into());
+                            }
+                            if cfg.kind.trim().is_empty() {
+                                cfg.kind = "wechat".into();
+                            }
+                            cmx_agent_im::save_im_config(&data_dir, &cfg)
+                                .map_err(|e| err_json("login_failed", &e))?;
+                            // 启用态且 env 未接管 → 立即热重载（扫码即上线，无需再点保存）。
+                            let note = if !cfg.enabled {
+                                "已保存（遥控总开关当前关闭，启用后生效）"
+                            } else if cmx_agent_im::env_active() {
+                                "已保存。⚠ 检测到环境变量 CMX_AGENT_IM_* 优先生效，im.json 暂不生效。"
+                            } else {
+                                start_im_if_configured(net_rt(), app);
+                                "已保存，微信通道已上线"
+                            };
+                            Ok(serde_json::json!({
+                                "ok": true,
+                                "data": { "status": "confirmed", "bot_id": login.bot_id, "note": note }
+                            }).to_string())
+                        }
+                        Ok(ev) => {
+                            // Refreshed 后会话里是新码：先取内容再放回槽。
+                            let qr = if let cmx_agent_im::QrEvent::Refreshed = ev {
+                                Some(sess.qr_content().to_string())
+                            } else {
+                                None
+                            };
+                            if let Ok(mut slot) = WECHAT_QR.lock() {
+                                *slot = Some(sess);
+                            }
+                            let status = match ev {
+                                cmx_agent_im::QrEvent::Scaned => "scaned",
+                                cmx_agent_im::QrEvent::Refreshed => "refreshed",
+                                _ => "waiting",
+                            };
+                            let mut data = serde_json::json!({ "status": status });
+                            if let Some(qr) = qr {
+                                data["qr"] = serde_json::json!(qr);
+                            }
+                            Ok(serde_json::json!({ "ok": true, "data": data }).to_string())
+                        }
+                        // 终态错误（超时/多次过期/未知状态）：会话已作废，前端停止轮询。
+                        Err(e) => {
+                            tracing::warn!("im_wechat_login 轮询失败：{e}");
+                            Ok(err_json("login_failed", &e))
+                        }
+                    }
+                }
+                other => Ok(err_json("bad_request", &format!("未知 action：{other}"))),
+            }
+        })
+    })
+    .await
+    .map_err(|e| format!("task failed: {e}"))?
+}
+
 /// 统一错误信封（与 AppResponse::err 同形，前端 call 风格解析）。
 fn err_json(code: &str, message: &str) -> String {
     serde_json::json!({ "ok": false, "error": { "code": code, "message": message } }).to_string()
 }
-/// 应用状态：一个共享的 AgentApp（认证态用内部 Mutex，可跨命令共享）。
+/// 应用状态：一个共享的 AgentApp（认证态用内部 Mutex，可跨命令共享）+ 会话回放完成信号。
 struct AppState {
     app: Arc<AgentApp>,
+    /// 启动会话回放（后台 task，见 setup）结束置 true——成功/失败都置，
+    /// [`session_restore_done`] 据此放行前端首次路由。
+    restore_done: tokio::sync::watch::Receiver<bool>,
 }
 
 /// 专用 tokio 运行时（`enable_all` = io + time driver），供连接器 / 认证 reqwest 等网络工具可靠运行。
@@ -294,6 +510,167 @@ async fn agent(payload: String, state: State<'_, AppState>) -> Result<String, St
 fn platform() -> &'static str {
     std::env::consts::OS
 }
+
+/// 会话回放完成信号（前端 login.js 首次路由前等待）：启动后台回放（成功/失败皆放行）结束即返回。
+/// 让已登录用户启动不闪登录页（先等回放再查 current_user）；断网时回放最多等 connect_timeout=5s，
+/// 前端另有 8s JS 兜底——窗口全程可交互，回放不再阻塞事件循环（见 setup 注释）。
+#[tauri::command]
+async fn session_restore_done(state: State<'_, AppState>) -> Result<bool, String> {
+    let mut rx = state.restore_done.clone();
+    if *rx.borrow() {
+        return Ok(true);
+    }
+    // 发送端随回放 task 结束而 drop；异常未置位时 changed() 报错 → false 放行（fail-open）。
+    Ok(rx.changed().await.is_ok())
+}
+
+/// Windows 后台启动 PowerShell 时隐藏控制台窗口（与 cmx-agent-tools 的子进程策略一致）。
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// 调起操作系统原生的文件夹选择器，返回用户选择的绝对路径；用户取消返回 `None`。
+///
+/// 这里不引入新的 Tauri 插件依赖：Windows 用系统 PowerShell + WinForms，
+/// macOS 用 AppleScript `choose folder`，Linux 优先 Zenity、其次 KDialog。
+/// 三条通路最终都返回本地绝对路径，后续仍统一交给 `add_local_workspace` 校验。
+#[tauri::command]
+async fn pick_local_directory() -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(native_pick_local_directory)
+        .await
+        .map_err(|e| format!("文件夹选择任务失败：{e}"))?
+}
+
+fn native_pick_local_directory() -> Result<Option<String>, String> {
+    #[cfg(windows)]
+    {
+        let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+        let powershell = std::path::Path::new(&system_root)
+            .join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe");
+        // FolderBrowserDialog 必须运行在 STA 线程；独立 PowerShell 进程可避免影响 WebView/主进程。
+        let script = r#"
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Windows.Forms | Out-Null
+$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+$dialog.Description = '选择工作空间文件夹'
+$dialog.ShowNewFolderButton = $false
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK -and $dialog.SelectedPath) {
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    [Console]::Out.Write($dialog.SelectedPath)
+}
+"#;
+        let output = std::process::Command::new(powershell)
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-STA",
+                "-Command",
+                script,
+            ])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map_err(|e| format!("无法启动系统文件夹选择器：{e}"))?;
+        decode_pick_output(output)
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("/usr/bin/osascript")
+            .args([
+                "-e",
+                r#"POSIX path of (choose folder with prompt "选择工作空间文件夹")"#,
+            ])
+            .output()
+            .map_err(|e| format!("无法启动系统文件夹选择器：{e}"))?;
+        return decode_pick_output(output);
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let args = [
+            "--file-selection",
+            "--directory",
+            "--title",
+            "选择工作空间文件夹",
+        ];
+        if let Ok(output) = std::process::Command::new("zenity").args(args).output() {
+            return decode_pick_output(output);
+        }
+        let output = std::process::Command::new("kdialog")
+            .args([
+                "--title",
+                "选择工作空间文件夹",
+                "--getexistingdirectory",
+                "~",
+            ])
+            .output()
+            .map_err(|_| "未找到系统文件夹选择器（请安装 zenity 或 kdialog）".to_string())?;
+        decode_pick_output(output)
+    }
+}
+
+/// 选择器约定：成功且用户选择时 stdout 输出路径；用户取消为空输出/非零退出。
+fn decode_pick_output(output: std::process::Output) -> Result<Option<String>, String> {
+    if !output.stdout.is_empty() {
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !path.is_empty() {
+            return Ok(Some(path));
+        }
+    }
+    if output.status.success() {
+        return Ok(None);
+    }
+    let stderr_text = String::from_utf8_lossy(&output.stderr);
+    let stderr = stderr_text.trim();
+    if stderr.is_empty() {
+        Ok(None)
+    } else {
+        Err(stderr.to_string())
+    }
+}
+
+#[cfg(test)]
+mod pick_dialog_tests {
+    use super::*;
+
+    #[cfg(windows)]
+    use std::os::windows::process::ExitStatusExt;
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+
+    fn output(stdout: &[u8], stderr: &[u8], success: bool) -> std::process::Output {
+        std::process::Output {
+            status: if success {
+                std::process::ExitStatus::from_raw(0)
+            } else {
+                std::process::ExitStatus::from_raw(1)
+            },
+            stdout: stdout.to_vec(),
+            stderr: stderr.to_vec(),
+        }
+    }
+
+    #[test]
+    fn selected_path_is_trimmed_and_returned() {
+        let picked = decode_pick_output(output(b" C:\\workspace \n", b"", true)).unwrap();
+        assert_eq!(picked.as_deref(), Some("C:\\workspace"));
+    }
+
+    #[test]
+    fn user_cancel_without_output_is_none() {
+        let picked = decode_pick_output(output(b"", b"", false)).unwrap();
+        assert_eq!(picked, None);
+    }
+
+    #[test]
+    fn selector_error_is_surfaced() {
+        let err = decode_pick_output(output(b"", b"selector missing", false)).unwrap_err();
+        assert_eq!(err, "selector missing");
+    }
+}
 /// 登录命令（SPA 单窗口）：校验凭据 → 返回用户 JSON（前端 js/login.js 切视图）；失败返回错误文案。
 #[tauri::command]
 async fn login(
@@ -328,7 +705,7 @@ async fn login(
 fn build_app() -> AgentApp {
     // 双壳统一数据根（与 Web 壳同一份：model.json / 会话共享；CMX_AGENT_DATA_DIR 可覆盖，隔离测试用）。
     let data_dir = cmx_agent_app::shared_data_dir();
-    let workdir = data_dir.join("workspace");
+    let workdir = data_dir.join("workspaces").join("default");
     std::fs::create_dir_all(&workdir).ok();
 
     // E0：按 env / <data_dir>/model.json 选真实模型（OpenAI 兼容：DeepSeek/OpenAI/Qwen/本地）或回退 DemoModel。
@@ -452,19 +829,36 @@ fn main() {
     // 未配 IM env → 跳过，桌面壳照常纯本地用。错误只打日志不阻断 UI（IM 是可选遥控通道）。
     start_im_if_configured(net_rt(), Arc::clone(&app));
 
+    // 会话回放完成信号（watch）：后台回放 task 结束置 true（成功/失败都置）。
+    // 前端 login.js 首次路由前 invoke session_restore_done 等它——已登录用户不闪登录页。
+    let (restore_tx, restore_rx) = tokio::sync::watch::channel(false);
+
     tauri::Builder::default()
         // 自动更新（方案 C2）：updater 插件（check/download/验签/install）+ process 插件（relaunch 备用）。
         // 前端统一走 update_common.rs 的命令入口，不直接调插件 JS API（Linux 支线将来同走命令入口）。
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .manage(AppState { app })
-        .invoke_handler(tauri::generate_handler![agent, login, send_stream, platform, im_config, update_common::get_app_version, update_common::check_update, update_common::download_and_install])
+        .manage(AppState { app, restore_done: restore_rx })
+        .invoke_handler(tauri::generate_handler![
+            agent,
+            login,
+            send_stream,
+            platform,
+            session_restore_done,
+            im_config,
+            im_wechat_login,
+            im_qq_login,
+            pick_local_directory,
+            update_common::get_app_version,
+            update_common::check_update,
+            update_common::download_and_install
+        ])
         // U16：会话事件总线 → 前端实时通道。常驻 task 订阅 AgentApp 的 event_bus，把任意来源
         //（本地 / IM 桥 / 后续 webhook）的会话事件 emit 成全局 `session_event` Tauri 事件。
         // 前端 `index.html` 监听它，按 session_id 分流渲染——实现「飞书发消息实时显示到对话界面」，
         // 且 IM 无关：微信/钉钉接入后走同一条路，零额外改动。
         // 同时设置 cmx 图标（Linux 任务栏/标题栏；bundle.icon 仅打包时生效）。
-        .setup(|app| {
+        .setup(move |app| {
             // Windows/Linux 关主窗系统装饰（前端自绘三键 + 缩放热区）；macOS 走 Overlay 交通灯。
             // 窗口 visible:false 创建（conf），装饰处理完再 show——消除首帧白屏 + 系统标题栏闪烁。
             if let Some(main) = app.get_webview_window("main") {
@@ -480,14 +874,21 @@ fn main() {
             let app_ref = app_state.app.clone();
             let handle = app.handle().clone();
             // 会话回放：本地 auth.json 有效（access 可用或 refresh 续签成功）→ 恢复认证态。
-            // 窗口视图切换由前端 SPA 路由决定（js/login.js 检查 whoami 后切 #/ 或 #/login）。
-            let restored = net_rt().block_on(app_ref.try_restore_session());
-            if restored {
-                eprintln!("[session] 会话回放成功（认证态已恢复）");
-                // 通知前端切到主视图（webview JS 跑在 block_on 完成前，whoami 会暂时失败）
-                let user = app_ref.current_user().unwrap_or(serde_json::Value::Null);
-                let _ = app.handle().emit("logged-in", user);
-            }
+            // **后台跑，不阻塞 setup**：断网时 /me 是 TCP 黑洞（无响应包，等 connect_timeout=5s），
+            // 同步 block_on 会把事件循环冻到超时——窗口白屏假死、关闭也无效。改为 net_rt 后台
+            // task：成功 emit logged-in（前端 main.js 已监听，切主视图并刷新数据）；无论成败都置
+            // restore_done 信号（前端 login.js 首次路由前等它，避免已登录用户闪登录页）。
+            let restore_app = app_ref.clone();
+            let restore_emit = handle.clone();
+            net_rt().spawn(async move {
+                let restored = restore_app.try_restore_session().await;
+                let _ = restore_tx.send(true);
+                if restored {
+                    eprintln!("[session] 会话回放成功（认证态已恢复）");
+                    let user = restore_app.current_user().unwrap_or(serde_json::Value::Null);
+                    let _ = restore_emit.emit("logged-in", user);
+                }
+            });
             net_rt().spawn(async move {
                 let mut rx = app_ref.event_bus().subscribe();
                 while let Ok(env) = rx.recv().await {

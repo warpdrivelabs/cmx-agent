@@ -2,7 +2,10 @@
 //!
 //! 解 cmx 统一 `{code,msg,data}` 信封：`code==0` 取 `data`，否则错误。**双认证兜底**：默认带
 //! `X-Tenant`/`X-User` 头（适配 auth=off 的 e2e 实例，本机实测可用）；若配了 API Key 也一并带上
-//! （auth=apikey 实例）。30s 超时（门户冷启动/首请求慢时不误杀），rustls（免系统 openssl）。
+//! （auth=apikey 实例）。超时两层：连接 5s + 总 30s（门户冷启动/首请求慢时不误杀）。连接 5s 是
+//! 断网护栏——内网/VPN 下 TCP 握手是毫秒级，5s 建不起来必然不可达（如未连 VPN 的黑洞路由），
+//! 不至于每个请求死等 30s 总超时；门户 Argon2 登录 ~8s 是连接后的服务端计算，由总超时兜底。
+//! rustls（免系统 openssl）。
 
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
@@ -19,6 +22,7 @@ fn client() -> &'static reqwest::Client {
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(5))
             .user_agent("cmx-agent-connectors/0.1")
             .build()
             .expect("build reqwest client")

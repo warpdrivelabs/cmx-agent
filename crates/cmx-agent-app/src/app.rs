@@ -9,7 +9,7 @@ use std::sync::Mutex;
 
 use cmx_agent_connectors::{AuthProvider, ConnectorCard, ConnectorRegistry, LoggedInUser, user_from_me};
 use cmx_agent_core::event::StopReason;
-use cmx_agent_core::{Agent, Session};
+use cmx_agent_core::{Agent, Approver, Session, TurnCancel};
 
 use crate::error::{AppError, AppResult};
 use crate::store::{SessionMeta, SessionStore};
@@ -68,6 +68,12 @@ pub struct AgentApp {
     /// 登录会话落盘路径（`<data_dir>/auth.json`，由 builder 在启用登录门时自动装配）。
     /// None = 不持久化（CLI / 测试）。
     auth_session_path: Option<std::path::PathBuf>,
+    /// 工作空间注册表。None 兼容直接构造 AgentApp 的旧测试/CLI。
+    workspaces: Option<Arc<crate::workspace::WorkspaceRegistry>>,
+    /// 正在执行的会话回合；前端 CancelSession / 会话删除据此置位。
+    active_turns: Mutex<std::collections::HashMap<String, TurnCancel>>,
+    /// 同会话回合串行队列：后发消息排队，不与当前回合并发改日志。
+    session_locks: tokio::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 /// 落盘的登录会话（`<data_dir>/auth.json`）：启动时经 /api/auth/me 校验回放，
@@ -136,7 +142,19 @@ impl AgentApp {
             event_bus: Arc::new(crate::bus::SessionEventBus::new()),
             im_binding: None,
             auth_session_path: None,
+            workspaces: None,
+            active_turns: Mutex::new(std::collections::HashMap::new()),
+            session_locks: tokio::sync::Mutex::new(std::collections::HashMap::new()),
         }
+    }
+
+    /// 注入工作空间注册表；调用方负责加载失败时给出明确启动错误。
+    pub fn with_workspace_registry(
+        mut self,
+        registry: crate::workspace::WorkspaceRegistry,
+    ) -> Self {
+        self.workspaces = Some(Arc::new(registry));
+        self
     }
 
     /// 注入登录会话落盘路径（由 DesktopAppBuilder 在启用登录门时调用；None = 不持久化）。
@@ -528,7 +546,22 @@ impl AgentApp {
     /// None = 无配置目录（理论不可达，调用方兜底 BadRequest）。
     fn load_providers(&self) -> Option<(std::path::PathBuf, cmx_agent_model::ProviderFile)> {
         let dir = self.effective_model_config_dir()?;
-        Some((dir.clone(), cmx_agent_model::ProviderFile::load(&dir)))
+        Some((dir.clone(), self.provider_file_inherited(&dir)))
+    }
+
+    /// 读**有效目录**的 providers.json；目录为 per-user（≠全局 `model_config_dir`）时，
+    /// 从全局目录同网关条目继承 key（只补空缺）——用户在共享域填过 key、登录后 per-user
+    /// 条目 key 为空，不继承则面板热切模型会拿空凭据调网关（网关报「未提供令牌」）。
+    fn provider_file_inherited(
+        &self,
+        dir: &std::path::Path,
+    ) -> cmx_agent_model::ProviderFile {
+        let inherit = self
+            .model_config_dir
+            .as_ref()
+            .filter(|base| base.as_path() != dir)
+            .map(|base| base.as_path());
+        cmx_agent_model::ProviderFile::load_with_inherit(dir, inherit)
     }
 
     /// 取一个命名 provider 的面板回填 JSON（掩码 key + 候选模型）。None = id 不存在。
@@ -604,7 +637,7 @@ impl AgentApp {
             .effective_model_config_dir()
             .ok_or_else(|| AppError::BadRequest("模型配置目录不可用".into()))?;
         let _g = self.providers_lock.lock().expect("providers lock");
-        let mut pf = cmx_agent_model::ProviderFile::load(&dir);
+        let mut pf = self.provider_file_inherited(&dir);
 
         // 更新已有条目：沿用旧 name/key；新建：name 必填 + 重名校验、key 可空（keyless 端点）。
         let (name, api_key, builtin, is_active) = match &target_id {
@@ -712,7 +745,7 @@ impl AgentApp {
             .effective_model_config_dir()
             .ok_or_else(|| AppError::BadRequest("模型配置目录不可用".into()))?;
         let _g = self.providers_lock.lock().expect("providers lock");
-        let mut pf = cmx_agent_model::ProviderFile::load(&dir);
+        let mut pf = self.provider_file_inherited(&dir);
         let p = pf
             .get(id)
             .ok_or_else(|| AppError::BadRequest("Provider 不存在".into()))?;
@@ -748,7 +781,7 @@ impl AgentApp {
             .effective_model_config_dir()
             .ok_or_else(|| AppError::BadRequest("模型配置目录不可用".into()))?;
         let _g = self.providers_lock.lock().expect("providers lock");
-        let mut pf = cmx_agent_model::ProviderFile::load(&dir);
+        let mut pf = self.provider_file_inherited(&dir);
         let p = pf
             .get(id)
             .ok_or_else(|| AppError::BadRequest("Provider 不存在".into()))?;
@@ -824,7 +857,7 @@ impl AgentApp {
             .effective_model_config_dir()
             .ok_or_else(|| AppError::BadRequest("模型配置目录不可用".into()))?;
         let _g = self.providers_lock.lock().expect("providers lock");
-        let mut pf = cmx_agent_model::ProviderFile::load(&dir);
+        let mut pf = self.provider_file_inherited(&dir);
         // 目标条目：显式 provider_id 优先；否则激活条目（多 provider 菜单在非激活 provider 下换模型时带 id）。
         let id = provider_id
             .map(|s| s.to_string())
@@ -1008,6 +1041,7 @@ impl AgentApp {
             created_at: now,
             updated_at: now,
             event_count: 0,
+            workspace_id: self.current_workspace_id(),
         };
         self.store.put_meta(&meta)?;
         Ok(id)
@@ -1049,19 +1083,60 @@ impl AgentApp {
         sink: Option<std::sync::Arc<crate::stream::ChannelSink>>,
         subject: Option<cmx_agent_core::Subject>,
     ) -> AppResult<SendOutcome> {
+        // 同会话队列：后到请求等待当前回合完成，避免两条消息并发写入同一个 JSONL。
+        let session_lock = {
+            let mut locks = self.session_locks.lock().await;
+            locks
+                .entry(session_id.to_string())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        let _turn_permit = session_lock.lock().await;
+
+        let cancel = TurnCancel::new();
+        self.active_turns
+            .lock()
+            .expect("active turns lock")
+            .insert(session_id.to_string(), cancel.clone());
+
+        // 无论成功/失败都清理活动回合标记；事件持久化在下方统一完成。
+        let result = self
+            .send_inner_locked(
+                session_id,
+                user_input,
+                sink,
+                subject,
+                &cancel,
+            )
+            .await;
+        self.active_turns
+            .lock()
+            .expect("active turns lock")
+            .remove(session_id);
+        result
+    }
+
+    /// 已持有会话队列锁后的实际回合执行。
+    async fn send_inner_locked(
+        &self,
+        session_id: &str,
+        user_input: &str,
+        sink: Option<std::sync::Arc<crate::stream::ChannelSink>>,
+        subject: Option<cmx_agent_core::Subject>,
+        cancel: &TurnCancel,
+    ) -> AppResult<SendOutcome> {
         // 加载已有会话；不存在则以默认 system 新建一个内存会话（并补落元数据）。
         let mut session = match self.store.load(session_id) {
             Ok(s) => s,
             Err(AppError::NotFound(_)) => {
                 self.create_session(session_id)?;
-                let mut s = Session::new(session_id);
-                if let Some(sys) = &self.default_system {
-                    s = s.with_system(sys.clone());
-                }
-                s
+                Session::new(session_id)
             }
             Err(e) => return Err(e),
         };
+        if let Some(sys) = self.current_system_prompt() {
+            session = session.with_system(sys);
+        }
 
         // 流式：加载完历史后挂 sink（历史用 push_restored 不触发 sink，故只流式本回合新事件）。
         // 同一个 sink 既是事件 EventSink（全量事件）又是 TurnObserver（文字增量）。
@@ -1073,19 +1148,39 @@ impl AgentApp {
         )));
         let outcome = match (&sink, &subject) {
             (Some(s), Some(subj)) => {
-                session.log.add_sink(s.clone());
+                let observed = Arc::new(s.with_cancel(cancel.clone()));
+                session.log.add_sink(observed.clone());
                 self.agent
-                    .run_turn_observed_as(&mut session, user_input, Some(s.as_ref()), Some(subj))
+                    .run_turn_observed_as_cancellable(
+                        &mut session,
+                        user_input,
+                        Some(observed.as_ref()),
+                        Some(subj),
+                        Some(cancel),
+                    )
                     .await
             }
             (Some(s), None) => {
-                session.log.add_sink(s.clone());
+                let observed = Arc::new(s.with_cancel(cancel.clone()));
+                session.log.add_sink(observed.clone());
                 self.agent
-                    .run_turn_observed(&mut session, user_input, Some(s.as_ref()))
+                    .run_turn_observed_as_cancellable(
+                        &mut session,
+                        user_input,
+                        Some(observed.as_ref()),
+                        None,
+                        Some(cancel),
+                    )
                     .await
             }
-            (None, Some(subj)) => self.agent.run_turn_as(&mut session, user_input, subj).await,
-            (None, None) => self.agent.run_turn(&mut session, user_input).await,
+            (None, Some(subj)) => self
+                .agent
+                .run_turn_observed_as_cancellable(&mut session, user_input, None, Some(subj), Some(cancel))
+                .await,
+            (None, None) => self
+                .agent
+                .run_turn_observed_as_cancellable(&mut session, user_input, None, None, Some(cancel))
+                .await,
         };
         // 出错一致性（飞书 ↔ 界面）：回合中途模型失败等会让 run_turn 提前返回 Err。若直接 `?` 抛出，
         // 已 append 的 TurnStarted/UserMessage 不会落库、不广播；错误文案只被 ImBridge 发给飞书，
@@ -1129,9 +1224,10 @@ impl AgentApp {
             id: session_id.to_string(),
             title,
             system: session.system().map(|s| s.to_string()),
-            created_at: prev.map(|m| m.created_at).unwrap_or(now),
+            created_at: prev.as_ref().map(|m| m.created_at).unwrap_or(now),
             updated_at: now,
             event_count: session.log.len(),
+            workspace_id: prev.as_ref().and_then(|m| m.workspace_id.clone()).or_else(|| self.current_workspace_id()),
         };
         self.store.put_meta(&meta)?;
 
@@ -1187,6 +1283,114 @@ impl AgentApp {
     pub fn event_bus(&self) -> &Arc<crate::bus::SessionEventBus> {
         &self.event_bus
     }
+
+    /// 列出工作空间与当前选择。
+    pub fn list_workspaces(&self) -> AppResult<serde_json::Value> {
+        self.workspace_registry()?.list()
+    }
+
+    pub fn select_workspace(&self, id: Option<&str>) -> AppResult<serde_json::Value> {
+        let registry = self.workspace_registry()?;
+        let value = registry.select(id)?;
+        registry.set_allowed_roots(&self.agent)?;
+        Ok(value)
+    }
+
+    pub fn create_workspace(&self, name: &str) -> AppResult<serde_json::Value> {
+        let registry = self.workspace_registry()?;
+        let value = registry.create_managed(name)?;
+        registry.set_allowed_roots(&self.agent)?;
+        Ok(value)
+    }
+
+    pub fn add_local_workspace(
+        &self,
+        path: &str,
+        name: Option<&str>,
+    ) -> AppResult<serde_json::Value> {
+        let registry = self.workspace_registry()?;
+        let value = registry.add_local(path, name)?;
+        registry.set_allowed_roots(&self.agent)?;
+        Ok(value)
+    }
+
+    /// 当前工作空间内检索文件，供输入框 @ 悬浮选择。
+    pub async fn search_workspace_files(
+        &self,
+        query: &str,
+        limit: Option<usize>,
+    ) -> AppResult<Vec<crate::workspace::WorkspaceFile>> {
+        let registry = self.workspace_registry()?;
+        let query = query.to_string();
+        let limit = limit.unwrap_or(80).clamp(1, 200);
+        // 文件索引可能访问大目录；放在阻塞线程里，避免拖慢前端协议派发。
+        tokio::task::spawn_blocking(move || registry.search_files(&query, limit))
+            .await
+            .map_err(|e| AppError::Agent(format!("文件检索任务失败：{e}")))?
+    }
+
+    /// 技能 = 当前已注册工具。前端 / 菜单只做选择，发送后模型仍经工具契约与守卫执行。
+    pub fn list_skills(&self) -> serde_json::Value {
+        let skills: Vec<serde_json::Value> = self
+            .agent
+            .tools()
+            .specs()
+            .into_iter()
+            .map(|s| {
+                serde_json::json!({
+                    "id": s.name,
+                    "name": s.name,
+                    "title": s.name,
+                    "description": s.description,
+                })
+            })
+            .collect();
+        serde_json::json!({ "skills": skills })
+    }
+
+    /// 中断活动回合；若正卡在审批等待，也同步拒绝本会话待决审批。
+    pub fn cancel_session_turn(&self, session_id: &str) -> bool {
+        if let Some(a) = &self.approver {
+            a.cancel_session(session_id);
+        }
+        self.active_turns
+            .lock()
+            .expect("active turns lock")
+            .get(session_id)
+            .map(|c| {
+                c.cancel();
+                true
+            })
+            .unwrap_or(false)
+    }
+
+    fn workspace_registry(&self) -> AppResult<Arc<crate::workspace::WorkspaceRegistry>> {
+        self.workspaces
+            .clone()
+            .ok_or_else(|| AppError::BadRequest("工作空间未启用".into()))
+    }
+
+    fn current_workspace_id(&self) -> Option<String> {
+        self.workspaces
+            .as_ref()
+            .and_then(|w| w.current_context())
+            .map(|(id, _, _)| id)
+    }
+
+    fn current_system_prompt(&self) -> Option<String> {
+        let base = self.default_system.clone().unwrap_or_else(|| {
+            "你是 cmx 企业桌面智能体。用简洁中文回答，优先动手完成用户任务。".to_string()
+        });
+        let context = match self.workspaces.as_ref().and_then(|w| w.current_context()) {
+            Some((_, name, path)) => format!(
+                "\n\n当前工作空间：{name}\n工作空间根：{}\n文件操作使用相对该根的路径；用户用 @ 引用的文件也相对该根解析。\
+                 用户输入以 / 开头时，斜杠后是技能名，请优先调用同名工具完成后续诉求。",
+                path.display()
+            ),
+            None => "\n\n当前未绑定工作空间：这是普通任务，不要主动创建或改写本地文件。".to_string(),
+        };
+        Some(base + &context)
+    }
 }
 
 /// B2：按 base_url 推断 provider 展示名（模型选择器用）。
@@ -1232,9 +1436,9 @@ fn friendly_auth_error(e: cmx_agent_connectors::ClientError, base: &str) -> Stri
     match e {
         // 服务端业务错误（如 401 用户名/密码错误）——直接用其 msg（已是中文提示）。
         ClientError::Envelope { msg, .. } => msg,
-        // 连不上认证服务（门户未启动等）。
+        // 连不上认证服务（门户在内网：未连 VPN / 门户未启动 / 网络不通，对用户而言同一种表现）。
         ClientError::Transport(_) => {
-            format!("无法连接认证服务（{base}），请确认 cmx 门户服务已启动")
+            format!("无法连接认证服务（{base}），请检查 VPN / 内网连接，或确认 cmx 门户服务已启动")
         }
         ClientError::Http(code) => format!("认证服务返回 HTTP {code}"),
         ClientError::Decode(m) => format!("认证响应解析失败：{m}"),

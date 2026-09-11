@@ -32,7 +32,7 @@
   .mcfg-row input[type=password]{background:var(--bg);border:1px solid var(--border2);border-radius:8px;padding:7px 10px;color:var(--ink);font-size:13px;width:100%;box-sizing:border-box}
   .mcfg-row input[type=password]:focus{outline:none;border-color:var(--aqua)}
   .pwd-warn{display:none;align-items:flex-start;gap:8px;background:rgba(255,180,0,.08);border:1px solid rgba(255,180,0,.35);border-radius:8px;padding:8px 10px;font-size:12px;color:var(--ink);line-height:1.5;margin-bottom:13px}
-  .pwd-err{display:none;background:rgba(229,72,77,.08);border:1px solid rgba(229,72,77,.4);border-radius:8px;padding:8px 10px;font-size:12px;color:#e5484d;line-height:1.5;margin-bottom:13px;word-break:break-all}
+  .pwd-err{display:none;background:rgba(229,72,77,.08);border:1px solid rgba(229,72,77,.4);border-radius:8px;padding:8px 10px;font-size:12px;color:var(--red);line-height:1.5;margin-bottom:13px;word-break:break-all}
   .mcfg-key-wrap{display:flex;gap:6px;align-items:center}
   .mcfg-key-wrap input{flex:1}
   .mcfg-key-wrap button{background:var(--bg);border:1px solid var(--border2);border-radius:8px;padding:6px 10px;color:var(--muted);cursor:pointer;font-size:15px;flex:0 0 auto}
@@ -59,7 +59,7 @@
   .mcfg-list-new:hover{color:var(--aqua);border-color:var(--aqua)}
   .mcfg-detail{flex:1;min-width:0;overflow-y:auto;padding-right:2px}
   .mcfg-hint{font-size:11.5px;color:var(--muted);line-height:1.5;margin-top:2px}
-  .mcfg-actions .mcfg-danger{color:#e5484d;border-color:#e5484d;background:none}
+  .mcfg-actions .mcfg-danger{color:var(--red);border-color:#e5484d;background:none}
   .mcfg-actions .mcfg-danger:hover{background:rgba(229,72,77,.08)}
   .mcfg-actions .mcfg-danger:disabled{opacity:.35;cursor:not-allowed}
 

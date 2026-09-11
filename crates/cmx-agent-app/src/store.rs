@@ -25,6 +25,9 @@ pub struct SessionMeta {
     pub updated_at: chrono::DateTime<chrono::Utc>,
     #[serde(default)]
     pub event_count: usize,
+    /// 创建会话时选中的工作空间；None = 不使用工作空间的普通任务。
+    #[serde(default)]
+    pub workspace_id: Option<String>,
 }
 
 /// 事件窗口：只含日志的一段（大会话分页 / 尾加载用，避免一次解析、传输、渲染全量事件）。

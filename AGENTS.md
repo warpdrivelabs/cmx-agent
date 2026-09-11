@@ -1,21 +1,22 @@
 # AGENTS.md — cmx-agent
 
-> 企业桌面智能体微服务（复刻并超越腾讯云 WorkBuddy）。方案见
+> 企业桌面智能体微服务。方案见
 > `../docs/20260902_WorkBuddy复刻方案_基于Codex与dsh的企业桌面智能体.md`。
 
 ## 这是什么
 
-「形 / 核 / 体」三层混合智能体的 **核 + 多壳后端**。当前 **M2 推进中（13 crate，211 测试全绿、
+「形 / 核 / 体」三层混合智能体的 **核 + 多壳后端**。当前 **M2 推进中（13 crate，325 测试全绿、
 clippy 零告警）**：M0 内核（回合循环/守卫/会话日志/模型缝）之上已落地——会话 JSONL 落库、本地文件
 工具沙箱、JSON 前门协议（= Tauri invoke 边界）、真实模型缝（OpenAI 兼容 + 断流自愈）、企业连接器、
-MCP/LSP/办公/联网/IM/插件面、Web 桌面壳与 Tauri 原生壳、Windows 原生支持（shell 探测链 + Job Object）。
+MCP/LSP/办公/联网/IM/插件面（飞书/QQ/微信 ClawBot/Telegram 四通道）、Web 桌面壳与 Tauri 原生壳、
+Windows 原生支持（shell 探测链 + Job Object）。
 
 ## 构建 / 测试
 
 ```bash
 cd cmx-agent
 cargo build --offline            # 离线构建
-cargo test  --offline            # 全量测试（当前 211 passed）
+cargo test  --offline            # 全量测试（当前 325 passed）
 cargo clippy --offline --all-targets   # 必须零告警
 ./e2e-serve.sh                   # e2e：serve 前门跨进程持久化
 cargo run --offline -p cmx-agent-cli                    # demo：打印一个回合的会话事件 JSONL

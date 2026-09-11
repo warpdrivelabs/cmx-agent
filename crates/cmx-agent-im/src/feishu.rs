@@ -1,8 +1,8 @@
 //! 飞书（Feishu/Lark）IM provider：[`ImProvider`] 的 **Stream 长连接** 实现。
 //!
-//! 与 Telegram 长轮询不同，飞书 Stream 是 agent 主动连飞书 websocket 拉消息——**无需公网回调 URL、
+//! 飞书 Stream 是 agent 主动连飞书 websocket 拉消息——**无需公网回调 URL、
 //! 无需内网穿透、零 AES/SHA crypto 依赖**（`unsafe_code = "forbid"` 保持）。范式仍是「出站连接拉取」，
-//! 与 [`TelegramProvider`] 同构，桥与内核零改动。
+//! 与 QQ Stream 同构，桥与内核零改动。
 //!
 //! 协议（对照 lark oapi-sdk-go `ws/` 包）：
 //! - **拿连接地址**：`POST {base}/callback/ws/endpoint`，body `{"AppID","AppSecret"}` → `data.URL`（wss）。

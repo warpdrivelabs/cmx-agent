@@ -271,7 +271,7 @@ async fn list_providers_seeds_from_model_json() {
     .unwrap());
     assert_eq!(v["ok"], true, "{v:?}");
     let providers = v["data"]["providers"].as_array().unwrap();
-    assert!(providers.len() >= 1, "至少内置 MLamp 预设：{providers:?}");
+    assert!(!providers.is_empty(), "至少内置 MLamp 预设：{providers:?}");
     let ds = providers
         .iter()
         .find(|p| p["id"] == "builtin-default")
