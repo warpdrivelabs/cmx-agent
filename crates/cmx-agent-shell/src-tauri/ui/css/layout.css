@@ -105,9 +105,29 @@
   .navitem{display:flex;align-items:center;gap:11px;padding:9px 12px;border-radius:8px;color:var(--ink2);font-size:14px}
   .navitem:hover{background:var(--hover);color:var(--ink)} .navitem .i{width:17px;text-align:center;opacity:.85}
   .navitem .tag{margin-left:auto;font-size:11px;color:var(--muted)}
-  .seclabel{color:var(--muted);font-size:12px;font-weight:600;padding:14px 12px 6px;display:flex;align-items:center;gap:6px}
+  .seclabel{color:var(--ink2);font-size:14px;font-weight:600;padding:14px 12px 6px;display:flex;align-items:center;gap:6px}
   .seclabel .c{color:var(--ink2)}
   .tasklist{flex:1;overflow:auto;margin:0 -2px}
+  /* 会话分组（对齐手绘示意）：顶层「项目」标签 + 纯文字组头（空间名/任务）+ 缩进会话；
+     折叠箭头与空间 ⋯ 仅悬停淡显，保持列表素净 */
+  .tl-group{margin:2px 0 4px}
+  .tl-head{display:flex;align-items:center;gap:6px;padding:7px 12px;color:var(--muted);font-size:12px;font-weight:600;border-radius:8px;cursor:pointer}
+  .tl-head:hover{background:var(--hover);color:var(--ink2)}
+  /* 任务组头与「空间」区标签平级：同字号同色（对齐 navitem 的 ink2/14px），保留点击折叠 */
+  .tl-head.section{color:var(--ink2);font-size:14px;padding:14px 12px 6px}
+  .tl-head.section:hover{background:none;color:var(--ink2)}
+  .tl-head.section .tl-chev{margin-left:4px}
+  .tl-ico{font-size:12.5px}
+  .tl-name{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tl-more{opacity:0;color:var(--muted);font-size:14px;padding:0 3px;cursor:pointer}
+  .tl-head:hover .tl-more{opacity:.85} .tl-more:hover{color:var(--ink);opacity:1}
+  .tl-chev{opacity:0;font-size:10px;color:var(--muted);transition:transform .15s}
+  .tl-head:hover .tl-chev{opacity:.9}
+  .tl-group.folded .tl-chev{opacity:.9;transform:rotate(-90deg)}
+  .tl-group.folded .tl-items{display:none}
+  .tl-items{display:flex;flex-direction:column}
+  .tl-items .task{padding-left:26px}
+  .tl-wsmenu{position:fixed;z-index:60}
   .task{display:flex;align-items:center;gap:8px;padding:9px 12px;border-radius:8px;color:var(--ink2);font-size:13.5px}
   .task:hover{background:var(--hover);color:var(--ink)} .task.active{background:var(--surface);color:var(--ink)}
   .task .tt{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

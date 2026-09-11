@@ -352,6 +352,6 @@
   if (window.console && console.log) {
     const style = 'font-size:14px;font-weight:bold;color:#2563eb;background:#dbeafe;padding:4px 10px;border-radius:6px;';
     console.log('%c普联软件·智方（CloudMatrix）', style);
-    console.log('%cTrueMate · Work true. Mate true. 专注工作，真心伙伴。', 'color:#6b7280;font-size:12px;');
+    console.log('%cTrueMate · 专注工作，真心伙伴。', 'color:#6b7280;font-size:12px;');
   }
 })();

@@ -38,6 +38,13 @@ pub enum AppRequest {
         #[serde(default)]
         name: Option<String>,
     },
+    /// 调起操作系统原生文件夹选择器（Web 壳由本机后端进程弹出对话框）；用户取消返回 `picked: null`。
+    /// Tauri 桌面壳有自己的同名 invoke 命令实现，不会走到这里。
+    PickLocalDirectory,
+    /// 把空间移出列表（不删磁盘目录）；`id` 不允许为内置 default。
+    RemoveWorkspace { id: String },
+    /// 用系统文件浏览器打开空间文件夹（侧栏空间菜单「打开文件夹」）。
+    OpenWorkspaceFolder { id: String },
     /// 选择工作空间；`id=None` 表示“不使用工作空间”（普通任务）。
     SelectWorkspace {
         #[serde(default)]
@@ -240,6 +247,21 @@ async fn dispatch_inner(app: &AgentApp, req: AppRequest) -> Result<AppResponse, 
         AppRequest::CreateWorkspace { name } => Ok(AppResponse::ok(app.create_workspace(&name)?)),
         AppRequest::AddLocalWorkspace { path, name } => {
             Ok(AppResponse::ok(app.add_local_workspace(&path, name.as_deref())?))
+        }
+        AppRequest::PickLocalDirectory => {
+            // 系统选择器是阻塞对话框，放阻塞线程池跑，避免占住异步运行时 worker。
+            let picked =
+                tokio::task::spawn_blocking(crate::workspace::native_pick_local_directory)
+                    .await
+                    .map_err(|e| AppError::BadRequest(format!("文件夹选择任务失败：{e}")))?
+                    .map_err(AppError::BadRequest)?;
+            Ok(AppResponse::ok(serde_json::json!({ "picked": picked })))
+        }
+        AppRequest::RemoveWorkspace { id } => {
+            Ok(AppResponse::ok(app.remove_workspace(&id)?))
+        }
+        AppRequest::OpenWorkspaceFolder { id } => {
+            Ok(AppResponse::ok(app.open_workspace_folder(&id)?))
         }
         AppRequest::SelectWorkspace { id } => Ok(AppResponse::ok(
             app.select_workspace(id.as_deref())?,

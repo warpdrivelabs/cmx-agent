@@ -108,20 +108,59 @@ impl WorkspaceRegistry {
     }
 
     pub fn select(&self, id: Option<&str>) -> AppResult<serde_json::Value> {
+        // 「不使用工作空间」= 任务模式 = 内置 default 托管空间：任务也恒有文件根。
+        let target = id.or(Some("default"));
         {
             let mut state = self.state.write().expect("workspace state");
-            if let Some(id) = id {
-                if !state.items.iter().any(|w| w.id == id) {
-                    return Err(AppError::NotFound(format!("workspace '{id}'")));
-                }
-                if let Some(w) = state.items.iter_mut().find(|w| w.id == id) {
-                    w.last_selected_at = Some(chrono::Utc::now());
-                }
+            let id = target.expect("default fallback");
+            if !state.items.iter().any(|w| w.id == id) {
+                return Err(AppError::NotFound(format!("workspace '{id}'")));
             }
-            state.current = id.map(str::to_string);
+            if let Some(w) = state.items.iter_mut().find(|w| w.id == id) {
+                w.last_selected_at = Some(chrono::Utc::now());
+            }
+            state.current = Some(id.to_string());
         }
         self.persist()?;
         self.list()
+    }
+
+    /// 把空间移出列表（不删磁盘目录）；移除的是当前空间时回落到内置 default（任务模式）。
+    pub fn remove(&self, id: &str) -> AppResult<serde_json::Value> {
+        if id == "default" {
+            return Err(AppError::BadRequest("内置默认空间不能移除".into()));
+        }
+        {
+            let mut state = self.state.write().expect("workspace state");
+            let before = state.items.len();
+            state.items.retain(|w| w.id != id);
+            if state.items.len() == before {
+                return Err(AppError::NotFound(format!("workspace '{id}'")));
+            }
+            if state.current.as_deref() == Some(id) {
+                if let Some(d) = state.items.iter_mut().find(|w| w.id == "default") {
+                    d.last_selected_at = Some(chrono::Utc::now());
+                }
+                state.current = Some("default".to_string());
+            }
+        }
+        self.persist()?;
+        self.list()
+    }
+
+    /// 用系统文件浏览器打开空间的本地文件夹（侧栏空间菜单「打开文件夹」）。
+    pub fn open_folder(&self, id: &str) -> AppResult<serde_json::Value> {
+        let path = {
+            let state = self.state.read().expect("workspace state");
+            state
+                .items
+                .iter()
+                .find(|w| w.id == id)
+                .map(|w| w.path.clone())
+                .ok_or_else(|| AppError::NotFound(format!("workspace '{id}'")))?
+        };
+        open_in_file_manager(&path)?;
+        Ok(serde_json::json!({ "opened": id }))
     }
 
     pub fn create_managed(&self, name: &str) -> AppResult<serde_json::Value> {
@@ -264,7 +303,7 @@ fn migrate_legacy_default(data_dir: &Path) -> AppResult<()> {
     Ok(())
 }
 
-fn ensure_default_workspace(data_dir: &Path, items: &mut [WorkspaceEntry]) -> AppResult<()> {
+fn ensure_default_workspace(data_dir: &Path, items: &mut Vec<WorkspaceEntry>) -> AppResult<()> {
     if items.is_empty() {
         return Ok(());
     }
@@ -286,6 +325,17 @@ fn ensure_default_workspace(data_dir: &Path, items: &mut [WorkspaceEntry]) -> Ap
             default.path = default_root;
         }
         std::fs::create_dir_all(&default.path)?;
+    } else {
+        // 「任务模式 = default 空间」要求 default 恒存在：旧数据缺失时补建（不覆盖已有目录）。
+        std::fs::create_dir_all(&default_root)?;
+        items.push(WorkspaceEntry {
+            id: "default".to_string(),
+            name: "默认工作空间".to_string(),
+            path: default_root,
+            kind: WorkspaceKind::Managed,
+            created_at: chrono::Utc::now(),
+            last_selected_at: None,
+        });
     }
     Ok(())
 }
@@ -440,6 +490,50 @@ fn is_subsequence(query: &str, candidate: &str) -> bool {
     })
 }
 
+// ── 原生文件夹选择器（协议命令 pick_local_directory）──
+//
+// Web 壳等没有 Tauri 对话框能力的壳，由本机后端进程调起系统选择器：rfd 进程内弹出
+// 原生对话框（Windows IFileDialog / macOS NSOpenPanel / Linux xdg-desktop-portal），
+// 三端统一、无外部脚本进程。rfd 的阻塞式 `pick_folder` 需要在非异步 worker 的线程上跑，
+// 调用方（protocol / Tauri command）均经 spawn_blocking 进入；Windows/macOS 的 COM·STA、
+// 主线程派发由 rfd 内部处理。返回本地绝对路径，后续统一交给 add_local_workspace 校验。
+// Tauri 桌面壳有自己的同名 invoke 实现，同样落到本函数。
+
+/// 调起操作系统原生的文件夹选择器，返回用户选择的绝对路径；用户取消返回 `None`。
+pub fn native_pick_local_directory() -> Result<Option<String>, String> {
+    let picked = rfd::FileDialog::new()
+        .set_title("选择工作空间文件夹")
+        .pick_folder();
+    Ok(picked.map(|path| path.to_string_lossy().into_owned()))
+}
+
+/// 用系统文件浏览器打开目录：Windows explorer / macOS open / Linux xdg-open。
+/// explorer 的退出码不反映结果（常非零），只看能否拉起进程。
+fn open_in_file_manager(path: &Path) -> AppResult<()> {
+    #[cfg(windows)]
+    {
+        std::process::Command::new("explorer.exe")
+            .arg(path)
+            .spawn()
+            .map_err(|e| AppError::BadRequest(format!("无法打开文件浏览器：{e}")))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(path)
+            .spawn()
+            .map_err(|e| AppError::BadRequest(format!("无法打开访达：{e}")))?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .map_err(|e| AppError::BadRequest(format!("无法打开文件管理器：{e}")))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -504,11 +598,13 @@ mod tests {
     }
 
     #[test]
-    fn no_workspace_has_no_file_root() {
+    fn no_workspace_falls_back_to_default_task_mode() {
         let tmp = std::env::temp_dir().join(format!("cmx-ws-{}", unique_suffix()));
         let reg = WorkspaceRegistry::load_or_init(&tmp, None).unwrap();
-        reg.select(None).unwrap();
-        assert!(reg.current_path().is_none());
+        let picked = reg.select(None).unwrap();
+        // 任务模式：「不使用工作空间」恒回落内置 default 托管空间，任务恒有文件根。
+        assert_eq!(picked["current"]["id"].as_str(), Some("default"));
+        assert_eq!(reg.current_path(), Some(tmp.join("workspaces").join("default")));
         std::fs::remove_dir_all(tmp).ok();
     }
 

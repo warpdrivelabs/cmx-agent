@@ -1,19 +1,102 @@
 // ── 侧栏会话列表（从 tabs.js 挪入）──
+// 分组形态（对齐 ZCode/豆包参考图）：空间组在上、任务组垫底。
+// 会话归组看创建时记录的 workspace_id：空 / "default" / 空间已移除 → 任务组；其余挂各自空间组。
+// 组头点击折叠展开（localStorage 记忆）；空间组 ⋯/右键菜单：打开文件夹 / 从列表中移除（目录保留）。
+const TL_FOLD_KEY="truemate.tl-fold";
+function tlFolded(){ try{ return JSON.parse(localStorage.getItem(TL_FOLD_KEY)||"{}"); }catch(e){ return {}; } }
+function tlSetFold(id,folded){ const s=tlFolded(); if(folded) s[id]=1; else delete s[id]; try{ localStorage.setItem(TL_FOLD_KEY,JSON.stringify(s)); }catch(e){} }
+
 async function refreshTasks(){
   const resp = await call({cmd:"list_sessions"});
   const list = (resp.ok && resp.data.sessions) || [];
-  document.getElementById("taskcount").textContent = "("+list.length+")";
   const box = document.getElementById("tasklist"); box.innerHTML="";
   if(list.length===0){ box.append(el("empty-tasks","还没有任务。<br>点上方「新建任务」或在首页直接下达指令。")); return; }
+
+  let wsState={current:null,workspaces:[]};
+  try{ const r=await call({cmd:"list_workspaces"}); if(r.ok) wsState=r.data; }catch(e){}
+  const wsById={}; (wsState.workspaces||[]).forEach(w=>{ wsById[w.id]=w; });
+
+  const groups=[], byKey={};
   list.forEach(m=>{
+    const ws=(m.workspace_id && m.workspace_id!=="default" && wsById[m.workspace_id])?wsById[m.workspace_id]:null;
+    const key=ws?ws.id:"__tasks__";
+    if(!byKey[key]){ byKey[key]={ws,key,sessions:[]}; groups.push(byKey[key]); }
+    byKey[key].sessions.push(m);
+  });
+  // 空间组按组内最近会话时间排前；任务组恒垫底。组内行也按最近在前。
+  const wsGroups=groups.filter(g=>g.ws).sort((a,b)=>
+    Math.max(...b.sessions.map(s=>new Date(s.updated_at)))-Math.max(...a.sessions.map(s=>new Date(s.updated_at))));
+  const taskGroup=byKey["__tasks__"]||{ws:null,key:"__tasks__",sessions:[]};
+  wsGroups.concat([taskGroup]).forEach(g=>{
+    if(!g.sessions.length) return;
+    g.sessions.sort((a,b)=>new Date(b.updated_at)-new Date(a.updated_at));
+    box.append(renderTaskGroup(g));
+  });
+}
+
+function renderTaskGroup(g){
+  const folded=tlFolded()[g.key]===1;
+  const wrap=el("tl-group"+(folded?" folded":""));
+  // 组头：空间组带 📁 图标；任务组与「空间」区标签平级（同款样式，见 .tl-head.section）。
+  const head=el("tl-head"+(g.ws?"":" section"));
+  head.innerHTML=(g.ws?`<span class="tl-ico">📁</span>`:"")
+    +`<span class="tl-name">${esc(g.ws?g.ws.name:"任务")}</span>`
+    +(g.ws?`<span class="tl-more" title="空间操作">⋯</span>`:"")
+    +`<span class="tl-chev">▾</span>`;
+  const items=el("tl-items");
+  g.sessions.forEach(m=>{
     const t=el("task"+(m.id===CURRENT?" active":""));
     t.innerHTML = `<span class="tt">${esc(m.title||m.id)}</span><span class="tm">${ago(m.updated_at)}</span><span class="del" title="删除">✕</span>`;
     t.addEventListener("click", (e)=>{ if(e.target.closest(".del")) return; openSession(m.id); });
     t.querySelector(".del").onclick = async (e)=>{ e.stopPropagation(); await call({cmd:"delete_session",session_id:m.id});
       if(findTab("s:"+m.id)) closeTab("s:"+m.id); refreshTasks(); };
-    box.append(t);
+    items.append(t);
   });
+  head.addEventListener("click", (e)=>{
+    if(e.target.closest(".tl-more")) return;
+    const nowFolded=!wrap.classList.contains("folded");
+    wrap.classList.toggle("folded",nowFolded); tlSetFold(g.key,nowFolded);
+  });
+  if(g.ws){
+    const menu=(x,y)=>openWsGroupMenu(g,x,y);
+    head.querySelector(".tl-more").addEventListener("click",(e)=>{ e.stopPropagation();
+      const r=e.target.getBoundingClientRect(); menu(r.left,r.bottom+4); });
+    head.addEventListener("contextmenu",(e)=>{ e.preventDefault(); menu(e.clientX,e.clientY); });
+  }
+  wrap.append(head,items);
+  return wrap;
 }
+
+// 空间组浮动菜单：打开文件夹（系统文件浏览器）/ 从列表中移除（不删磁盘目录）。
+function openWsGroupMenu(g,x,y){
+  let m=document.getElementById("tl-wsmenu");
+  if(!m){ m=el("floating-menu tl-wsmenu"); m.id="tl-wsmenu"; document.body.append(m);
+    document.addEventListener("click",(e)=>{ if(!e.target.closest("#tl-wsmenu,.tl-more")) hideWsGroupMenu(); });
+  }
+  m.innerHTML="";
+  const open=el("fm-item");
+  open.innerHTML=`<span class="wi">📂</span><span class="fm-line"><span class="fm-leaf">打开文件夹</span></span>`;
+  open.onclick=async()=>{ hideWsGroupMenu();
+    try{ const r=await call({cmd:"open_workspace_folder",id:g.ws.id}); if(!r.ok) showToast(r.error?.message||"打开文件夹失败"); }
+    catch(e){ showToast("打开文件夹失败："+(e&&e.message||e)); } };
+  const rm=el("fm-item");
+  rm.innerHTML=`<span class="wi">🗑</span><span class="fm-line"><span class="fm-leaf">从列表中移除</span></span>`;
+  rm.onclick=async()=>{ hideWsGroupMenu();
+    try{
+      const r=await call({cmd:"remove_workspace",id:g.ws.id});
+      if(r.ok){ showToast("已从列表移除（目录保留）"); WORKSPACE_STATE=r.data; renderWorkspaceState(); refreshTasks(); }
+      else showToast(r.error?.message||"移除失败");
+    }catch(e){ showToast("移除失败："+(e&&e.message||e)); } };
+  m.append(open,rm);
+  m.style.left=Math.min(x,window.innerWidth-230)+"px";
+  m.style.top=Math.min(y,window.innerHeight-120)+"px";
+  m.style.bottom="auto"; m.hidden=false; m.classList.add("on");
+}
+function hideWsGroupMenu(){
+  const m=document.getElementById("tl-wsmenu");
+  if(m){ m.hidden=true; m.classList.remove("on"); }
+}
+
 function ago(iso){ const d=(Date.now()-new Date(iso).getTime())/86400000;
   if(d<1) return "今天"; if(d<2) return "昨天"; return Math.floor(d)+"天前"; }
 

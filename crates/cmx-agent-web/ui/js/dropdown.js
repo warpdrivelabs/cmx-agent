@@ -38,7 +38,9 @@ function cmxInitDropdown (sel) {
     const rect = trigger.getBoundingClientRect();
     const listH = Math.min(Array.from(sel.options).length * 38 + 8, 260); // 近似高度（item ~38px + padding）
     list.style.left = rect.left + "px";
-    list.style.width = rect.width + "px";
+    // 以触发框宽度起步、可被内容自然撑宽（对勾 margin-left:auto 才能贴到列表右缘，不挤在文字后）。
+    list.style.minWidth = rect.width + "px";
+    list.style.width = "auto";
     // 视口底部溢出检测：trigger 底部 + 弹出列表高 > viewport → 向上弹
     if (rect.bottom + listH > window.innerHeight && rect.top > listH) {
       list.style.top = (rect.top - listH - 4) + "px";

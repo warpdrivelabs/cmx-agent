@@ -12,7 +12,7 @@ WKWebView 前端  --invoke("agent","{cmd:...}")-->  src-tauri (本 crate)  --dis
 
 ```bash
 cd crates/cmx-agent-shell/src-tauri
-cargo run                 # 弹出原生窗口（首次已联网拉过 tauri 依赖，之后可 --offline）
+cargo run                 # 弹出原生窗口（tauri 依赖走 aliyun 镜像自动拉取）
 ```
 
 IM 遥控配置两条路（优先级 **env > im.json**，与 model.json 同范式）：
@@ -50,8 +50,8 @@ Windows/Linux 自绘窗口形态——后者默认 `display:none`，仅在本壳
 - `src-tauri/icons/` — cmx 品牌图标集（含 .icns）。
 - `src-tauri/build.rs` — `tauri_build::build()`。
 
-## 为何独立于离线 workspace
+## 为何独立 workspace
 
-`tauri` 依赖庞大且需联网首拉；若把本 crate 加进 `cmx-agent/Cargo.toml` 的 members，会让**整个 workspace**
-的 `cargo build --offline` 失败，砸了 M0/M1 的离线可测性。故本 crate 用 `[workspace]` 自成单成员 workspace +
-自带 Cargo.lock，经 path 直引 `cmx-agent-app`。已验证：改动后 `cd cmx-agent && cargo test --offline` 仍 48 绿。
+`tauri` 依赖树庞大、版本锁定面与主 workspace 的外部 crate 互相牵制；故本 crate 用 `[workspace]`
+自成单成员 workspace + 自带 Cargo.lock，两边依赖演化互不拖累，经 path 直引 `cmx-agent-app`
+即可随时回归主仓改动（`cargo check` / `cargo test`）。

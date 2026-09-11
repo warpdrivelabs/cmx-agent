@@ -16,9 +16,6 @@ use std::sync::OnceLock;
 use cmx_agent_app::{AgentApp, AuthConfig, DesktopAppBuilder, dispatch_json};
 use tauri::{Emitter, Manager, State};
 
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-
 mod update_common;
 
 /// 门户地址·构建期烧录（唯一来源）：build.rs 从仓库根 `.env` 的 CMX_AGENT_PORTAL_BASE 读取注入
@@ -524,153 +521,18 @@ async fn session_restore_done(state: State<'_, AppState>) -> Result<bool, String
     Ok(rx.changed().await.is_ok())
 }
 
-/// Windows 后台启动 PowerShell 时隐藏控制台窗口（与 cmx-agent-tools 的子进程策略一致）。
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
 /// 调起操作系统原生的文件夹选择器，返回用户选择的绝对路径；用户取消返回 `None`。
 ///
-/// 这里不引入新的 Tauri 插件依赖：Windows 用系统 PowerShell + WinForms，
-/// macOS 用 AppleScript `choose folder`，Linux 优先 Zenity、其次 KDialog。
-/// 三条通路最终都返回本地绝对路径，后续仍统一交给 `add_local_workspace` 校验。
+/// 实现收敛在 `cmx-agent-app::workspace`（与 Web 壳共用一份，Windows 用系统 PowerShell
+/// 调 IFileDialog COM 现代样式，macOS 用 AppleScript，Linux 优先 Zenity 其次 KDialog），
+/// 返回路径仍统一交给 `add_local_workspace` 校验。
 #[tauri::command]
 async fn pick_local_directory() -> Result<Option<String>, String> {
-    tauri::async_runtime::spawn_blocking(native_pick_local_directory)
+    tauri::async_runtime::spawn_blocking(cmx_agent_app::workspace::native_pick_local_directory)
         .await
         .map_err(|e| format!("文件夹选择任务失败：{e}"))?
 }
 
-fn native_pick_local_directory() -> Result<Option<String>, String> {
-    #[cfg(windows)]
-    {
-        let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
-        let powershell = std::path::Path::new(&system_root)
-            .join("System32")
-            .join("WindowsPowerShell")
-            .join("v1.0")
-            .join("powershell.exe");
-        // FolderBrowserDialog 必须运行在 STA 线程；独立 PowerShell 进程可避免影响 WebView/主进程。
-        let script = r#"
-$ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName System.Windows.Forms | Out-Null
-$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-$dialog.Description = '选择工作空间文件夹'
-$dialog.ShowNewFolderButton = $false
-if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK -and $dialog.SelectedPath) {
-    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-    [Console]::Out.Write($dialog.SelectedPath)
-}
-"#;
-        let output = std::process::Command::new(powershell)
-            .args([
-                "-NoLogo",
-                "-NoProfile",
-                "-NonInteractive",
-                "-STA",
-                "-Command",
-                script,
-            ])
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-            .map_err(|e| format!("无法启动系统文件夹选择器：{e}"))?;
-        decode_pick_output(output)
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let output = std::process::Command::new("/usr/bin/osascript")
-            .args([
-                "-e",
-                r#"POSIX path of (choose folder with prompt "选择工作空间文件夹")"#,
-            ])
-            .output()
-            .map_err(|e| format!("无法启动系统文件夹选择器：{e}"))?;
-        return decode_pick_output(output);
-    }
-
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        let args = [
-            "--file-selection",
-            "--directory",
-            "--title",
-            "选择工作空间文件夹",
-        ];
-        if let Ok(output) = std::process::Command::new("zenity").args(args).output() {
-            return decode_pick_output(output);
-        }
-        let output = std::process::Command::new("kdialog")
-            .args([
-                "--title",
-                "选择工作空间文件夹",
-                "--getexistingdirectory",
-                "~",
-            ])
-            .output()
-            .map_err(|_| "未找到系统文件夹选择器（请安装 zenity 或 kdialog）".to_string())?;
-        decode_pick_output(output)
-    }
-}
-
-/// 选择器约定：成功且用户选择时 stdout 输出路径；用户取消为空输出/非零退出。
-fn decode_pick_output(output: std::process::Output) -> Result<Option<String>, String> {
-    if !output.stdout.is_empty() {
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !path.is_empty() {
-            return Ok(Some(path));
-        }
-    }
-    if output.status.success() {
-        return Ok(None);
-    }
-    let stderr_text = String::from_utf8_lossy(&output.stderr);
-    let stderr = stderr_text.trim();
-    if stderr.is_empty() {
-        Ok(None)
-    } else {
-        Err(stderr.to_string())
-    }
-}
-
-#[cfg(test)]
-mod pick_dialog_tests {
-    use super::*;
-
-    #[cfg(windows)]
-    use std::os::windows::process::ExitStatusExt;
-    #[cfg(unix)]
-    use std::os::unix::process::ExitStatusExt;
-
-    fn output(stdout: &[u8], stderr: &[u8], success: bool) -> std::process::Output {
-        std::process::Output {
-            status: if success {
-                std::process::ExitStatus::from_raw(0)
-            } else {
-                std::process::ExitStatus::from_raw(1)
-            },
-            stdout: stdout.to_vec(),
-            stderr: stderr.to_vec(),
-        }
-    }
-
-    #[test]
-    fn selected_path_is_trimmed_and_returned() {
-        let picked = decode_pick_output(output(b" C:\\workspace \n", b"", true)).unwrap();
-        assert_eq!(picked.as_deref(), Some("C:\\workspace"));
-    }
-
-    #[test]
-    fn user_cancel_without_output_is_none() {
-        let picked = decode_pick_output(output(b"", b"", false)).unwrap();
-        assert_eq!(picked, None);
-    }
-
-    #[test]
-    fn selector_error_is_surfaced() {
-        let err = decode_pick_output(output(b"", b"selector missing", false)).unwrap_err();
-        assert_eq!(err, "selector missing");
-    }
-}
 /// 登录命令（SPA 单窗口）：校验凭据 → 返回用户 JSON（前端 js/login.js 切视图）；失败返回错误文案。
 #[tauri::command]
 async fn login(

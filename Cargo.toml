@@ -60,3 +60,6 @@ directories = "5"
 tokio = { version = "1.41", features = ["full"] }
 tokio-stream = "0.1"
 walkdir = "2.5"
+# 原生文件/文件夹选择对话框：Windows IFileDialog（进程内 COM）、macOS NSOpenPanel、
+# Linux xdg-desktop-portal（ashpd 纯 Rust，构建零系统依赖，主题跟随桌面）。
+rfd = "0.15"

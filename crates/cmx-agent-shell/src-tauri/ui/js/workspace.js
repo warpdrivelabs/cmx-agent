@@ -16,8 +16,12 @@ function renderWorkspaceState(){
   const label=document.getElementById("workspace-label"), btn=document.getElementById("workspace-btn");
   if(!label||!btn) return;
   const c=WORKSPACE_STATE.current;
-  label.textContent=c?(c.kind==="local"?"本地 · "+c.name:c.name):"不使用工作空间";
-  btn.title=c?("工作空间根："+c.path):"当前为普通任务模式，不绑定文件工作区";
+  // default 托管空间即「任务模式」：不使用工作空间 = 用默认空间（后端 select(null) 真切到 default）。
+  const isTask=!c||c.id==="default";
+  label.textContent=isTask?"工作空间：不使用":("工作空间："+(c.kind==="local"?"本地 · "+c.name:c.name));
+  btn.title=isTask
+    ? "任务模式：使用内置默认空间（"+((c&&c.path)||"")+"）"
+    : ("工作空间根："+c.path);
 }
 
 function closeWorkspaceMenu(){
@@ -40,8 +44,11 @@ function renderWorkspaceList(query){
   const box=document.getElementById("workspace-list"); if(!box) return;
   box.innerHTML="";
   const q=query.trim().toLowerCase();
-  const items=WORKSPACE_STATE.workspaces.filter(w=>!q||w.name.toLowerCase().includes(q)||w.path.toLowerCase().includes(q));
-  if(!items.length) box.append(el("fm-empty","没有匹配的工作空间"));
+  // default 托管空间即任务模式，不进空间列表（入口是下方「不使用工作空间」）。
+  const items=WORKSPACE_STATE.workspaces
+    .filter(w=>w.id!=="default")
+    .filter(w=>!q||w.name.toLowerCase().includes(q)||w.path.toLowerCase().includes(q));
+  if(!items.length) box.append(el("fm-empty","没有工作空间——新建或打开本地文件夹"));
   items.forEach(w=>{
     const item=el("fm-item"+(WORKSPACE_STATE.current&&WORKSPACE_STATE.current.id===w.id?" selected":""));
     item.innerHTML=`<span class="wi">${w.kind==="local"?"📂":"🗂"}</span><span class="fm-main"><span class="fm-title">${esc(w.name)}</span><span class="fm-sub">${esc(w.path)}</span></span><span class="check">✓</span>`;
@@ -58,16 +65,22 @@ async function selectWorkspace(id){
   }catch(e){ showToast("切换工作空间失败："+(e&&e.message||e)); }
 }
 
-function nativeFolderPickerAvailable(){
-  return Boolean(window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke);
-}
-
-// Tauri 壳调用系统原生文件夹选择器；浏览器/Web 壳受安全限制拿不到绝对路径，继续使用显式路径表单。
+// 「打开本地文件夹」两壳都走系统原生选择器：Tauri 壳 invoke 自己的命令；
+// Web 壳（浏览器）由本机后端进程调起系统选择器（协议命令 pick_local_directory），
+// 选完拿绝对路径仍走 add_local_workspace 校验，与手填路径表单同一落点。
 async function pickLocalWorkspaceFolder(){
   const invoke=window.__TAURI__?.core?.invoke;
-  const picked=await invoke("pick_local_directory");
+  const picked = invoke
+    ? await invoke("pick_local_directory")
+    : await webPickLocalDirectory();
   if(!picked) return true; // 用户取消属于“已处理”，不应再弹出路径表单。
   return await addLocalWorkspace(picked, null);
+}
+
+async function webPickLocalDirectory(){
+  const r=await call({cmd:"pick_local_directory"});
+  if(!r.ok) throw new Error(r.error?.message||"打开文件夹选择器失败");
+  return r.data?.picked ?? null;
 }
 
 async function addLocalWorkspace(path, name){
@@ -116,12 +129,10 @@ function initWorkspaceUI(){
       const a=b.dataset.wsAction;
       if(a==="create") showWorkspaceForm("create");
       else if(a==="local"){
-        if(nativeFolderPickerAvailable()){
-          let handled=false;
-          try{ handled=await pickLocalWorkspaceFolder(); }
-          catch(e){ showToast("打开文件夹选择器失败："+(e&&e.message||e)); }
-          if(!handled) showWorkspaceForm("local");
-        }else showWorkspaceForm("local");
+        let handled=false;
+        try{ handled=await pickLocalWorkspaceFolder(); }
+        catch(e){ showToast("打开文件夹选择器失败："+(e&&e.message||e)); }
+        if(!handled) showWorkspaceForm("local");
       }
       else { await selectWorkspace(null); closeWorkspaceMenu(); }
     };

@@ -15,18 +15,19 @@ Windows 原生支持（shell 探测链 + Job Object）。
 
 ```bash
 cd cmx-agent
-cargo build --offline            # 离线构建
-cargo test  --offline            # 全量测试（当前 325 passed）
-cargo clippy --offline --all-targets   # 必须零告警
+cargo build                      # 构建
+cargo test                       # 全量测试（当前 325 passed）
+cargo clippy --all-targets       # 必须零告警
 ./e2e-serve.sh                   # e2e：serve 前门跨进程持久化
-cargo run --offline -p cmx-agent-cli                    # demo：打印一个回合的会话事件 JSONL
-cargo run --offline -p cmx-agent-web                    # Web 桌面壳（登录门需门户 :8080）
+cargo run -p cmx-agent-cli                    # demo：打印一个回合的会话事件 JSONL
+cargo run -p cmx-agent-web                    # Web 桌面壳（登录门需门户 :8080）
 echo '{"cmd":"send","session_id":"s1","text":"算 2+3"}' | \
-  cargo run --offline -p cmx-agent-cli -- serve /tmp/d  # serve：JSON 前门（= Tauri invoke）
+  cargo run -p cmx-agent-cli -- serve /tmp/d  # serve：JSON 前门（= Tauri invoke）
 ```
 
-- **离线优先**：本机无公网 registry，一律加 `--offline`。外部 crate 版本照抄 cmx-container 根，
-  复用其离线缓存；新增外部依赖前先确认缓存命中。
+- **依赖获取**：外部 crate 走 aliyun 镜像（`.cargo/config.toml`），版本照抄 cmx-container 根以复用
+  缓存；新增外部依赖后联网跑一次 `cargo fetch` 拉齐即可（历史的 `--offline` 约定已于 2026-09-11
+  废除，旧文档中的 `--offline` 字样按历史记录理解）。
 - 工具链锁定 `1.97.1`（`rust-toolchain.toml`），edition 2024，与 cmx-container/flow/rules 对齐。
 
 ## 架构约束（改动前必读）
@@ -90,7 +91,7 @@ M0 核 ✅ → M1 桌面壳(Tauri)+本地文件 → M2 工具平面(接 cmx-*)+�
 
 ## 测试口径
 
-改内核后至少跑：`cargo test --offline` 全绿 + `cargo clippy --offline --all-targets` 零告警。
+改内核后至少跑：`cargo test` 全绿 + `cargo clippy --all-targets` 零告警。
 新增能力必须带测试；安全相关（守卫/沙箱/审批）必须含"该拒被拒"的负例。
 
 ## 前端开发规范（frontend/，agent 与开发者必读）

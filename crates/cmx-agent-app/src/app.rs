@@ -1314,6 +1314,19 @@ impl AgentApp {
         Ok(value)
     }
 
+    /// 把空间移出列表（不删磁盘目录）；移除当前空间时回落任务模式（default）。
+    pub fn remove_workspace(&self, id: &str) -> AppResult<serde_json::Value> {
+        let registry = self.workspace_registry()?;
+        let value = registry.remove(id)?;
+        registry.set_allowed_roots(&self.agent)?;
+        Ok(value)
+    }
+
+    /// 用系统文件浏览器打开空间文件夹（侧栏空间菜单「打开文件夹」）。
+    pub fn open_workspace_folder(&self, id: &str) -> AppResult<serde_json::Value> {
+        self.workspace_registry()?.open_folder(id)
+    }
+
     /// 当前工作空间内检索文件，供输入框 @ 悬浮选择。
     pub async fn search_workspace_files(
         &self,

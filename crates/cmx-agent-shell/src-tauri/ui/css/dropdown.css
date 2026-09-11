@@ -35,6 +35,8 @@
 }
 .cmx-dd-item:hover{background:var(--hover);color:var(--ink)}
 .cmx-dd-item.active{color:var(--aqua);background:var(--accent-soft);font-weight:600}
+/* 文本占满剩余空间（超长省略），对勾 margin-left:auto 恒贴列表右缘、不挤在文字后 */
+.cmx-dd-item>span:first-child{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .cmx-dd-item .dd-check{margin-left:auto;flex-shrink:0;opacity:0}
 .cmx-dd-item.active .dd-check{opacity:1}
 

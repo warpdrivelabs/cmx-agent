@@ -44,13 +44,13 @@ crates/
 ## 快速开始
 
 ```bash
-cargo build --offline
-cargo test  --offline                    # 211 passed
-cargo clippy --offline --all-targets     # 0 issues
-cargo run   --offline -p cmx-agent-cli   # 无头 demo：打印一个回合的会话事件 JSONL
+cargo build
+cargo test                               # 211 passed
+cargo clippy --all-targets               # 0 issues
+cargo run   -p cmx-agent-cli             # 无头 demo：打印一个回合的会话事件 JSONL
 
 # Web 桌面壳（离线可跑；登录门需门户 :8080）
-cargo run --offline -p cmx-agent-web
+cargo run -p cmx-agent-web
 
 # 原生 Tauri 壳（独立 workspace，首次联网拉依赖）
 cd crates/cmx-agent-shell/src-tauri && cargo run

@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 DATA_DIR="$(mktemp -d -t cmx-agent-e2e-XXXXXX)"
 trap 'rm -rf "$DATA_DIR"' EXIT
 
-BIN=(cargo run --offline -q -p cmx-agent-cli --)
+BIN=(cargo run -q -p cmx-agent-cli --)
 
 pass=0; fail=0
 check() { # check <desc> <needle> <haystack>
