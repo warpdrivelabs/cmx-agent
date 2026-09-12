@@ -168,7 +168,7 @@ impl WorkspaceRegistry {
         if name.is_empty() {
             return Err(AppError::BadRequest("工作空间名称不能为空".into()));
         }
-        let id = format!("ws-{}", chrono::Utc::now().timestamp_millis());
+        let id = workspace_id("ws");
         let root = self.path.parent().ok_or_else(|| AppError::BadRequest("数据目录无效".into()))?
             .join("workspaces")
             .join(sanitize_id(&id));
@@ -216,7 +216,7 @@ impl WorkspaceRegistry {
             .file_name()
             .and_then(|s| s.to_str())
             .unwrap_or("本地工作空间");
-        let id = format!("local-{}", chrono::Utc::now().timestamp_millis());
+        let id = workspace_id("local");
         let entry = WorkspaceEntry {
             id,
             name: name
@@ -375,6 +375,19 @@ fn sanitize_id(raw: &str) -> String {
     raw.chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
         .collect()
+}
+
+/// 工作空间 id：`<前缀>-<纳秒>-<进程内序号>`。仅用毫秒时间戳会在同一毫秒内连建两个
+/// 空间时撞车（macOS 快盘实测：两次 add_local 同毫秒 → id 相同 → select/search_files_in
+/// 全定位到第一个，界面上空间"切不动"）。纳秒 + 单调序号双保险，序号兜底时钟回拨。
+fn workspace_id(prefix: &str) -> String {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{prefix}-{nanos}-{n}")
 }
 
 /// Windows `canonicalize` 会返回 `\\?\` 物理路径；注册表/UI 展示与用户输入习惯保持一致。
@@ -673,7 +686,8 @@ mod tests {
 
         let reg = WorkspaceRegistry::load_or_init(&tmp, None).unwrap();
         reg.add_local(&local.to_string_lossy(), None).unwrap();
-        assert_eq!(reg.current_path().unwrap(), local);
+        // add_local 会 canonicalize（macOS 下 /var → /private/var），断言按同口径比较。
+        assert_eq!(reg.current_path().unwrap(), local.canonicalize().unwrap());
         assert!(reg
             .search_files("readme", 10)
             .unwrap()
