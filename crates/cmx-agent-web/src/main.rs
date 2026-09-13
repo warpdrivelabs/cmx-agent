@@ -136,6 +136,7 @@ async fn css_asset(
         "panels.css" => include_bytes!("../ui/css/panels.css"),
         "login.css" => include_bytes!("../ui/css/login.css"),
         "dropdown.css" => include_bytes!("../ui/css/dropdown.css"),
+        "settings.css" => include_bytes!("../ui/css/settings.css"),
         _ => return axum::http::StatusCode::NOT_FOUND.into_response(),
     };
     (
@@ -163,6 +164,7 @@ async fn js_asset(
         "vendor/qrcode.min.js" => include_bytes!("../ui/js/vendor/qrcode.min.js"),
         "login.js" => include_bytes!("../ui/js/login.js"),
         "update.js" => include_bytes!("../ui/js/update.js"),
+        "settings.js" => include_bytes!("../ui/js/settings.js"),
         "platform.js" => include_bytes!("../ui/js/platform.js"),
         "main.js" => include_bytes!("../ui/js/main.js"),
         _ => return axum::http::StatusCode::NOT_FOUND.into_response(),

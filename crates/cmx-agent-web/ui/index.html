@@ -15,6 +15,7 @@
 <link rel="stylesheet" href="css/tokens.css" />
 <link rel="stylesheet" href="css/layout.css" />
 <link rel="stylesheet" href="css/modals.css" />
+<link rel="stylesheet" href="css/settings.css" />
 <link rel="stylesheet" href="css/chat.css" />
 <link rel="stylesheet" href="css/panels.css" />
 <link rel="stylesheet" href="css/login.css" />
@@ -59,8 +60,9 @@
     <div class="act" id="act-im" data-act="showPanel" data-panel="im" title="即时通讯"><span>💬</span><span class="badge">3</span></div>
     <div class="act" id="act-plugins" data-act="showPanel" data-panel="plugins" title="插件管理"><span>🧩</span></div>
     <div class="act-sp"></div>
-    <button class="act user-act" id="user-act-btn" data-act="toggleUserMenu" title="未登录"><span class="uic" id="uic">👤</span></button>
-    <button class="act cmx-act" data-act="toggleMenu" title="设置 · 关于 · 更多"><img src="cmx.png" alt="cmx" /></button>
+    <!-- 设置中心唯一入口（重构：原「头像 + logo」两按钮收拢为一个 logo；账户/模型/IM/外观/通用/关于全进设置中心）。
+         #logo-dot：未登录红点提示（refreshUser 维护），点开默认落「账户」分区。 -->
+    <button class="act cmx-act" id="settings-entry" data-act="toggleSettings" title="设置中心"><img src="cmx.png" alt="cmx" /><span class="logo-dot" id="logo-dot" style="display:none"></span></button>
   </div>
   <!-- ═════ 左侧栏（三面板切换）═════ -->
   <aside>
@@ -96,13 +98,218 @@
   </aside>
   <!-- 左右分栏拖动条：拖动调整左侧栏宽度（宽度存 localStorage）-->
   <div class="splitter" id="splitter" title="拖动调整左侧栏宽度"></div>
-  <!-- cmx 功能菜单（点活动栏底部 cmx 图标弹出，点外部关闭）。锚在活动栏底部左下角。-->
-  <div class="cmxmenu" id="cmxmenu">
-    <div class="mi" data-act="menuSettings"><span class="mi-i">⚙</span> 设置</div>
-    <div class="mi" data-act="toggleTheme"><span class="mi-i">☀</span> 切换主题</div>
-    <div class="mi" data-act="checkUpdate"><span class="mi-i">⭮</span> 检查更新</div>
-    <div class="mi-sep"></div>
-    <div class="mi" data-act="menuAbout"><span class="mi-i">ⓘ</span> 关于 TrueMate</div>
+  <!-- ═════ 设置中心（重构核心）：活动栏底部 logo 唯一入口，六分区两栏 ═════
+       分组一「账户与模型」：账户（头像/昵称/改密/退出）/ 模型（原模型配置面板平移，mcfg-* id 全保留）/ IM 遥控（原设置面板平移，scfg-* id 全保留）。
+       分组二「通用」：外观（主题卡）/ 通用（自动更新开关占位 + 数据目录）/ 关于（版本 + 检查更新）。
+       交互走 data-act 委托 + 显式 addEventListener（内联 onclick/onchange 被两壳 CSP 拦截，勿用）。
+       Esc/✕/点遮罩关闭；分区记忆 localStorage cmx-settings-section；_pwdForced 强制改密态优先。 -->
+  <div class="mcfg-overlay hidden" id="settings-overlay">
+    <div class="settings-box">
+      <nav class="settings-nav" id="settings-nav">
+        <div class="settings-group">账户与模型</div>
+        <button class="settings-item" data-sec="account" data-act="settingsSection"><span class="si-ico">👤</span>账户</button>
+        <button class="settings-item" data-sec="models" data-act="settingsSection"><span class="si-ico">🧠</span>模型</button>
+        <button class="settings-item" data-sec="im" data-act="settingsSection"><span class="si-ico">💬</span>IM 遥控</button>
+        <div class="settings-group">通用</div>
+        <button class="settings-item" data-sec="appearance" data-act="settingsSection"><span class="si-ico">🎨</span>外观</button>
+        <button class="settings-item" data-sec="general" data-act="settingsSection"><span class="si-ico">⚙</span>通用</button>
+        <button class="settings-item" data-sec="about" data-act="settingsSection"><span class="si-ico">ⓘ</span>关于</button>
+      </nav>
+      <div class="settings-main">
+        <div class="settings-head">
+          <div><h2 id="settings-title">账户</h2><p id="settings-desc"></p></div>
+          <button class="settings-close" data-act="closeSettings" title="关闭">✕</button>
+        </div>
+        <div class="settings-body">
+          <!-- ── 账户分区 ── -->
+          <section class="settings-sec" id="settings-sec-account">
+            <div class="acc-card" id="acc-card">
+              <div class="acc-av" id="acc-av">👤</div>
+              <div class="acc-info">
+                <div class="acc-name-row">
+                  <span class="acc-name" id="acc-name">未登录</span>
+                  <span class="acc-badge" id="acc-badge"><i></i><span id="acc-badge-txt">未登录</span></span>
+                </div>
+                <div class="acc-uid" id="acc-uid">登录 cmx 门户后同步账户信息</div>
+              </div>
+              <button class="settings-btn" id="acc-pwd-btn" data-act="accChangePassword">🔑 修改密码</button>
+            </div>
+            <div class="acc-rows">
+              <div class="acc-row"><span class="acc-k">账户 ID</span><span class="acc-v" id="acc-id">—</span></div>
+            </div>
+            <button class="settings-btn settings-danger acc-logout" data-act="accLogout">⎋ 退出登录</button>
+          </section>
+          <!-- ── 模型分区（原模型配置面板 DOM 平移，mcfg-* id 全保留，js/model.js 零逻辑改动）── -->
+          <section class="settings-sec" id="settings-sec-models">
+            <div class="mcfg-body">
+              <div class="mcfg-list" id="mcfg-list"></div>
+              <div class="mcfg-detail">
+                <div class="mcfg-row">
+                  <label>名称</label>
+                  <input id="mcfg-name" type="text" placeholder="如 我的Kimi / 公司网关">
+                </div>
+                <div class="mcfg-row">
+                  <label>预设 Provider（新增时快速填充）</label>
+                  <select id="mcfg-preset">
+                    <option value="">自定义</option>
+                    <option value="mlamp">MLamp（llmgw-bz.mlamp.cn/v1）</option>
+                  </select>
+                </div>
+                <div class="mcfg-row">
+                  <label>Base URL</label>
+                  <input id="mcfg-base-url" type="text" placeholder="https://api.xxx.com/v1">
+                </div>
+                <div class="mcfg-row">
+                  <label>API Key</label>
+                  <div class="mcfg-key-wrap">
+                    <input id="mcfg-api-key" type="password" placeholder="（脱敏；点 🔓 解锁编辑）" readonly>
+                    <button id="mcfg-key-lock-btn" data-act="mcfgKeyLock" title="解锁/锁定 API Key">🔒</button>
+                  </div>
+                </div>
+                <div class="mcfg-row">
+                  <label>模型</label>
+                  <input id="mcfg-model" type="text" list="mcfg-model-list" placeholder="如 mlamp/deepseek-v4-flash">
+                  <datalist id="mcfg-model-list"></datalist>
+                </div>
+                <div class="mcfg-row">
+                  <label>Temperature</label>
+                  <div class="mcfg-temp-row">
+                    <input id="mcfg-temp" type="range" min="0" max="1" step="0.01" value="0.2">
+                    <span class="mcfg-temp-val" id="mcfg-temp-val">0.20</span>
+                  </div>
+                </div>
+                <div class="mcfg-row">
+                  <label>超时 (ms)</label>
+                  <input id="mcfg-timeout" type="number" min="5000" max="300000" step="1000" value="60000">
+                </div>
+                <div class="mcfg-hint" id="mcfg-hint"></div>
+              </div>
+            </div>
+            <div class="mcfg-actions">
+              <button data-act="mcfgDelete" id="mcfg-del-btn" class="mcfg-danger">删除</button>
+              <span style="flex:1"></span>
+              <button data-act="closeSettings">取消</button>
+              <button class="mcfg-save" data-act="mcfgSave">保存</button>
+            </div>
+          </section>
+          <!-- ── IM 遥控分区（原设置面板 DOM 平移，scfg-* id 全保留，js/im.js 零逻辑改动）── -->
+          <section class="settings-sec" id="settings-sec-im">
+            <div class="mcfg-body">
+              <div class="mcfg-list" id="scfg-list"></div>
+              <div class="mcfg-detail" id="scfg-detail">
+                <div id="scfg-feishu-block">
+                  <div class="mcfg-row">
+                    <label>App ID</label>
+                    <input id="scfg-app-id" type="text" placeholder="cli_…（飞书开放平台 · 凭证与基础信息）">
+                  </div>
+                  <div class="mcfg-row">
+                    <label>App Secret</label>
+                    <div class="mcfg-key-wrap">
+                      <input id="scfg-app-secret" type="password" placeholder="（脱敏；点 🔓 解锁填写）" readonly>
+                      <button id="scfg-secret-lock" data-act="scfgSecretLock" title="解锁/锁定 App Secret">🔒</button>
+                    </div>
+                  </div>
+                  <div class="mcfg-row">
+                    <label>区域</label>
+                    <select id="scfg-base">
+                      <option value="">飞书 · 国内（open.feishu.cn）</option>
+                      <option value="https://open.larksuite.com">Lark · 海外（open.larksuite.com）</option>
+                    </select>
+                  </div>
+                </div>
+                <div id="scfg-qq-block" style="display:none">
+                  <div class="mcfg-row">
+                    <label>扫码登录</label>
+                    <div style="display:flex;align-items:center;gap:10px;min-width:0">
+                      <button id="scfg-qq-btn" data-act="scfgQqLogin" style="padding:7px 18px;border-radius:8px;font-size:13px;cursor:pointer;border:1px solid var(--aqua);background:var(--aqua);color:#000;font-weight:600">扫码登录</button>
+                      <span id="scfg-qq-status" style="font-size:11.5px;color:var(--muted)"></span>
+                    </div>
+                  </div>
+                  <div id="scfg-qq-qr-wrap" style="display:none;text-align:center;margin:10px 0 4px">
+                    <img id="scfg-qq-qr" alt="QQ 登录二维码" style="width:190px;height:190px;border:1px solid var(--border);border-radius:10px">
+                  </div>
+                  <div class="mcfg-row">
+                    <label>AppID</label>
+                    <input id="scfg-qq-app-id" type="text" placeholder="扫码后自动填入；或去 QQ 开放平台 q.qq.com 手动复制">
+                  </div>
+                  <div class="mcfg-row">
+                    <label>AppSecret</label>
+                    <div class="mcfg-key-wrap">
+                      <input id="scfg-qq-secret" type="password" placeholder="（脱敏；点 🔓 解锁填写）" readonly>
+                      <button id="scfg-qq-lock" data-act="scfgQqLock" title="解锁/锁定 AppSecret">🔒</button>
+                    </div>
+                  </div>
+                  <div style="font-size:11.5px;color:var(--muted);margin:2px 0 6px;line-height:1.5">
+                    官方推荐扫码：点「扫码登录」→ 用手机 QQ 扫码并确认 → 凭证自动获取（免开发者注册，一个 QQ 号最多 5 个机器人）。也可在 QQ 开放平台（q.qq.com）手动创建后填 AppID/Secret。
+                  </div>
+                </div>
+                <div id="scfg-wechat-block" style="display:none">
+                  <div class="mcfg-row">
+                    <label>登录状态</label>
+                    <input id="scfg-wx-bot-id" type="text" readonly placeholder="（未扫码登录）">
+                  </div>
+                  <div class="mcfg-row">
+                    <label>扫码登录</label>
+                    <div style="display:flex;align-items:center;gap:10px;min-width:0">
+                      <button id="scfg-wx-btn" data-act="scfgWechatLogin" style="padding:7px 18px;border-radius:8px;font-size:13px;cursor:pointer;border:1px solid var(--aqua);background:var(--aqua);color:#000;font-weight:600">扫码登录</button>
+                      <span id="scfg-wx-status" style="font-size:11.5px;color:var(--muted)"></span>
+                    </div>
+                  </div>
+                  <div id="scfg-wx-qr-wrap" style="display:none;text-align:center;margin:10px 0 4px">
+                    <img id="scfg-wx-qr" alt="微信登录二维码" style="width:190px;height:190px;border:1px solid var(--border);border-radius:10px">
+                  </div>
+                  <div style="font-size:11.5px;color:var(--muted);margin:2px 0 6px;line-height:1.5">
+                    bot_token 仅能扫码获得（腾讯下发，无法手填）；一次登录长期有效，失效后回到这里重扫。二维码约 5 分钟过期，自动刷新。
+                  </div>
+                </div>
+                <div id="scfg-note" style="font-size:11.5px;color:var(--muted);margin:2px 0 6px;line-height:1.5"></div>
+              </div>
+            </div>
+            <div class="mcfg-actions">
+              <label style="display:flex;align-items:center;gap:5px;font-weight:400;font-size:12.5px;color:var(--ink2);white-space:nowrap;cursor:pointer">
+                <input type="checkbox" id="scfg-enabled" checked> 启用遥控
+              </label>
+              <span style="flex:1"></span>
+              <button data-act="closeSettings">取消</button>
+              <button class="mcfg-save" data-act="imcfgSave">保存</button>
+            </div>
+          </section>
+          <!-- ── 外观分区 ── -->
+          <section class="settings-sec" id="settings-sec-appearance">
+            <div class="theme-cards" id="theme-cards">
+              <button class="theme-card" data-t="dark" data-act="setThemeCard" title="深色主题">
+                <span class="theme-prev theme-prev-dark"><i class="tp-side"></i><i class="tp-main"></i><i class="tp-dot"></i></span>
+                <span class="theme-cap">深色<span class="theme-ck">✓</span></span>
+              </button>
+              <button class="theme-card" data-t="light" data-act="setThemeCard" title="浅色主题">
+                <span class="theme-prev theme-prev-light"><i class="tp-side"></i><i class="tp-main"></i><i class="tp-dot"></i></span>
+                <span class="theme-cap">浅色<span class="theme-ck">✓</span></span>
+              </button>
+            </div>
+            <div class="settings-hint">点主题卡立即生效；标题栏 ☀/☾ 可随手切换。</div>
+          </section>
+          <!-- ── 通用分区 ── -->
+          <section class="settings-sec" id="settings-sec-general">
+            <div class="set-line">
+              <div class="set-info"><b>数据文件夹</b><span id="data-dir-label">%APPDATA%\pansoft\cmx-agent\data（双壳共享）</span></div>
+            </div>
+          </section>
+          <!-- ── 关于分区 ── -->
+          <section class="settings-sec" id="settings-sec-about">
+            <div class="about-page">
+              <img src="cmx.png" class="about-logo" alt="TrueMate" />
+              <h2>TrueMate</h2>
+              <p class="about-slogan">专注工作，真心伙伴</p>
+              <p class="about-ver" id="about-ver"></p>
+              <p class="about-desc">同核多壳架构：形（前门）/ 核（回合循环 + 五层守卫）/ 体（cmx 引擎连接器）</p>
+              <div class="acc-actions" style="justify-content:center">
+                <button class="settings-btn" data-act="aboutCheckUpdate">⭮ 检查更新</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
   </div>
   <!-- 模型选择弹层（点 composer 的 ◎ 模型按钮弹出；锚在按钮上方，点外部关闭）。 -->
   <div class="cmxmenu modelmenu" id="modelmenu"></div>
@@ -163,97 +370,6 @@
       </div>
     </div>
   </div>
-  <!-- 设置面板（Modal）：IM 遥控连接配置（飞书/QQ/微信 凭证 → 后端 im.json；
-       保存热重载即时生效）。微信 bot_token 经面板内扫码登录写入。
-       个人模式固定（消息以桌面登录账号身份跑回合，无验证码绑定）。复用模型面板的 mcfg-*
-       样式；交互走 data-act 委托（内联 onclick 被两壳 CSP 拦截，勿用）；密文走「锁」交互
-       （面板只回显掩码，解锁才能改，保存 keep/set 语义同 API Key）。 -->
-  <div class="mcfg-overlay hidden" id="settings-overlay">
-    <div class="mcfg-box mcfg-wide">
-      <div class="mcfg-head">⚙ 设置 <button data-act="closeSettings">✕</button></div>
-      <div class="mcfg-body">
-        <!-- 左列：通道列表（勾选 = 启用并在线；未勾 = 只存凭证不上线）。复用 mcfg-list 样式。 -->
-        <div class="mcfg-list" id="scfg-list"></div>
-        <!-- 右侧：所选通道凭证详情 -->
-        <div class="mcfg-detail" id="scfg-detail">
-          <div id="scfg-feishu-block">
-            <div class="mcfg-row">
-              <label>App ID</label>
-              <input id="scfg-app-id" type="text" placeholder="cli_…（飞书开放平台 · 凭证与基础信息）">
-            </div>
-            <div class="mcfg-row">
-              <label>App Secret</label>
-              <div class="mcfg-key-wrap">
-                <input id="scfg-app-secret" type="password" placeholder="（脱敏；点 🔓 解锁填写）" readonly>
-                <button id="scfg-secret-lock" data-act="scfgSecretLock" title="解锁/锁定 App Secret">🔒</button>
-              </div>
-            </div>
-            <div class="mcfg-row">
-              <label>区域</label>
-              <select id="scfg-base">
-                <option value="">飞书 · 国内（open.feishu.cn）</option>
-                <option value="https://open.larksuite.com">Lark · 海外（open.larksuite.com）</option>
-              </select>
-            </div>
-          </div>
-          <div id="scfg-qq-block" style="display:none">
-            <div class="mcfg-row">
-              <label>扫码登录</label>
-              <div style="display:flex;align-items:center;gap:10px;min-width:0">
-                <button id="scfg-qq-btn" data-act="scfgQqLogin" style="padding:7px 18px;border-radius:8px;font-size:13px;cursor:pointer;border:1px solid var(--aqua);background:var(--aqua);color:#000;font-weight:600">扫码登录</button>
-                <span id="scfg-qq-status" style="font-size:11.5px;color:var(--muted)"></span>
-              </div>
-            </div>
-            <div id="scfg-qq-qr-wrap" style="display:none;text-align:center;margin:10px 0 4px">
-              <img id="scfg-qq-qr" alt="QQ 登录二维码" style="width:190px;height:190px;border:1px solid var(--border);border-radius:10px">
-            </div>
-            <div class="mcfg-row">
-              <label>AppID</label>
-              <input id="scfg-qq-app-id" type="text" placeholder="扫码后自动填入；或去 QQ 开放平台 q.qq.com 手动复制">
-            </div>
-            <div class="mcfg-row">
-              <label>AppSecret</label>
-              <div class="mcfg-key-wrap">
-                <input id="scfg-qq-secret" type="password" placeholder="（脱敏；点 🔓 解锁填写）" readonly>
-                <button id="scfg-qq-lock" data-act="scfgQqLock" title="解锁/锁定 AppSecret">🔒</button>
-              </div>
-            </div>
-            <div style="font-size:11.5px;color:var(--muted);margin:2px 0 6px;line-height:1.5">
-              官方推荐扫码：点「扫码登录」→ 用手机 QQ 扫码并确认 → 凭证自动获取（免开发者注册，一个 QQ 号最多 5 个机器人）。也可在 QQ 开放平台（q.qq.com）手动创建后填 AppID/Secret。
-            </div>
-          </div>
-          <div id="scfg-wechat-block" style="display:none">
-            <div class="mcfg-row">
-              <label>登录状态</label>
-              <input id="scfg-wx-bot-id" type="text" readonly placeholder="（未扫码登录）">
-            </div>
-            <div class="mcfg-row">
-              <label>扫码登录</label>
-              <div style="display:flex;align-items:center;gap:10px;min-width:0">
-                <button id="scfg-wx-btn" data-act="scfgWechatLogin" style="padding:7px 18px;border-radius:8px;font-size:13px;cursor:pointer;border:1px solid var(--aqua);background:var(--aqua);color:#000;font-weight:600">扫码登录</button>
-                <span id="scfg-wx-status" style="font-size:11.5px;color:var(--muted)"></span>
-              </div>
-            </div>
-            <div id="scfg-wx-qr-wrap" style="display:none;text-align:center;margin:10px 0 4px">
-              <img id="scfg-wx-qr" alt="微信登录二维码" style="width:190px;height:190px;border:1px solid var(--border);border-radius:10px">
-            </div>
-            <div style="font-size:11.5px;color:var(--muted);margin:2px 0 6px;line-height:1.5">
-              bot_token 仅能扫码获得（腾讯下发，无法手填）；一次登录长期有效，失效后回到这里重扫。二维码约 5 分钟过期，自动刷新。
-            </div>
-          </div>
-          <div id="scfg-note" style="font-size:11.5px;color:var(--muted);margin:2px 0 6px;line-height:1.5"></div>
-        </div>
-      </div>
-      <div class="mcfg-actions">
-        <label style="display:flex;align-items:center;gap:5px;font-weight:400;font-size:12.5px;color:var(--ink2);white-space:nowrap;cursor:pointer">
-          <input type="checkbox" id="scfg-enabled" checked> 启用遥控
-        </label>
-        <span style="flex:1"></span>
-        <button data-act="closeSettings">取消</button>
-        <button class="mcfg-save" data-act="imcfgSave">保存</button>
-      </div>
-    </div>
-  </div>
   <!-- 修改密码弹框（Modal）：登录后 must_change_password=true **强制弹出且不可关闭**（无 ✕ / 稍后再说，
        唯一出口 =「退出登录」回登录页或关 app），改密前不能操作；用户菜单「修改密码」也走这里（可关闭）。
        对接门户 /api/auth/change-password；成功后全端 token 吊销 → 返回登录页。交互走 data-act 委托（CSP 禁内联）。 -->
@@ -294,19 +410,7 @@
       </div>
     </div>
   </div>
-  <!-- 用户菜单（点活动栏底部用户头像弹出）：用户信息 + 常用功能 -->
-  <div class="cmxmenu usermenu" id="usermenu">    <div class="um-head">
-      <div class="um-av" id="um-av">🐷</div>
-      <div class="um-info"><div class="um-name" id="um-name">未登录</div><div class="um-mail" id="um-mail">点此登录 cmx 门户</div></div>
-    </div>
-    <div class="mi-sep"></div>
-    <div class="mi" data-act="userProfile"><span class="mi-i">👤</span> 账户信息</div>
-    <div class="mi" data-act="userChangePassword"><span class="mi-i">🔑</span> 修改密码</div>
-    <div class="mi" data-act="userSwitch"><span class="mi-i">⇄</span> 切换账户</div>
-    <div class="mi" data-act="userWorkspace"><span class="mi-i">🗂</span> 工作空间</div>
-    <div class="mi-sep"></div>
-    <div class="mi um-danger" data-act="userLogout"><span class="mi-i">⎋</span> 退出登录</div>
-  </div>
+  <!-- 用户菜单已删除（重构：收拢进设置中心「账户」分区，见上方 #settings-overlay） -->
 
   <!-- ═════ 主区 ═════ -->
   <main>
@@ -493,6 +597,7 @@
 <script src="js/im.js" defer></script>
 <script src="js/login.js" defer></script>
 <script src="js/update.js" defer></script>
+<script src="js/settings.js" defer></script>
 <script src="js/platform.js" defer></script>
 <script src="js/main.js" defer></script>
 </body>

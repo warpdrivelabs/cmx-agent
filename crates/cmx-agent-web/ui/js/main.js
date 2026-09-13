@@ -15,21 +15,18 @@ function toggleTheme(){
   applyTheme(cur === "light" ? "dark" : "light");
 }
 let APP_VERSION = "M2 · 0.1.0";
-// 桌面壳：真实版本号从壳注入（get_app_version），覆盖静态兜底（关于菜单 / 更新提示共用）。
+// 桌面壳：真实版本号从壳注入（get_app_version），覆盖静态兜底（关于分区 / 更新提示共用）。
 (async()=>{
   if(window.__TAURI__ && window.__TAURI__.core){
     try{ APP_VERSION = "M2 · " + await window.__TAURI__.core.invoke("get_app_version"); }catch(e){}
   }
 })();
-function toggleMenu(){ document.getElementById("usermenu").classList.remove("on"); document.getElementById("cmxmenu").classList.toggle("on"); }
 function closeMenu(){
-  document.getElementById("cmxmenu").classList.remove("on");
-  document.getElementById("usermenu").classList.remove("on");
   document.getElementById("modelmenu").classList.remove("on");
   document.getElementById("tab-dropdown").classList.remove("on");
 }
 let CURRENT_USER = null;   // {user_id, username, nickname, roles} 或 null
-// 拉取当前登录用户（前门 current_user），填充活动栏头像 + 用户菜单。未登录则显示占位。
+// 拉取当前登录用户（前门 current_user），维护设置中心账户分区 + 未登录红点。未登录则显示占位。
 async function refreshUser(){
   try{
     const r = await call({cmd:"current_user"});
@@ -38,15 +35,11 @@ async function refreshUser(){
   // 原生壳未登录：隐藏主窗、聚焦登录窗（每次启动先见登录门，与登出行为对齐）。
   if(!CURRENT_USER){ location.hash = "#/login"; showLoginView(); } // SPA：未认证切登录视图
   const u = CURRENT_USER;
-  const name = u ? (u.nickname || u.username) : "未登录";
-  const initial = name && name !== "未登录" ? name.trim().charAt(0).toUpperCase() : "👤";
-  document.getElementById("uic").textContent = initial;
-  document.getElementById("user-act-btn").title = name;
-  document.getElementById("um-av").textContent = initial;
-  document.getElementById("um-name").textContent = name;
-  document.getElementById("um-mail").textContent = u
-    ? ("@"+u.username + (u.roles && u.roles.length ? " · "+u.roles.join("/") : ""))
-    : "点此登录 cmx 门户";
+  // 未登录红点（设置中心 logo 入口）：未登录点亮，登录后熄灭。
+  const dot = document.getElementById("logo-dot");
+  if(dot) dot.style.display = u ? "none" : "";
+  // 设置中心账户分区若正开着，同步刷新头像/昵称卡。
+  if(typeof renderAccountSection === "function") renderAccountSection();
   // 初始密码强制改密：must_change_password=true 期间改密框常驻（无关闭入口），改密/退出前不能操作；
   // 弹框若被意外关闭（正常没有入口）这里兜底再弹起。登出（u=null）解除强制态。
   if(u && u.must_change_password){
@@ -54,18 +47,6 @@ async function refreshUser(){
     if(document.getElementById("pwd-overlay").classList.contains("hidden")) openPwdDialog(true);
   }
   if(!u){ _pwdForced = false; }
-}
-function toggleUserMenu(){ document.getElementById("cmxmenu").classList.remove("on"); document.getElementById("usermenu").classList.toggle("on"); }
-function userProfile(){ closeMenu();
-  const u = CURRENT_USER;
-  if(!u){ showToast("尚未登录。"); return; }
-  infoDialog("账户信息", (u.nickname||u.username)+"（@"+u.username+"）\n用户 ID："+u.user_id+"\n角色："+((u.roles||[]).join("、")||"—")+"\n\n对接 cmx 门户统一认证（/api/auth）。"); }
-function userSwitch(){ closeMenu(); infoDialog("切换账户", "退出后重新登录即可切换账户/租户。"); }
-function userWorkspace(){ closeMenu(); newTask(); setTimeout(openWorkspaceMenu,30); }
-
-function userLogout(){ closeMenu();
-  // 自制确认框替代原生 confirm（与主题一致）：取消/点遮罩关闭，确认走 logoutConfirm。
-  document.getElementById("logout-overlay").classList.remove("hidden");
 }
 function logoutCancel(){ document.getElementById("logout-overlay").classList.add("hidden"); }
 async function logoutConfirm(){
@@ -125,7 +106,9 @@ function showToast(msg){
 }
 
 // 内联 onclick 属性全被拦截。用委托（监听在 document 上，由 nonce'd 脚本注册）在两壳都工作。
-const ACTIONS = { newTask, openConnectors, openAssistant, startFromHome, toggleSidebar, toggleTheme, checkUpdate, applyUpdate: updateBtnClick, toggleMenu, menuSettings, menuAbout, toggleVoice, toggleUserMenu, userProfile, userSwitch, userWorkspace, userLogout,
+// 重构：toggleMenu/toggleUserMenu（原两浮层菜单）删除；menuSettings/menuAbout/userProfile/userSwitch/
+// userWorkspace/userLogout 收拢进设置中心（js/settings.js 的 openSettings/toggleSettings + acc* 动作）。
+const ACTIONS = { newTask, openConnectors, openAssistant, startFromHome, toggleSidebar, toggleTheme, applyUpdate: updateBtnClick, toggleSettings, openSettingsSection, settingsSection, setThemeCard, accChangePassword, accLogout, aboutCheckUpdate, toggleVoice,
   toggleTabOverflow, tabCtxClose, tabCtxCloseOthers, tabCtxCloseRight, tabCtxCloseAll, winMinimize, winToggleMaximize, winClose,
   closeSettings, scfgSecretLock: scfgToggleSecretLock, scfgQqLock: scfgToggleQqLock, scfgQqLogin, scfgSelect: scfgSelectChannel, scfgWechatLogin, imcfgSave,
   mcfgClose: closeModelConfig, mcfgKeyLock: mcfgToggleKeyLock, mcfgSave: saveModelConfig,
@@ -134,7 +117,7 @@ const ACTIONS = { newTask, openConnectors, openAssistant, startFromHome, toggleS
 document.addEventListener("click", e=>{
   const el = e.target.closest("[data-act]");
   // 菜单切换类动作自己管开/关，不提前关（否则 openModelMenu 刚开就被关掉）
-  const _menuToggle = ["openModelMenu","toggleMenu","toggleUserMenu","toggleTabOverflow"];
+  const _menuToggle = ["openModelMenu","toggleSettings","toggleTabOverflow"];
   if(!el || !_menuToggle.includes(el.dataset.act)){ closeMenu(); closeTabCtx(); }
   if(!el) return;
   const act = el.dataset.act;
@@ -155,7 +138,6 @@ document.addEventListener("click", e=>{
   } else if(act === "setModelChoice"){ setModelChoice(el);
   } else if(act === "setProviderChoice"){ setProviderChoice(el);
   } else if(act === "providerSelect"){ mcfgSelectProvider(el);
-  } else if(act === "openModelConfig"){ closeMenu(); openModelConfig();
   } else if(act === "toggleVoice"){
     toggleVoice(el);
   } else if(act === "showPanel"){
@@ -165,33 +147,24 @@ document.addEventListener("click", e=>{
     el.closest(".cats").querySelectorAll(".cat").forEach(b=>b.classList.remove("active"));
     el.classList.add("active");
   } else if(ACTIONS[act]){
-    ACTIONS[act]();
+    // 统一传 el：ACTIONS 里多数处理器不用参数（无害），分区跳转/主题卡/开关类需要 data-* 参数
+    ACTIONS[act](el);
   }
 });
 
-// 设置面板：平台下拉的 change 委托管不了（click-only）→ 显式监听；点遮罩空白处关闭（target
-// 必须是遮罩自身，避免点进表单误关）。同样绕开被拦的内联 on* 属性。
-// scfg-kind 是旧设置面板遗留元素（现已不在 HTML 中）——必须判空，否则此处 TypeError 会
+// 设置分区切换：scfg-kind 是旧设置面板遗留元素（现已不在 HTML 中）——必须判空，否则此处 TypeError 会
 // 中断 main.js 后续全部启动逻辑（主题恢复 / refreshUser / refreshTasks / SPA 回放兜底）。
 {
   const _scfgKind = document.getElementById("scfg-kind");
   if(_scfgKind) _scfgKind.addEventListener("change", scfgSwitchKind);
 }
-{
-  const _scfgOverlay = document.getElementById("settings-overlay");
-  _scfgOverlay.addEventListener("click", e => { if(e.target === _scfgOverlay) closeSettings(); });
-}
-// 模型面板：preset 下拉 / base-url 输入 / 温度滑杆的事件（内联 on* 被两壳 CSP 拦截，显式监听）；
-// 点遮罩空白处关闭（target 必须是遮罩自身，避免点进表单误关）。
+// 模型分区：preset 下拉 / base-url 输入 / 温度滑杆的事件（内联 on* 被两壳 CSP 拦截，显式监听）。
+// 遮罩关闭由设置中心统一接管（js/settings.js 的 #settings-overlay 遮罩点击/Esc）。
 document.getElementById("mcfg-preset").addEventListener("change", e => mcfgApplyPreset(e.target.value));
 document.getElementById("mcfg-base-url").addEventListener("input", mcfgRefreshCandidates);
 document.getElementById("mcfg-temp").addEventListener("input", e => {
   document.getElementById("mcfg-temp-val").textContent = parseFloat(e.target.value).toFixed(2);
 });
-{
-  const _mcfgOverlay = document.getElementById("mcfg-overlay");
-  _mcfgOverlay.addEventListener("click", e => { if(e.target === _mcfgOverlay) closeModelConfig(); });
-}
 // 修改密码框：三个输入框回车即提交（改密弹框不点遮罩关闭——强制提醒场景避免误关）。
 ["pwd-old","pwd-new","pwd-confirm"].forEach(id=>document.getElementById(id).addEventListener("keydown", e=>{
   if(e.key==="Enter") pwdSave();

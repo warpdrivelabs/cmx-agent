@@ -1,0 +1,106 @@
+  /* ═════ 设置中心（重构）：活动栏底部 logo 唯一入口 ═════
+     两栏：左导航（分组 + 六分区）/ 右详情（标题 + 分区内容）。
+     全部走 var(--*) 令牌，深浅双主题零硬编码。 */
+
+  /* 未登录红点（logo 右上角；refreshUser 维护显隐） */
+  .cmx-act{position:relative}
+  .cmx-act .logo-dot{position:absolute;top:3px;right:3px;width:9px;height:9px;border-radius:50%;
+    background:var(--red);border:2px solid var(--panel);box-sizing:content-box}
+
+  /* 设置中心壳：复用 mcfg-overlay 遮罩，盒子放大为两栏 */
+  .settings-box{background:var(--panel);border:1px solid var(--border2);border-radius:14px;
+    width:min(920px,94vw);height:min(640px,88vh);display:flex;overflow:hidden;
+    box-shadow:0 16px 48px rgba(0,0,0,.5)}
+  .settings-nav{width:200px;flex:0 0 200px;background:var(--panel2);border-right:1px solid var(--border);
+    padding:14px 10px;overflow-y:auto;display:flex;flex-direction:column;gap:2px}
+  .settings-group{font-size:11px;color:var(--muted);font-weight:700;letter-spacing:.4px;padding:12px 10px 5px}
+  .settings-group:first-child{padding-top:0}
+  .settings-item{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:8px;
+    font-size:13.5px;color:var(--ink2);text-align:left;width:100%;cursor:pointer;border:none;background:none}
+  .settings-item:hover{background:var(--hover);color:var(--ink)}
+  .settings-item.on{background:var(--accent-soft);color:var(--aqua);font-weight:600}
+  .settings-item .si-ico{width:18px;text-align:center;font-size:15px}
+  .settings-main{flex:1;display:flex;flex-direction:column;min-width:0}
+  .settings-head{display:flex;align-items:flex-start;gap:12px;padding:18px 24px 12px;border-bottom:1px solid var(--border)}
+  .settings-head h2{font-size:17px;margin:0;font-weight:700}
+  .settings-head p{font-size:12px;color:var(--muted);margin:3px 0 0}
+  .settings-close{margin-left:auto;width:28px;height:28px;border-radius:7px;color:var(--muted);
+    font-size:13px;cursor:pointer;border:none;background:none;flex:0 0 auto}
+  .settings-close:hover{background:var(--hover);color:var(--ink)}
+  .settings-body{flex:1;overflow-y:auto;padding:18px 24px 22px}
+
+  .settings-sec{display:none}
+  .settings-sec.on{display:block}
+  /* 模型/IM 分区平移自 mcfg-box.mcfg-wide：此处 mcfg-body 脱离 flex 容器需自带高度 */
+  .settings-sec .mcfg-body{min-height:340px}
+  .settings-sec .mcfg-actions{margin-top:14px}
+
+  /* ── 账户分区 ── */
+  .acc-card{display:flex;align-items:center;gap:16px;background:var(--surface);border:1px solid var(--border);
+    border-radius:12px;padding:18px}
+  .acc-av{width:56px;height:56px;border-radius:50%;flex:0 0 56px;background:linear-gradient(135deg,var(--aqua),var(--green));
+    display:flex;align-items:center;justify-content:center;font-size:26px}
+  .acc-info{min-width:0;flex:1}
+  .acc-name-row{display:flex;align-items:center;gap:10px;min-width:0}
+  .acc-name{font-size:16px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .acc-badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:2px 10px;border-radius:99px;
+    border:1px solid var(--border2);color:var(--muted);flex:0 0 auto}
+  .acc-badge i{width:6px;height:6px;border-radius:50%;background:var(--muted)}
+  .acc-badge.on{color:var(--green);border-color:var(--green)}
+  .acc-badge.on i{background:var(--green)}
+  .acc-uid{font-size:12.5px;color:var(--muted);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #acc-pwd-btn{flex:0 0 auto}
+  .acc-rows{margin-top:14px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:2px 18px}
+  .acc-row{display:flex;align-items:center;gap:14px;padding:12px 0}
+  .acc-k{flex:0 0 72px;font-size:12.5px;color:var(--muted)}
+  .acc-v{font-size:13px;color:var(--ink);min-width:0;word-break:break-all}
+  /* 危险动作独占底部：通栏整行退出登录 */
+  .acc-logout{width:100%;justify-content:center;margin-top:24px;padding:11px 16px}
+  .acc-actions{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap}
+
+  .settings-btn{border:1px solid var(--border2);border-radius:8px;padding:8px 16px;font-size:13px;
+    color:var(--ink);background:var(--surface);cursor:pointer;display:inline-flex;align-items:center;gap:7px}
+  .settings-btn:hover{border-color:var(--aqua);color:var(--aqua)}
+  .settings-danger{color:var(--red);border-color:var(--red)}
+  .settings-danger:hover{background:var(--red);border-color:var(--red);color:#fff}
+  .settings-hint{font-size:12px;color:var(--muted);line-height:1.7;margin-top:10px}
+
+  /* ── 外观分区：主题卡 ── */
+  .theme-cards{display:flex;gap:14px}
+  .theme-card{flex:1;max-width:220px;border:2px solid var(--border);border-radius:12px;overflow:hidden;
+    cursor:pointer;background:var(--panel2);padding:0;text-align:left}
+  .theme-card.on{border-color:var(--aqua)}
+  .theme-prev{display:flex;align-items:flex-end;gap:5px;height:70px;padding:9px}
+  .theme-prev i{border-radius:3px;display:block}
+  .theme-prev-dark{background:#141414}
+  .theme-prev-dark .tp-side{width:22px;height:48px;background:#1e1e1d}
+  .theme-prev-dark .tp-main{flex:1;height:48px;background:#1a1a19}
+  .theme-prev-dark .tp-dot{width:26px;height:9px;background:#1fb182;border-radius:999px}
+  .theme-prev-light{background:#f4f4f2}
+  .theme-prev-light .tp-side{width:22px;height:48px;background:#ffffff;border:1px solid #e4e3dc}
+  .theme-prev-light .tp-main{flex:1;height:48px;background:#ffffff;border:1px solid #e4e3dc}
+  .theme-prev-light .tp-dot{width:26px;height:9px;background:#1baf7a;border-radius:999px}
+  .theme-cap{display:flex;align-items:center;padding:9px 12px;font-size:13px;color:var(--ink)}
+  .theme-ck{margin-left:auto;color:var(--aqua);opacity:0;font-weight:700}
+  .theme-card.on .theme-ck{opacity:1}
+
+  /* ── 通用分区：设置行 ── */
+  .set-line{display:flex;align-items:center;gap:14px;padding:14px 0;border-bottom:1px solid var(--border)}
+  .set-line:last-child{border-bottom:none}
+  .set-info{flex:1;min-width:0}
+  .set-info b{font-size:13.5px;font-weight:600;display:block}
+  .set-info span{font-size:12px;color:var(--muted);display:block;margin-top:3px}
+  .settings-switch{width:38px;height:22px;border-radius:999px;background:var(--border2);position:relative;
+    transition:background .15s;flex:0 0 auto;cursor:pointer;border:none;padding:0}
+  .settings-switch::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;
+    background:#fff;transition:left .15s}
+  .settings-switch.on{background:var(--aqua)}
+  .settings-switch.on::after{left:18px}
+
+  /* ── 关于分区 ── */
+  .about-page{display:flex;flex-direction:column;align-items:center;padding:28px 0 10px;gap:5px;text-align:center}
+  .about-logo{width:60px;height:60px;border-radius:16px;object-fit:cover;margin-bottom:6px}
+  .about-page h2{font-size:19px;margin:0}
+  .about-slogan{font-size:12.5px;color:var(--muted);margin:0}
+  .about-ver{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;margin:0}
+  .about-desc{font-size:12px;color:var(--muted);line-height:1.7;max-width:420px;margin:8px 0 0}

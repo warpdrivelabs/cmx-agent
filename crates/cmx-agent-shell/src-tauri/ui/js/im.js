@@ -10,10 +10,12 @@ const SCFG_CHANNELS=[
   {id:"qq",       name:"QQ 机器人", block:"scfg-qq-block",       credKey:"qq_secret_masked",      credEl:"scfg-qq-app-id"},
   {id:"wechat",   name:"微信",      block:"scfg-wechat-block",   credKey:"wechat_token_masked",   credEl:"scfg-wx-bot-id"},
 ];
-async function menuSettings(){
-  closeMenu();
+// 设置中心「IM 遥控」分区装配（原 menuSettings）：读 im_config 回显；Web 壳提示落「账户」分区。
+// DOM 已平移进设置中心（scfg-* id 全保留），保存/扫码逻辑不变。
+async function scfgOpen(){
   if(!(window.__TAURI__ && window.__TAURI__.core)){
-    infoDialog("IM 遥控", "当前仅在桌面版（Tauri 壳）可配置：Web 壳未装配 IM 桥。\n\n其余设置项（主题/工作空间等）为 M3 占位。");
+    showSettingsSection("account");
+    infoDialog("IM 遥控", "当前仅在桌面版（Tauri 壳）可配置：Web 壳未装配 IM 桥。");
     return;
   }  scfgResetLocks();
   let r=null;
@@ -46,7 +48,6 @@ async function menuSettings(){
   _scfgSel = active[0] || "feishu";
   scfgRenderList();
   scfgSwitchKind();
-  document.getElementById("settings-overlay").classList.remove("hidden");
 }
 // 左列渲染：通道名 + 启用勾选 + 凭证状态（已配/未配）。复用模型面板 mcfg-list 样式。
 function scfgRenderList(){
@@ -238,7 +239,7 @@ async function imcfgSave(){
   else { showToast("保存失败："+((r&&r.error&&r.error.message)||"未知")); }
 }
 
-function menuAbout(){ closeMenu(); infoDialog("关于 TrueMate", "版本 " + APP_VERSION + "\n\n同核多壳架构\n形(前门) / 核(回合循环+守卫) / 体(cmx 引擎连接器)"); }
+// menuAbout 已移入 js/settings.js（关于分区）。
 
 // ── 修改密码（门户 /api/auth/change-password）：用户菜单入口 + 登录后 must_change_password 强制弹框 ──
 // 门户改密成功即吊销该用户全部 token（后端 change_password 已同步本地登出）→ 前端引导重新登录。

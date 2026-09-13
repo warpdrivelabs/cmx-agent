@@ -30,7 +30,7 @@ async function openModelMenu(el){
     return html;
   }).join("");
   menu.innerHTML=parts
-    +`<div class="mi mm-item" style="margin-top:4px;border-top:1px solid var(--border);padding-top:6px" data-act="openModelConfig">⚙ 配置模型…</div>`;
+    +`<div class="mi mm-item" style="margin-top:4px;border-top:1px solid var(--border);padding-top:6px" data-act="openSettingsSection" data-section="models">⚙ 管理模型…</div>`;
   // 锚到按钮上方
   const rect=el.getBoundingClientRect();
   menu.style.left=Math.max(8,rect.left)+"px";
@@ -75,8 +75,7 @@ function mcfgLockKey(){
   keyInput.readOnly = true; keyInput.type = "password";
   lockBtn.textContent = "🔒";
 }
-async function openModelConfig(){
-  closeMenu();
+async function mcfgOpen(){
   mcfgLockKey();
   const r = await call({cmd:"list_providers"});
   if(!r||!r.ok){ showToast("读取配置失败"); return; }
@@ -86,11 +85,9 @@ async function openModelConfig(){
   _mcfgIsNew = false;
   mcfgRenderList();
   await mcfgFillDetail(_mcfgSelId);
-  document.getElementById("mcfg-overlay").classList.remove("hidden");
 }
-function closeModelConfig(){
-  document.getElementById("mcfg-overlay").classList.add("hidden");
-}
+// 关闭模型分区 = 关设置中心（由 js/settings.js 的 closeSettings 统一管遮罩；此处保留别名防旧调用）。
+function closeModelConfig(){ closeSettings(); }
 // 左列渲染：provider 名 + （激活圆点 / 内置徽标）+ 当前模型副行；底部「＋ 新增」。
 function mcfgRenderList(){
   const list=document.getElementById("mcfg-list");
