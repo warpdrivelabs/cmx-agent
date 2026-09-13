@@ -572,91 +572,122 @@ async fn login(
     }
 }
 
-/// 显示前把默认窗口尺寸收敛进所在屏的**真实工作区**（任务栏之外），并在工作区内居中。
+/// 显示前把默认窗口尺寸收敛进所在屏的**真实工作区**（任务栏/菜单栏/Dock 之外），并在
+/// 工作区内居中——三端统一（Windows rcWork / Linux GDK workarea / macOS visibleFrame）。
 ///
-/// 为何不用「显示器尺寸扣固定余量」：任务栏物理高度随缩放走（48 逻辑 × 200%=96 物理），
-/// 估算余量偏小 + `center()` 对整屏居中，两端各摊一半误差后底部仍压任务栏。Windows 直接
-/// `GetMonitorInfoW` 取 rcWork——任务栏位置 / 高度 / 自动隐藏 / 副屏差异全部精确；
-/// 其余平台无此 API，退回估计值 + `center()`。
-#[cfg(windows)]
+/// 背景：conf 1440×900 是逻辑像素，高分屏扣掉系统面板后可视区放不下，居中摆会被底部
+/// 面板遮一截（200% 缩放屏上整条压任务栏下）。必须赶在 show 前做完，用户无感。
+/// 为何不用「显示器尺寸扣固定余量」：面板物理高度随缩放走（48 逻辑 × 200%=96 物理），
+/// 估算必偏；`center()` 又是对整屏居中，误差两端摊、底部仍被遮。
 fn fit_default_window(win: &tauri::WebviewWindow) {
+    match work_area_logical(win) {
+        Some(wa) => fit_into_work_area(win, wa),
+        // 取不到工作区（罕见/平台兜底）：维持 conf 原样，宁缺勿错。
+        None => eprintln!("[win-fit] no work-area available, keep conf size"),
+    }
+}
+
+/// 共享收敛：把窗口**外框**钳进 wa（逻辑矩形 x,y,w,h）并在其中居中。
+///
+/// 关键语义：tauri 的 `set_size` 设的是**内框**（客户区）。无装饰但可缩放的窗口在平台层
+/// 保留边框热区（Windows WS_THICKFRAME 不可见边框实测 +26×+72 物理 @200%），直接设工作
+/// 区逻辑尺寸，外框会再大出一圈、底部仍压面板。须按 outer−inner 差值反推内框目标，让
+/// **外框**恰好铺满工作区（多余边框是透明热区，超出屏幕无感知）；floor 舍入恒朝「更小」，
+/// 任何 DPI 下都不会再溢出工作区半像素。定位不能用 `center()`（对整屏居中，会把窗口重新
+/// 推回面板下），按工作区手动定位。
+fn fit_into_work_area(win: &tauri::WebviewWindow, wa: (f64, f64, f64, f64)) {
+    let Ok(cur_phys) = win.outer_size() else { return };
+    let Ok(sf) = win.scale_factor() else { return };
+    let cur = cur_phys.to_logical::<f64>(sf);
+    let w = cur.width.min(wa.2);
+    let h = cur.height.min(wa.3);
+    let changed = h < cur.height - 0.5 || w < cur.width - 0.5;
+    let inner = win.inner_size().unwrap_or(cur_phys);
+    let dw = f64::from(cur_phys.width.saturating_sub(inner.width));
+    let dh = f64::from(cur_phys.height.saturating_sub(inner.height));
+    let iw = ((w * sf - dw) / sf).floor();
+    let ih = ((h * sf - dh) / sf).floor();
+    eprintln!(
+        "[win-fit] wa={wa:?} cur={cur:?} -> outer=({w},{h}) inner=({iw},{ih}) delta=({dw},{dh}) changed={changed}"
+    );
+    if changed {
+        let _ = win.set_size(tauri::LogicalSize::new(iw, ih));
+        let x = wa.0 + (wa.2 - w) / 2.0;
+        let y = wa.1 + (wa.3 - h) / 2.0;
+        let _ = win.set_position(tauri::LogicalPosition::new(x.round(), y.round()));
+    }
+}
+
+/// Windows：`GetMonitorInfoW` 的 rcWork——任务栏位置/高度/自动隐藏/副屏差异全部精确。
+/// rcWork 是虚拟屏**物理**坐标，除以缩放系数折回逻辑值。
+#[cfg(windows)]
+fn work_area_logical(win: &tauri::WebviewWindow) -> Option<(f64, f64, f64, f64)> {
     use windows_sys::Win32::Graphics::Gdi::{
         GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
     };
-    let Ok(raw) = win.hwnd() else { return };
-    let hwnd = raw.0 as windows_sys::Win32::Foundation::HWND;
-    eprintln!("[win-fit] hwnd={hwnd:?} outer={:?} sf={:?}", win.outer_size(), win.scale_factor());
+    let hwnd = win.hwnd().ok()?.0 as windows_sys::Win32::Foundation::HWND;
     unsafe {
         let hmon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
         if hmon.is_null() {
-            eprintln!("[win-fit] MonitorFromWindow=null");
-            return;
+            return None;
         }
         let mut mi: MONITORINFO = std::mem::zeroed();
         mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
         if GetMonitorInfoW(hmon, &mut mi) == 0 {
-            eprintln!("[win-fit] GetMonitorInfoW=0");
-            return;
+            return None;
         }
-        let Ok(cur_phys) = win.outer_size() else { return };
-        let Ok(sf) = win.scale_factor() else { return };
-        // rcWork 是虚拟屏**物理**坐标；Tauri 定位/尺寸用逻辑值 = 物理 ÷ 缩放系数。
-        let wa = (
+        let sf = win.scale_factor().ok()?;
+        Some((
             mi.rcWork.left as f64 / sf,
             mi.rcWork.top as f64 / sf,
             (mi.rcWork.right - mi.rcWork.left) as f64 / sf,
             (mi.rcWork.bottom - mi.rcWork.top) as f64 / sf,
-        );
-        let cur = cur_phys.to_logical::<f64>(sf);
-        let w = cur.width.min(wa.2);
-        let h = cur.height.min(wa.3);
-        let changed = h < cur.height - 0.5 || w < cur.width - 0.5;
-        // 关键：tauri 的 set_size 语义是**内框**（客户区）。本窗无装饰但保留 WS_THICKFRAME
-        // 可缩放热区，外框 = 内框 + 不可见 NC 边框（本机实测 +26×+72 物理）——直接设工作区
-        // 逻辑尺寸，外框会再大出一圈、底部仍压任务栏。须按 outer−inner 差值反推内框目标，
-        // 让**外框**恰好铺满工作区（多余边框是透明热区，超出屏幕无感知）。
-        let inner = win.inner_size().unwrap_or(cur_phys);
-        let dw = f64::from(cur_phys.width.saturating_sub(inner.width));
-        let dh = f64::from(cur_phys.height.saturating_sub(inner.height));
-        // floor 不 round：舍入方向恒朝「更小」，任何 DPI 下都不会再溢出工作区半像素。
-        let iw = ((w * sf - dw) / sf).floor();
-        let ih = ((h * sf - dh) / sf).floor();
-        eprintln!(
-            "[win-fit] wa={wa:?} cur={cur:?} -> outer=({w},{h}) inner=({iw},{ih}) delta=({dw},{dh}) changed={changed}"
-        );
-        if changed {
-            let _ = win.set_size(tauri::LogicalSize::new(iw, ih));
-            // 不能用 center()：那是对**整屏**居中，会把窗口重新推回任务栏下。按工作区定位。
-            let x = wa.0 + (wa.2 - w) / 2.0;
-            let y = wa.1 + (wa.3 - h) / 2.0;
-            let _ = win.set_position(tauri::LogicalPosition::new(x.round(), y.round()));
-        }
+        ))
     }
 }
 
-/// 非 Windows：无工作区 API，按显示器物理尺寸扣固定余量估计（56≈任务栏、16≈左右边距）。
-#[cfg(not(windows))]
-fn fit_default_window(win: &tauri::WebviewWindow) {
-    let mon = win
-        .current_monitor()
-        .ok()
-        .flatten()
-        .or_else(|| win.primary_monitor().ok().flatten());
-    if let (Some(mon), Ok(cur)) = (mon, win.outer_size()) {
-        let sf = mon.scale_factor();
-        let avail = tauri::PhysicalSize::new(
-            mon.size().width.saturating_sub(16),
-            mon.size().height.saturating_sub(56),
-        )
-        .to_logical::<f64>(sf);
-        let cur = cur.to_logical::<f64>(sf);
-        let w = avail.width.max(640.0).min(cur.width);
-        let h = avail.height.max(480.0).min(cur.height);
-        if h < cur.height - 0.5 || w < cur.width - 0.5 {
-            let _ = win.set_size(tauri::LogicalSize::new(w.round(), h.round()));
-            let _ = win.center();
-        }
+/// Linux：GDK `Monitor::workarea()`（自动扣除 GNOME 顶栏/底栏、Dock 等面板）。GDK 坐标
+/// 本就是逻辑像素，无需缩放换算。窗口隐藏未 realize 时可能拿不到所属屏，回退主屏。
+/// **Wayland 注意**：合成器限制程序自定窗口位置（set_position 可能被忽略），但尺寸收敛
+/// 仍生效——遮挡问题照样解决，摆位交给桌面（通常居中，正合适）。
+#[cfg(target_os = "linux")]
+fn work_area_logical(win: &tauri::WebviewWindow) -> Option<(f64, f64, f64, f64)> {
+    use gtk::prelude::*;
+    let gtk_win = win.gtk_window().ok()?;
+    let display = gtk_win.display();
+    let monitor = gtk_win
+        .window()
+        .and_then(|w| display.monitor_at_window(&w))
+        .or_else(|| display.primary_monitor())?;
+    let wa = monitor.workarea();
+    Some((
+        wa.x() as f64,
+        wa.y() as f64,
+        wa.width() as f64,
+        wa.height() as f64,
+    ))
+}
+
+/// macOS：`NSScreen.visibleFrame`（自动扣除菜单栏 + Dock，单位就是逻辑点）。
+/// AppKit 坐标系原点在**左下**、y 向上；Tauri 定位用左上原点，须把 workarea 顶边换算成
+/// 「屏高 − (y + 高)」。窗口尚未上屏时 `screen()` 为空，回退主屏。
+#[cfg(target_os = "macos")]
+fn work_area_logical(win: &tauri::WebviewWindow) -> Option<(f64, f64, f64, f64)> {
+    use objc2_app_kit::{NSWindow, NSScreen};
+    let ns_win: *mut NSWindow = win.ns_window().ok()?.cast();
+    // SAFETY：ns_window 由 Tauri 在主线程创建，setup 同在主线程；此处仅读取屏幕矩形。
+    unsafe {
+        let screen = (*ns_win).screen().or_else(|| NSScreen::mainScreen())?;
+        let vf = screen.visibleFrame();
+        let top_y = screen.frame().size.height - (vf.origin.y + vf.size.height);
+        Some((vf.origin.x, top_y, vf.size.width, vf.size.height))
     }
+}
+
+/// 其余平台（Tauri 实际不支持，仅为可编译性兜底）：无工作区信息，跳过收敛。
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+fn work_area_logical(_: &tauri::WebviewWindow) -> Option<(f64, f64, f64, f64)> {
+    None
 }
 
 fn build_app() -> AgentApp {

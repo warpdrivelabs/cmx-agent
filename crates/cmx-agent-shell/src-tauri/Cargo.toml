@@ -38,9 +38,16 @@ tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# 窗口默认尺寸收敛进真实工作区：GetMonitorInfoW 取 rcWork（任务栏/缩放精确），仅 Windows。
+# 窗口默认尺寸收敛进真实工作区（三端统一 fit_default_window）：取工作区的依赖仅本平台
+# 编译，互相零影响——Windows GetMonitorInfoW rcWork / Linux GDK workarea / macOS
+# NSScreen.visibleFrame。gtk 0.18 与 tauri 依赖树同版本（锁内 0.18.2 复用，零新增构建
+# 产物；deb depends 已含 libgtk-3-0）；objc2-app-kit 仅 mac 构建时编译。
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Gdi"] }
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSScreen"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
