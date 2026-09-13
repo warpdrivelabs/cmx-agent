@@ -28,6 +28,9 @@ pub enum AppRequest {
     },
     /// 列出所有会话。
     ListSessions,
+    /// 打开「助理」：确保 IM 统一会话存在（default 空间、固定标题）后返回其 id。
+    /// 桌面侧栏「助理」入口点击时先调本命令再进会话（双壳共用，见侧栏 nav）。
+    OpenAssistantSession,
     /// 列出工作空间与当前选择；前端输入区工作空间悬浮菜单用。
     ListWorkspaces,
     /// 新建托管工作空间（数据目录 `<data>/workspaces/<id>`）。
@@ -245,6 +248,10 @@ async fn dispatch_inner(app: &AgentApp, req: AppRequest) -> Result<AppResponse, 
         AppRequest::ListSessions => {
             let sessions: Vec<SessionMeta> = app.list_sessions()?;
             Ok(AppResponse::ok(serde_json::json!({ "sessions": sessions })))
+        }
+        AppRequest::OpenAssistantSession => {
+            let id = app.open_assistant_session()?;
+            Ok(AppResponse::ok(serde_json::json!({ "session_id": id })))
         }
         AppRequest::ListWorkspaces => Ok(AppResponse::ok(app.list_workspaces()?)),
         AppRequest::CreateWorkspace { name } => Ok(AppResponse::ok(app.create_workspace(&name)?)),

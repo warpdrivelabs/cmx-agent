@@ -410,6 +410,7 @@ function finalizeWorkDur(log){
 // 用户消息=小气泡条；回合计时行「已工作 X」可折叠思考/工具等执行细节。
 function renderEvent(log, ev, sid){
   const k=ev.kind;
+  if(log._emptyCard){ log._emptyCard.remove(); log._emptyCard=null; }   // 首条事件：撤空会话占位卡
   if(ev.ts) log._lastTs = (typeof ev.ts==="string" ? Date.parse(ev.ts) : ev.ts) || log._lastTs;
   if(k==="turn_started"){
     stopWorkDurTick(log); log._durRow=null;             // 新回合：上一回合的实时计时行已定格，清引用

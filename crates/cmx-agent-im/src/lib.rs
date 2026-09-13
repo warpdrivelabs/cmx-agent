@@ -98,7 +98,7 @@ enum SenderResolution {
 pub struct ImBridge {
     app: Arc<AgentApp>,
     provider: Arc<dyn ImProvider>,
-    /// provider 类型标签，用于会话命名前缀 `im-<kind>-<chat>`（多 provider 不撞名）。
+    /// provider 类型标签，用于消息来源前缀（【飞书】/【QQ】/【微信】）与日志。
     kind: String,
     /// None=开放（仅测试/内网）；Some=chat_id 白名单。
     allow: Option<HashSet<String>>,
@@ -112,14 +112,13 @@ pub struct ImBridge {
     /// open_id → (身份, 缓存时刻) 正缓存（TTL 见 `BINDING_TTL`；解绑后最多 TTL 内失效）。
     binding_cache: Mutex<HashMap<String, (BoundIdentity, Instant)>>,
     offset: AtomicI64,
-    sessions: Mutex<HashMap<String, String>>,
 }
 
 /// 绑定身份缓存 TTL：平衡「每条消息都查门户」的开销与解绑生效延迟。
 const BINDING_TTL: Duration = Duration::from_secs(60);
 
 impl ImBridge {
-    /// `kind` = provider 标签（如 `"feishu"`/`"telegram"`），用于会话命名前缀。
+    /// `kind` = provider 标签（如 `"feishu"`/`"qq"`/`"wechat"`），用于消息来源前缀。
     pub fn new(
         app: Arc<AgentApp>,
         provider: Arc<dyn ImProvider>,
@@ -135,7 +134,6 @@ impl ImBridge {
             personal: false,
             binding_cache: Mutex::new(HashMap::new()),
             offset: AtomicI64::new(0),
-            sessions: Mutex::new(HashMap::new()),
         }
     }
 
@@ -215,20 +213,13 @@ impl ImBridge {
         }
     }
 
-    /// 每个 IM 会话 → 一个稳定 agent 会话 id（`im-<kind>-<净化chat_id>`），跨消息续上下文。
-    /// kind 前缀让多 provider（飞书/微信/钉钉）的会话互不撞名。
-    fn session_for(&self, chat: &str) -> String {
-        let clean: String = chat
-            .chars()
-            .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
-            .collect();
-        let sid = format!("im-{}-{clean}", self.kind);
-        self.sessions
-            .lock()
-            .expect("sessions lock")
-            .entry(chat.to_string())
-            .or_insert(sid)
-            .clone()
+    /// 消息来源前缀：三通道消息落同一「助理」会话，转写里靠它分辨来自哪条通道。
+    fn channel_label(&self) -> &'static str {
+        match self.kind.as_str() {
+            "wechat" => "微信",
+            "qq" => "QQ",
+            _ => "飞书",
+        }
     }
 
     /// 处理一轮：拉取 → 逐条（鉴权 → 跑回合 → 分段回复）。返回处理条数。
@@ -309,19 +300,26 @@ impl ImBridge {
                 None => None,
                 }
             };
-            let sid = self.session_for(&m.chat_id);
-            let _ = self.app.create_session(&sid);
+            // 统一「助理」会话：三通道所有消息落同一会话，空间恒 default（桌面切空间不影响），
+            // 标题固定。get-or-create：会话被删后下条消息自愈重建。
+            let sid = cmx_agent_app::ASSISTANT_SESSION_ID;
+            let _ = self.app.ensure_session(
+                sid,
+                Some("default".to_string()),
+                Some(cmx_agent_app::ASSISTANT_SESSION_TITLE.to_string()),
+            );
+            let text = format!("【{}】{}", self.channel_label(), m.text);
             let reply = match identity {
                 // 已绑定：以绑定用户身份跑回合（守卫/数据权限按此人判定，与桌面登录身份互不干扰）。
                 Some(id) => {
                     let mut subj = cmx_agent_core::Subject::new(&id.user_id);
                     subj.roles = id.roles.clone();
-                    match self.app.send_as(&sid, &m.text, &subj).await {
+                    match self.app.send_as(sid, &text, &subj).await {
                         Ok(o) => o.final_text.unwrap_or_else(|| "（本回合无文字回复）".into()),
                         Err(e) => format!("⚠ 处理出错：{e}"),
                     }
                 }
-                None => match self.app.send(&sid, &m.text).await {
+                None => match self.app.send(sid, &text).await {
                     Ok(o) => o.final_text.unwrap_or_else(|| "（本回合无文字回复）".into()),
                     Err(e) => format!("⚠ 处理出错：{e}"),
                 },

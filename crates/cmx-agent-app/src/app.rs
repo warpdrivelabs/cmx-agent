@@ -14,6 +14,12 @@ use cmx_agent_core::{Agent, Approver, Session, TurnCancel};
 use crate::error::{AppError, AppResult};
 use crate::store::{SessionMeta, SessionStore};
 
+/// IM 遥控统一会话 id：飞书/QQ/微信三通道所有消息落这同一会话（cmx-agent-im 引用同值，
+/// 前端 session.js 以 `^im-` 前缀过滤并作「助理」入口目标）。
+pub const ASSISTANT_SESSION_ID: &str = "im-assistant";
+/// 统一会话的固定展示标题（创建时写入，此后由 meta 保留机制维持）。
+pub const ASSISTANT_SESSION_TITLE: &str = "IM 助理";
+
 /// 一个回合的对外结果（含新产生的事件条数，便于前门增量渲染）。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SendOutcome {
@@ -1028,10 +1034,16 @@ impl AgentApp {
     }
 
     /// 新建会话并落元数据。返回其 id。
+    ///
+    /// get-or-create 语义：id 已存在时**原样返回、不覆盖 meta**。IM 桥每条消息都会调本方法，
+    /// 若无条件覆盖，会把会话的空间/标题按"最后一条消息那一刻"反复重写。
     pub fn create_session(&self, id: impl Into<String>) -> AppResult<String> {
         let id = id.into();
         if id.is_empty() {
             return Err(AppError::BadRequest("empty session id".into()));
+        }
+        if self.store.list()?.iter().any(|m| m.id == id) {
+            return Ok(id);
         }
         let now = chrono::Utc::now();
         let meta = SessionMeta {
@@ -1045,6 +1057,45 @@ impl AgentApp {
         };
         self.store.put_meta(&meta)?;
         Ok(id)
+    }
+
+    /// get-or-create，且**仅在新建时**采用给定工作空间与标题；已存在则完全不动 meta。
+    /// IM 桥用它建统一助理会话：空间恒 default、标题恒「IM 助理」，桌面怎么切空间都影响不到。
+    pub fn ensure_session(
+        &self,
+        id: impl Into<String>,
+        workspace_id: Option<String>,
+        title: Option<String>,
+    ) -> AppResult<String> {
+        let id = id.into();
+        if id.is_empty() {
+            return Err(AppError::BadRequest("empty session id".into()));
+        }
+        if self.store.list()?.iter().any(|m| m.id == id) {
+            return Ok(id);
+        }
+        let now = chrono::Utc::now();
+        let meta = SessionMeta {
+            id: id.clone(),
+            title,
+            system: self.default_system.clone(),
+            created_at: now,
+            updated_at: now,
+            event_count: 0,
+            workspace_id,
+        };
+        self.store.put_meta(&meta)?;
+        Ok(id)
+    }
+
+    /// 桌面「助理」入口：确保 IM 统一会话存在（default 空间、固定标题）后返回其 id。
+    /// 走本方法而非直接 send，保证从桌面首次进入（会话尚不存在）时空间/标题就正确。
+    pub fn open_assistant_session(&self) -> AppResult<String> {
+        self.ensure_session(
+            ASSISTANT_SESSION_ID,
+            Some("default".to_string()),
+            Some(ASSISTANT_SESSION_TITLE.to_string()),
+        )
     }
 
     /// 向某会话发一条用户消息，跑一个回合，**增量落库**新事件，返回结果。

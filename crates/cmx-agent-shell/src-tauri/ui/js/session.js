@@ -6,29 +6,51 @@ const TL_FOLD_KEY="truemate.tl-fold";
 function tlFolded(){ try{ return JSON.parse(localStorage.getItem(TL_FOLD_KEY)||"{}"); }catch(e){ return {}; } }
 function tlSetFold(id,folded){ const s=tlFolded(); if(folded) s[id]=1; else delete s[id]; try{ localStorage.setItem(TL_FOLD_KEY,JSON.stringify(s)); }catch(e){} }
 
+// ── 「助理」入口：IM 遥控统一会话（飞书/QQ/微信三通道共用，default 空间，桌面可直接对话）──
+const ASSISTANT_SID="im-assistant"; // 与后端 cmx_agent_app::ASSISTANT_SESSION_ID 同值
+async function openAssistant(){
+  try{
+    const r=await call({cmd:"open_assistant_session"}); // 先 ensure（不存在则按 default 空间+固定标题创建）
+    if(r.ok){ await openSession(r.data.session_id); return; }
+    showToast("打开助理会话失败："+(r.error?.message||"未知错误"));
+  }catch(e){ showToast("打开助理会话失败："+(e&&e.message||e)); }
+}
+function updateAssistantNav(){
+  const nav=document.getElementById("nav-assistant");
+  if(nav) nav.classList.toggle("active", CURRENT===ASSISTANT_SID);
+}
+
 async function refreshTasks(){
   const resp = await call({cmd:"list_sessions"});
-  const list = (resp.ok && resp.data.sessions) || [];
+  // IM 会话（统一助理会话 im-assistant + 历史散会话 im-<kind>-*）走「助理」入口，不进空间/任务分组；
+  // 过滤须在空态判断之前（只剩 IM 会话时按"无任务"处理）。
+  const list = ((resp.ok && resp.data.sessions) || []).filter(m=>!/^im-/.test(m.id));
   const box = document.getElementById("tasklist"); box.innerHTML="";
-  if(list.length===0){ box.append(el("empty-tasks","还没有任务。<br>点上方「新建任务」或在首页直接下达指令。")); return; }
 
   let wsState={current:null,workspaces:[]};
   try{ const r=await call({cmd:"list_workspaces"}); if(r.ok) wsState=r.data; }catch(e){}
   const wsById={}; (wsState.workspaces||[]).forEach(w=>{ wsById[w.id]=w; });
 
   const groups=[], byKey={};
+  // 每个空间恒渲染一个组（无会话也保留组头）：空间可发现、与「任务」平级互不消失。
+  (wsState.workspaces||[]).forEach(w=>{
+    if(w.id==="default") return;   // default 托管空间即任务模式，不进空间组（与输入区菜单同约定）
+    byKey[w.id]={ws:w,key:w.id,sessions:[]}; groups.push(byKey[w.id]);
+  });
   list.forEach(m=>{
     const ws=(m.workspace_id && m.workspace_id!=="default" && wsById[m.workspace_id])?wsById[m.workspace_id]:null;
     const key=ws?ws.id:"__tasks__";
     if(!byKey[key]){ byKey[key]={ws,key,sessions:[]}; groups.push(byKey[key]); }
     byKey[key].sessions.push(m);
   });
-  // 空间组按组内最近会话时间排前；任务组恒垫底。组内行也按最近在前。
+  // 空间组按组内最近会话时间排前（空组沉底）；任务组恒垫底恒渲染。组内行也按最近在前。
   const wsGroups=groups.filter(g=>g.ws).sort((a,b)=>
     Math.max(...b.sessions.map(s=>new Date(s.updated_at)))-Math.max(...a.sessions.map(s=>new Date(s.updated_at))));
   const taskGroup=byKey["__tasks__"]||{ws:null,key:"__tasks__",sessions:[]};
+  taskGroup.emptyHint = list.length
+    ? "不使用工作空间的任务会出现在这里。"
+    : "还没有任务。<br>点上方「新建任务」或在首页直接下达指令。";
   wsGroups.concat([taskGroup]).forEach(g=>{
-    if(!g.sessions.length) return;
     g.sessions.sort((a,b)=>new Date(b.updated_at)-new Date(a.updated_at));
     box.append(renderTaskGroup(g));
   });
@@ -52,6 +74,8 @@ function renderTaskGroup(g){
       if(findTab("s:"+m.id)) closeTab("s:"+m.id); refreshTasks(); };
     items.append(t);
   });
+  // 空组可选提示（现仅空态「任务」组用）：跟随组头折叠、缩进在组内，不悬在「空间」区标签下。
+  if(!g.sessions.length && g.emptyHint) items.append(el("empty-tasks",g.emptyHint));
   head.addEventListener("click", (e)=>{
     if(e.target.closest(".tl-more")) return;
     const nowFolded=!wrap.classList.contains("folded");
@@ -271,6 +295,20 @@ function makeLoadMore(log, sid, start, total){
   stopWorkDurTick(log); log._durRow=null; log._durTick=null; log._turnStartTs=null;  // 实时计时行一并清（防旧 interval 改新 DOM）
   log._closed=false;
   log.append(frag);
+  // 空会话占位卡（助理=专属引导，其它=通用提示）：首条事件经 renderEvent 到达即移除。
+  if(!start && !events.length && !total){ const c=renderLogEmpty(sid); log._emptyCard=c; log.append(c); }
+}
+
+// 空会话占位卡。助手会话讲清三通道汇聚/共享上下文/固定 default 空间；普通新会话给一句上手提示。
+function renderLogEmpty(sid){
+  return sid===ASSISTANT_SID
+    ? el("log-empty",`<div class="le-ico">🤖</div><div class="le-title">IM 助理</div>`
+      +`<div class="le-sub">飞书 / QQ / 微信三个机器人的消息都汇聚在这一个会话，消息前带【飞书】/【QQ】/【微信】来源。</div>`
+      +`<ul class="le-list"><li>在 IM 里给机器人发消息，对话会实时出现在这里</li>`
+      +`<li>也可以直接在下方输入框与它对话——桌面与 IM 共享同一份上下文</li>`
+      +`<li>会话固定使用默认工作空间，不受桌面切换空间影响</li></ul>`)
+    : el("log-empty",`<div class="le-ico">💬</div><div class="le-title">新会话</div>`
+      +`<div class="le-sub">在下方输入框下达第一条指令：@ 引用工作空间文件，/ 调用技能。</div>`);
 }
 async function loadEarlier(log, btn){
   const sid=btn.dataset.sid, before=parseInt(btn.dataset.before||"0",10);

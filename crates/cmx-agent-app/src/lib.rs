@@ -23,7 +23,10 @@ pub mod store;
 pub mod stream;
 pub mod workspace;
 
-pub use app::{AgentApp, AuthSessionFile, SendOutcome, read_auth_session, write_auth_session};
+pub use app::{
+    ASSISTANT_SESSION_ID, ASSISTANT_SESSION_TITLE, AgentApp, AuthSessionFile, SendOutcome,
+    read_auth_session, write_auth_session,
+};
 pub use approval::InteractiveApprover;
 pub use builder::DesktopAppBuilder;
 pub use bus::{BusSink, EventEnvelope, SessionEventBus};

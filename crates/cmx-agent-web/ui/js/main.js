@@ -125,7 +125,7 @@ function showToast(msg){
 }
 
 // 内联 onclick 属性全被拦截。用委托（监听在 document 上，由 nonce'd 脚本注册）在两壳都工作。
-const ACTIONS = { newTask, openConnectors, startFromHome, toggleSidebar, toggleTheme, checkUpdate, applyUpdate: updateBtnClick, toggleMenu, menuSettings, menuAbout, toggleVoice, toggleUserMenu, userProfile, userSwitch, userWorkspace, userLogout,
+const ACTIONS = { newTask, openConnectors, openAssistant, startFromHome, toggleSidebar, toggleTheme, checkUpdate, applyUpdate: updateBtnClick, toggleMenu, menuSettings, menuAbout, toggleVoice, toggleUserMenu, userProfile, userSwitch, userWorkspace, userLogout,
   toggleTabOverflow, tabCtxClose, tabCtxCloseOthers, tabCtxCloseRight, tabCtxCloseAll, winMinimize, winToggleMaximize, winClose,
   closeSettings, scfgSecretLock: scfgToggleSecretLock, scfgQqLock: scfgToggleQqLock, scfgQqLogin, scfgSelect: scfgSelectChannel, scfgWechatLogin, imcfgSave,
   mcfgClose: closeModelConfig, mcfgKeyLock: mcfgToggleKeyLock, mcfgSave: saveModelConfig,

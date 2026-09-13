@@ -104,6 +104,7 @@
   nav{display:flex;flex-direction:column;gap:1px}
   .navitem{display:flex;align-items:center;gap:11px;padding:9px 12px;border-radius:8px;color:var(--ink2);font-size:14px}
   .navitem:hover{background:var(--hover);color:var(--ink)} .navitem .i{width:17px;text-align:center;opacity:.85}
+  .navitem.active{background:var(--hover);color:var(--ink);font-weight:600} /* 「助理」入口：会话打开时点亮 */
   .navitem .tag{margin-left:auto;font-size:11px;color:var(--muted)}
   .seclabel{color:var(--ink2);font-size:14px;font-weight:600;padding:14px 12px 6px;display:flex;align-items:center;gap:6px}
   .seclabel .c{color:var(--ink2)}

@@ -24,6 +24,7 @@ function renderTabs(){
     el.oncontextmenu=(e)=>{ e.preventDefault(); openTabCtx(e, t.id); };
     strip.append(el);
   });
+  if(typeof updateAssistantNav==="function") updateAssistantNav(); // 「助理」navitem 激活态随 CURRENT 走（activateTab/newTask/closeTab 均经此处）
   // 显示逻辑：home(新建任务) 与 tabviews 按「是否有激活 tab」切换；tab 条只要有 tab 就显示。
   // 关键：ACTIVE==null 表示「新建任务」态——即使已有 tab，也显示 home 内容（tab 条仍在，便于切回）。
   const hasTabs=TABS.length>0;

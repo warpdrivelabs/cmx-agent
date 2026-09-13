@@ -168,7 +168,19 @@ impl SessionStore for FileSessionStore {
     ) -> AppResult<EventWindow> {
         let path = self.log_path(session_id)?;
         if !path.exists() {
-            return Err(AppError::NotFound(format!("session '{session_id}'")));
+            // 只有 meta、还没有日志的空会话（刚 ensure/create，如首开的「助理」）是存在的：
+            // 返回空窗口并带 meta 标题——前端 tab 靠它命名；meta 也没有才是真不存在。
+            match read_meta(&self.meta_path(session_id)?)? {
+                Some(m) => {
+                    return Ok(EventWindow {
+                        events: Vec::new(),
+                        total: 0,
+                        start: 0,
+                        title: m.title,
+                    });
+                }
+                None => return Err(AppError::NotFound(format!("session '{session_id}'"))),
+            }
         }
         // 只读「行」（不解析），先拿总数与窗口边界，再**只解析窗口内的行**——
         // 这样大会话切换不必解析整段日志（JSON parse 是主要开销），是本次提速的关键。

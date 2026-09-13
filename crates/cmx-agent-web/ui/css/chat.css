@@ -78,6 +78,13 @@
   .session-view{flex:1;display:flex;flex-direction:column;min-height:0}
   /* 会话时间线：紧凑文档式（贴参考图）——行间距收紧、内容整体细一号 */
   .log{flex:1;overflow:auto;padding:20px 24px;display:flex;flex-direction:column;gap:3px}
+  /* 空会话占位卡：垂直水平居中（.log 是 flex 列，margin:auto 生效）；首条事件到达时由 JS 移除 */
+  .log-empty{margin:auto;padding:40px 24px;text-align:center;max-width:560px;color:var(--ink2)}
+  .log-empty .le-ico{font-size:36px;margin-bottom:10px}
+  .log-empty .le-title{font-size:16px;font-weight:600;color:var(--ink);margin-bottom:6px}
+  .log-empty .le-sub{font-size:13px;line-height:1.8}
+  .log-empty .le-list{margin:16px 0 0;padding:0;list-style:none;text-align:left;font-size:12.5px;line-height:2.1;color:var(--muted)}
+  .log-empty .le-list li::before{content:"·  ";color:var(--aqua)}
   .row{display:flex;gap:10px}
   /* 用户消息：右上小气泡条（参考图位置），无头像。margin-left:auto 在 block 容器内右对齐 */
   .user-chip{width:fit-content;margin:6px 0 4px auto;max-width:78%;

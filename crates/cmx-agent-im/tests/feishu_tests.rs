@@ -12,7 +12,10 @@ fn temp_app(model: MockModel) -> std::sync::Arc<AgentApp> {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let base = std::env::temp_dir().join(format!("cmx-feishu-test-{n}"));
+    // 纳秒 + 进程内自增：并行测试可能落在同一时钟刻度，纯纳秒名会撞目录共享存储。
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let k = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let base = std::env::temp_dir().join(format!("cmx-feishu-test-{k}-{n}"));
     let app = DesktopAppBuilder::new(base.join("ws"), base.join("data"), std::sync::Arc::new(model))
         .build()
         .unwrap();
@@ -46,7 +49,7 @@ async fn feishu_bridge_blocks_unauthorized() {
 
     bridge.tick().await.unwrap();
     // 非白名单：不跑回合、不创建会话（仅尝试 send 未授权提示，失败被吞）。
-    let evs = app.get_events("im-feishu-oc_999").unwrap_or_default();
+    let evs = app.get_events("im-assistant").unwrap_or_default();
     assert!(evs.is_empty(), "未授权 chat 不应建会话");
 }
 
@@ -61,7 +64,7 @@ async fn feishu_same_chat_reuses_session() {
     prov.inject("oc_42", "第二句").await;
     bridge.tick().await.unwrap();
 
-    let evs = app.get_events("im-feishu-oc_42").unwrap();
+    let evs = app.get_events("im-assistant").unwrap();
     let turns = evs
         .iter()
         .filter(|e| matches!(e.kind, cmx_agent_core::event::EventKind::UserMessage { .. }))
@@ -97,7 +100,7 @@ async fn binding_mode_unbound_sender_gets_prompt_no_turn() {
     bridge.tick().await.unwrap();
 
     // 未绑定：不建会话、不跑回合
-    let evs = app.get_events("im-feishu-oc_1").unwrap_or_default();
+    let evs = app.get_events("im-assistant").unwrap_or_default();
     assert!(evs.is_empty(), "未绑定 sender 不应跑回合");
 }
 
@@ -112,13 +115,13 @@ async fn binding_mode_code_message_binds_and_replies() {
     // 发验证码 → 完成绑定（不跑回合，无会话事件）
     prov.inject_with_sender("oc_1", "888888", "ou_new").await;
     bridge.tick().await.unwrap();
-    let evs = app.get_events("im-feishu-oc_1").unwrap_or_default();
+    let evs = app.get_events("im-assistant").unwrap_or_default();
     assert!(evs.is_empty(), "验证码消息本身不跑回合");
 
     // 绑定后正常消息 → 跑回合
     prov.inject_with_sender("oc_1", "你好", "ou_new").await;
     bridge.tick().await.unwrap();
-    let evs = app.get_events("im-feishu-oc_1").unwrap_or_default();
+    let evs = app.get_events("im-assistant").unwrap_or_default();
     assert!(!evs.is_empty(), "绑定后应跑回合");
 }
 
@@ -135,7 +138,7 @@ async fn binding_mode_bound_sender_runs_turn() {
     prov.inject_with_sender("oc_2", "在吗", "ou_vip").await;
     bridge.tick().await.unwrap();
 
-    let evs = app.get_events("im-feishu-oc_2").unwrap_or_default();
+    let evs = app.get_events("im-assistant").unwrap_or_default();
     assert!(!evs.is_empty(), "已绑定 sender 应跑回合");
 }
 
@@ -152,6 +155,6 @@ async fn binding_mode_broken_service_fails_closed() {
     prov.inject_with_sender("oc_3", "hello", "ou_any").await;
     bridge.tick().await.unwrap();
 
-    let evs = app.get_events("im-feishu-oc_3").unwrap_or_default();
+    let evs = app.get_events("im-assistant").unwrap_or_default();
     assert!(evs.is_empty(), "绑定服务不可达应 fail-closed");
 }

@@ -39,7 +39,10 @@ fn temp_app(model: MockModel) -> Arc<AgentApp> {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let base = std::env::temp_dir().join(format!("cmx-im-test-{n}"));
+    // 纳秒 + 进程内自增：并行测试可能落在同一时钟刻度，纯纳秒名会撞目录共享存储。
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let k = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let base = std::env::temp_dir().join(format!("cmx-im-test-{k}-{n}"));
     let app = DesktopAppBuilder::new(base.join("ws"), base.join("data"), Arc::new(model))
         .build()
         .unwrap();
@@ -107,8 +110,8 @@ async fn same_chat_reuses_session() {
     }];
     bridge.tick().await.unwrap();
 
-    // 会话 im-42 应存在且含两轮
-    let evs = app.get_events("im-test-42").unwrap();
+    // 统一会话 im-assistant 应存在且含两轮（同 chat 同通道都落它）
+    let evs = app.get_events("im-assistant").unwrap();
     let turns = evs
         .iter()
         .filter(|e| matches!(e.kind, cmx_agent_core::event::EventKind::UserMessage { .. }))
