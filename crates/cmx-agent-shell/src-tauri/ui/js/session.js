@@ -20,15 +20,23 @@ function updateAssistantNav(){
   if(nav) nav.classList.toggle("active", CURRENT===ASSISTANT_SID);
 }
 
+// 代际守卫：本函数有两次 await（list_sessions / list_workspaces），并发多份调用会在交错点
+// 互相清空/重复 append（曾表现为「右键全部关闭后侧栏空间/任务组整份重复」）——任一 await 后
+// 发现已有更新的请求接手，本次直接放弃；清空重画挪到数据拿齐且仍是最新请求之后。
+let _rtGen = 0;
 async function refreshTasks(){
+  const gen = ++_rtGen;
   const resp = await call({cmd:"list_sessions"});
+  if(gen !== _rtGen) return;
   // IM 会话（统一助理会话 im-assistant + 历史散会话 im-<kind>-*）走「助理」入口，不进空间/任务分组；
   // 过滤须在空态判断之前（只剩 IM 会话时按"无任务"处理）。
   const list = ((resp.ok && resp.data.sessions) || []).filter(m=>!/^im-/.test(m.id));
-  const box = document.getElementById("tasklist"); box.innerHTML="";
+  const box = document.getElementById("tasklist");
 
   let wsState={current:null,workspaces:[]};
   try{ const r=await call({cmd:"list_workspaces"}); if(r.ok) wsState=r.data; }catch(e){}
+  if(gen !== _rtGen) return;
+  box.innerHTML="";                                    // 两份数据齐且仍是最新 → 才清空重画
   const wsById={}; (wsState.workspaces||[]).forEach(w=>{ wsById[w.id]=w; });
 
   const groups=[], byKey={};
@@ -71,7 +79,7 @@ function renderTaskGroup(g){
     t.innerHTML = `<span class="tt">${esc(m.title||m.id)}</span><span class="tm">${ago(m.updated_at)}</span><span class="del" title="删除">✕</span>`;
     t.addEventListener("click", (e)=>{ if(e.target.closest(".del")) return; openSession(m.id); });
     t.querySelector(".del").onclick = async (e)=>{ e.stopPropagation(); await call({cmd:"delete_session",session_id:m.id});
-      if(findTab("s:"+m.id)) closeTab("s:"+m.id); refreshTasks(); };
+      if(findTab("s:"+m.id)) closeTab("s:"+m.id); scheduleRefreshTasks(); };
     items.append(t);
   });
   // 空组可选提示（现仅空态「任务」组用）：跟随组头折叠、缩进在组内，不悬在「空间」区标签下。
@@ -399,8 +407,10 @@ async function doSendTab(t, text){
         if(ev.kind==="turn_ended") renderEvent(log, ev, t.sessionId);
         return;
       }
-      if(ev.kind==="stream_done"){ hideTyping(log); return; }
-      if(ev.kind==="stream_error"){ hideTyping(log); renderEvent(log,{kind:"model_message",text:"⚠ "+(ev.message||"错误")}, t.sessionId); return; }
+      if(ev.kind==="stream_done"){ hideTyping(log); closeReasoning(log); return; }
+      // 流收尾（成/败）都把思考卡定格收口：不留流式态/「重试中」卡。断流重试失败时，卡里保住的
+      // 正文是用户唯一能回看的思考内容（见 render.js reasoning_reset：不再清空显示）。
+      if(ev.kind==="stream_error"){ hideTyping(log); closeReasoning(log); renderEvent(log,{kind:"model_message",text:"⚠ "+(ev.message||"错误")}, t.sessionId); return; }
       // 落库事件按 seq 去重并注册：与 session_event 通道共用 _seqs。流结束 STREAMING 放行后，
       // 总线迟到重播的同一条事件（如 reasoning 回执）若不在此注册，会被再渲一遍（重复思考卡）。
       if(ev.seq != null){

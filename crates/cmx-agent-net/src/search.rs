@@ -64,6 +64,7 @@ impl Tool for WebSearchTool {
         .guard(GuardHints {
             requires_auth: Some("net:search".into()),
             idempotent: true,
+            network: true,
             ..Default::default()
         })
     }

@@ -27,9 +27,17 @@ tokio::task_local! {
 
 /// 父↔子共享句柄：构建后注入 `Weak<Agent>`。递归深度改由 [`SUBAGENT_DEPTH`] task-local 承载
 /// （不再用共享计数器），故只保留上限 `max_depth`。
+///
+/// `log_sink`（可选）：子会话事件落库回调，由 app 装配层注入（接 `FileSessionStore`）——
+/// 子会话此前只活在内存、工具返回即丢弃，事后无法审计子智能体用过哪些工具；落库后
+/// `sessions/subtask-*/log.jsonl` 留痕（不写 meta，UI 列表不显示，仅审计可查）。
+/// 子会话日志落库回调（builder 装配时注入，接 app 层 FileSessionStore）。
+pub type SubagentLogSink = Arc<dyn Fn(&str, &[cmx_agent_core::SessionEvent]) + Send + Sync>;
+
 pub struct SubagentHandle {
     agent: OnceLock<Weak<Agent>>,
     max_depth: usize,
+    log_sink: OnceLock<SubagentLogSink>,
 }
 
 impl SubagentHandle {
@@ -37,11 +45,16 @@ impl SubagentHandle {
         Self {
             agent: OnceLock::new(),
             max_depth,
+            log_sink: OnceLock::new(),
         }
     }
     /// 构建出 `Arc<Agent>` 后由 builder 调用，注入弱引用（不成环）。
     pub fn attach(&self, agent: &Arc<Agent>) {
         let _ = self.agent.set(Arc::downgrade(agent));
+    }
+    /// 注入子会话日志落库回调（builder 装配；重复 set 静默忽略首个之后者）。
+    pub fn attach_log_sink(&self, f: SubagentLogSink) {
+        let _ = self.log_sink.set(f);
     }
     fn upgrade(&self) -> Option<Arc<Agent>> {
         self.agent.get().and_then(Weak::upgrade)
@@ -108,13 +121,25 @@ impl Tool for TaskTool {
                 .map(|d| d.as_nanos())
                 .unwrap_or(0)
         );
-        let mut sub = Session::new(sub_id).with_system(SUBAGENT_SYSTEM);
+        let mut sub = Session::new(sub_id.clone()).with_system(SUBAGENT_SYSTEM);
 
+        // 主体透传：父回合以 IM 绑定用户身份跑时（TURN_SUBJECT task-local 由内核在回合外层置位），
+        // 子回合**同一主体**过守卫——旧实现子回合回落 policy.subject（桌面主体），绑定用户的子任务
+        // 会以他人身份判权，权限错位。None（桌面登录常态）维持 run_turn 回落语义不变。
+        let turn_subject = cmx_agent_core::TURN_SUBJECT.try_with(|s| s.clone()).ok().flatten();
         // 子回合整体在 depth+1 的 task-local 作用域内运行：其内部若再 fan-out，
         // 会读到 depth+1 并据此判断/再嵌套，形成正确的递归层级传播。
-        let outcome = SUBAGENT_DEPTH
-            .scope(depth + 1, agent.run_turn(&mut sub, prompt))
-            .await;
+        // （两个分支是不同 future 类型，不能同 match 存一个变量——分别在 scope 内 await。）
+        let outcome = match &turn_subject {
+            Some(subj) => SUBAGENT_DEPTH.scope(depth + 1, agent.run_turn_as(&mut sub, prompt, subj)).await,
+            None => SUBAGENT_DEPTH.scope(depth + 1, agent.run_turn(&mut sub, prompt)).await,
+        };
+
+        // 子会话日志落库（审计）：子回合此前只存内存、返回即丢。落库失败不致命（warn 即可），
+        // 不写 meta → UI 会话列表不显示，仅磁盘留痕供事后追查。
+        if let Some(sink) = self.handle.log_sink.get() {
+            sink(&sub_id, sub.log.events());
+        }
 
         match outcome {
             Ok(o) => Ok(ToolResult::ok(json!({
@@ -255,6 +280,65 @@ mod tests {
         let _ = agent; // 保持 agent 存活以便 upgrade 成功
         let r = t.invoke(json!({"prompt":"x"}), &ctx).await.unwrap();
         assert!(!r.ok, "max_depth=0 应拒绝");
+    }
+
+    // 探针工具：记录 invoke 时刻的 TURN_SUBJECT（验证子回合主体透传用）。
+    struct SubjectProbe(std::sync::Arc<std::sync::Mutex<Option<String>>>);
+    #[async_trait::async_trait]
+    impl Tool for SubjectProbe {
+        fn spec(&self) -> ToolSpec {
+            ToolSpec::new("probe", "记录当前回合主体")
+        }
+        async fn invoke(&self, _input: Value, _ctx: &ToolCtx<'_>) -> Result<ToolResult, ToolError> {
+            let s = cmx_agent_core::TURN_SUBJECT.try_with(|s| s.clone()).ok().flatten();
+            *self.0.lock().expect("probe lock") = s.map(|x| x.user);
+            Ok(ToolResult::ok(json!({ "ok": true })))
+        }
+    }
+
+    #[tokio::test]
+    async fn subagent_inherits_turn_subject() {
+        // 父回合以 bob 身份跑（run_turn_as，IM 绑定场景）→ task 派生的子回合**同一主体**：
+        // 子回合内 probe 记录的 TURN_SUBJECT 应为 bob（旧实现回落 policy.subject=desktop，权限错位）。
+        let probe_seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let probe = Arc::new(SubjectProbe(probe_seen.clone()));
+        let handle = Arc::new(SubagentHandle::new(2));
+        let model = Arc::new(MockModel::new([
+            // 父第 1 次 complete → 调 task
+            ModelResponse::calls(vec![cmx_agent_core::ToolCall::with_id(
+                "c1", "task", json!({ "prompt": "查点东西" }),
+            )]),
+            // 子第 1 次 complete → 调 probe（在子回合 task-local 作用域内）
+            ModelResponse::calls(vec![cmx_agent_core::ToolCall::with_id("c2", "probe", json!({}))]),
+            // 子收尾 / 父收尾
+            ModelResponse::text("子完成"),
+            ModelResponse::text("父完成"),
+        ]));
+        let mut reg = ToolRegistry::new();
+        reg.register(Arc::new(TaskTool::new(handle.clone())));
+        reg.register(probe);
+        let agent = Agent::builder()
+            .model(model)
+            .tools(reg)
+            .guards(GuardPipeline::new())
+            .policy(Policy {
+                sandbox: SandboxMode::WorkspaceWrite,
+                allowed_roots: vec![PathBuf::from("/tmp")],
+                ..Default::default()
+            })
+            .build()
+            .unwrap();
+        let agent = Arc::new(agent);
+        handle.attach(&agent);
+
+        let subject = cmx_agent_core::Subject::new("bob");
+        let mut session = Session::new("parent-im");
+        agent.run_turn_as(&mut session, "IM 来活", &subject).await.unwrap();
+        assert_eq!(
+            probe_seen.lock().expect("probe lock").as_deref(),
+            Some("bob"),
+            "子回合内读到的回合主体应是 IM 绑定用户 bob"
+        );
     }
 
     #[tokio::test]

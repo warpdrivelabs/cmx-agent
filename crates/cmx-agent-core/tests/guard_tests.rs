@@ -441,3 +441,234 @@ async fn post_guard_can_deny_after_execution() {
             .contains("post-guard denied")
     );
 }
+
+// ————— ⑤ 沙箱中央闸（SandboxGuard） —————
+
+#[tokio::test]
+async fn sandbox_guard_blocks_network_under_read_only() {
+    // ReadOnly：标了 network 的工具 → SandboxGuard 中央拒绝
+    //（此前 net 系工具无自检，ReadOnly 下 web_fetch 照跑；net 工具不在 default_registry，用探针代替）。
+    struct NetProbe;
+    #[async_trait::async_trait]
+    impl cmx_agent_core::Tool for NetProbe {
+        fn spec(&self) -> cmx_agent_core::ToolSpec {
+            cmx_agent_core::ToolSpec::new("net_probe", "联网探针")
+                .schema(serde_json::json!({"type":"object"}))
+                .guard(cmx_agent_core::GuardHints { network: true, ..Default::default() })
+        }
+        async fn invoke(
+            &self,
+            _input: serde_json::Value,
+            _ctx: &cmx_agent_core::ToolCtx<'_>,
+        ) -> Result<cmx_agent_core::ToolResult, cmx_agent_core::ToolError> {
+            Ok(cmx_agent_core::ToolResult::ok(serde_json::json!({"ok": true})))
+        }
+    }
+    let mut tools = cmx_agent_core::ToolRegistry::new();
+    tools.register(Arc::new(NetProbe));
+    let mut guards = GuardPipeline::new();
+    guards.add(Arc::new(cmx_agent_core::SandboxGuard));
+    let agent = Agent::builder()
+        .model(Arc::new(call_tool("net_probe", serde_json::json!({}))))
+        .tools(tools)
+        .guards(guards)
+        .policy(Policy {
+            sandbox: SandboxMode::ReadOnly,
+            ..Default::default()
+        })
+        .build()
+        .unwrap();
+    let mut s = Session::new("sandbox-net");
+    agent.run_turn(&mut s, "fetch").await.unwrap();
+    let denied = s.log.iter().any(|e| {
+        matches!(&e.kind,
+        EventKind::GuardDecision { phase: GuardPhase::PreExecute, guard, .. } if guard == "sandbox")
+    });
+    assert!(denied, "ReadOnly 下 network 工具应被 SandboxGuard 拒绝");
+}
+
+#[tokio::test]
+async fn sandbox_guard_blocks_writes_under_read_only() {
+    // ReadOnly：fs_write 标了 writes → 中央拒绝（工具内自检之外的第二道闸）。
+    let mut guards = GuardPipeline::new();
+    guards.add(Arc::new(cmx_agent_core::SandboxGuard));
+    let agent = Agent::builder()
+        .model(Arc::new(call_tool(
+            "fs_write",
+            serde_json::json!({"path":"a.txt","content":"x"}),
+        )))
+        .tools(default_registry())
+        .guards(guards)
+        .policy(Policy {
+            sandbox: SandboxMode::ReadOnly,
+            ..Default::default()
+        })
+        .build()
+        .unwrap();
+    let mut s = Session::new("sandbox-write");
+    agent.run_turn(&mut s, "write").await.unwrap();
+    let (ok, _out) = last_tool_result(&s);
+    assert!(!ok, "ReadOnly 下写工具应被 SandboxGuard 拒绝");
+}
+
+#[tokio::test]
+async fn sandbox_guard_allows_network_under_workspace_write() {
+    // WorkspaceWrite：允许只读型联网（日常查资料）——不因 network 标注误伤。
+    let mut guards = GuardPipeline::new();
+    guards.add(Arc::new(cmx_agent_core::SandboxGuard));
+    let agent = Agent::builder()
+        .model(Arc::new(call_tool(
+            "web_fetch",
+            serde_json::json!({"url":"https://127.0.0.1:1/x"}), // 不可达端点：只要不被守卫拦，错误应是执行层
+        )))
+        .tools(default_registry())
+        .guards(guards)
+        .policy(Policy {
+            sandbox: SandboxMode::WorkspaceWrite,
+            ..Default::default()
+        })
+        .build()
+        .unwrap();
+    let mut s = Session::new("sandbox-net-allowed");
+    agent.run_turn(&mut s, "fetch").await.unwrap();
+    let blocked = s.log.iter().any(|e| {
+        matches!(&e.kind,
+        EventKind::GuardDecision { phase: GuardPhase::PreExecute, guard, .. } if guard == "sandbox")
+    });
+    assert!(!blocked, "WorkspaceWrite 下 network 工具不应被 SandboxGuard 拦截");
+}
+
+// ————— 回合级权限档覆盖（IM 无人值守全权） —————
+
+/// NetProbe：network+writes 双标注，探 SandboxGuard 的中央闸。
+struct OverrideProbe;
+#[async_trait::async_trait]
+impl cmx_agent_core::Tool for OverrideProbe {
+    fn spec(&self) -> cmx_agent_core::ToolSpec {
+        cmx_agent_core::ToolSpec::new("override_probe", "覆盖探针")
+            .schema(serde_json::json!({"type":"object"}))
+            .guard(cmx_agent_core::GuardHints {
+                network: true,
+                writes: true,
+                ..Default::default()
+            })
+    }
+    async fn invoke(
+        &self,
+        _input: serde_json::Value,
+        _ctx: &cmx_agent_core::ToolCtx<'_>,
+    ) -> Result<cmx_agent_core::ToolResult, cmx_agent_core::ToolError> {
+        Ok(cmx_agent_core::ToolResult::ok(serde_json::json!({"ran": true})))
+    }
+}
+
+fn override_agent(sandbox: SandboxMode, approval: ApprovalPolicy) -> Agent {
+    let mut tools = cmx_agent_core::ToolRegistry::new();
+    tools.register(Arc::new(OverrideProbe));
+    let mut guards = GuardPipeline::new();
+    guards.add(Arc::new(cmx_agent_core::SandboxGuard));
+    guards.add(Arc::new(ApprovalGuard));
+    Agent::builder()
+        .model(Arc::new(call_tool("override_probe", serde_json::json!({}))))
+        .tools(tools)
+        .guards(guards)
+        .policy(Policy { sandbox, approval, ..Default::default() })
+        .build()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn turn_policy_override_beats_read_only_global() {
+    // 全局 ReadOnly 会双拦 network/writes；FULL_ACCESS 覆盖档（IM 无人值守全权）下照跑。
+    let agent = override_agent(SandboxMode::ReadOnly, ApprovalPolicy::OnRequest);
+    let mut s = Session::new("override-full-access");
+    agent
+        .run_turn_observed_as_cancellable_with_policy(
+            &mut s,
+            "run",
+            None,
+            None,
+            None,
+            None,
+            Some(cmx_agent_core::TurnPolicyOverride::FULL_ACCESS),
+        )
+        .await
+        .unwrap();
+    let (ok, out) = last_tool_result(&s);
+    assert!(ok, "FULL_ACCESS 覆盖档下探针应执行成功，实际：{out}");
+    let denied = s.log.iter().any(|e| {
+        matches!(&e.kind,
+        EventKind::GuardDecision { phase: GuardPhase::PreExecute, guard, .. } if guard == "sandbox")
+    });
+    assert!(!denied, "覆盖档下不应有 sandbox 拒绝");
+}
+
+#[tokio::test]
+async fn without_override_global_read_only_still_blocks() {
+    // 不传覆盖档 → 回落全局档：ReadOnly 照旧拒绝（覆盖只在显式 scope 内生效）。
+    let agent = override_agent(SandboxMode::ReadOnly, ApprovalPolicy::OnRequest);
+    let mut s = Session::new("override-absent");
+    agent
+        .run_turn_observed_as_cancellable_with_policy(&mut s, "run", None, None, None, None, None)
+        .await
+        .unwrap();
+    let (ok, _out) = last_tool_result(&s);
+    assert!(!ok, "无覆盖时全局 ReadOnly 应照常拒绝");
+}
+
+#[tokio::test]
+async fn turn_policy_override_never_denies_always_approval_without_hanging() {
+    // 覆盖档 approval=Never：Always 级硬人审被 policy:never 立即拒绝（不挂审批等待）。
+    struct AskAlways;
+    #[async_trait::async_trait]
+    impl cmx_agent_core::Tool for AskAlways {
+        fn spec(&self) -> cmx_agent_core::ToolSpec {
+            cmx_agent_core::ToolSpec::new("ask_always", "硬人审探针")
+                .schema(serde_json::json!({"type":"object"}))
+                .guard(cmx_agent_core::GuardHints {
+                    requires_approval: cmx_agent_core::Approval::Always,
+                    ..Default::default()
+                })
+        }
+        async fn invoke(
+            &self,
+            _input: serde_json::Value,
+            _ctx: &cmx_agent_core::ToolCtx<'_>,
+        ) -> Result<cmx_agent_core::ToolResult, cmx_agent_core::ToolError> {
+            Ok(cmx_agent_core::ToolResult::ok(serde_json::json!({"ran": true})))
+        }
+    }
+    let mut tools = cmx_agent_core::ToolRegistry::new();
+    tools.register(Arc::new(AskAlways));
+    let mut guards = GuardPipeline::new();
+    guards.add(Arc::new(ApprovalGuard));
+    let agent = Agent::builder()
+        .model(Arc::new(call_tool("ask_always", serde_json::json!({}))))
+        .tools(tools)
+        .guards(guards)
+        .policy(Policy {
+            sandbox: SandboxMode::WorkspaceWrite,
+            approval: ApprovalPolicy::OnRequest, // 全局按需审批；覆盖档把它压成 Never
+            ..Default::default()
+        })
+        .build()
+        .unwrap();
+    let mut s = Session::new("override-never");
+    agent
+        .run_turn_observed_as_cancellable_with_policy(
+            &mut s,
+            "run",
+            None,
+            None,
+            None,
+            None,
+            Some(cmx_agent_core::TurnPolicyOverride::FULL_ACCESS),
+        )
+        .await
+        .unwrap();
+    let resolved = s.log.iter().any(|e| matches!(&e.kind,
+        EventKind::ApprovalResolved { approved: false, by, .. } if by == "policy:never"));
+    assert!(resolved, "Always 审批应被覆盖档 Never 立即拒绝（policy:never）");
+    let (ok, _out) = last_tool_result(&s);
+    assert!(!ok, "被拒审批的工具不应执行");
+}

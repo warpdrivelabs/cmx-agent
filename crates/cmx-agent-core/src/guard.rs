@@ -19,10 +19,10 @@ use crate::tool::{Approval, ToolCall, ToolSpec};
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum SandboxMode {
-    /// 只读：禁止写文件/网络/高危。
+    /// 只读：禁止写文件/联网/高危（SandboxGuard 中央闸 + 各工具自检双保险）。
     #[default]
     ReadOnly,
-    /// 工作区可写：可读写 allowed_roots，禁网络与高危（日常推荐）。
+    /// 工作区可写：可读写 allowed_roots、允许只读型联网（检索/抓取），禁高危（日常推荐）。
     WorkspaceWrite,
     /// 完全访问：放行高危（≈ --yolo，仅自动化+显式最小权限时用）。
     DangerFullAccess,
@@ -38,6 +38,12 @@ impl SandboxMode {
             self,
             SandboxMode::WorkspaceWrite | SandboxMode::DangerFullAccess
         )
+    }
+
+    /// ReadOnly 禁网；WorkspaceWrite / DangerFullAccess 允许只读型联网工具
+    /// （web_fetch/web_search/browser 等，写副作用另由 `writes` 闸与各工具自检管）。
+    pub fn allows_network(self) -> bool {
+        !matches!(self, SandboxMode::ReadOnly)
     }
 }
 
@@ -254,5 +260,37 @@ impl Guard for HighRiskGuard {
         } else {
             GuardDecision::Allow
         }
+    }
+}
+
+/// ⑤ 沙箱中央闸：按 `GuardHints.writes`/`network` 标注对 ReadOnly 沙箱做**中央**拒绝——
+/// 工具内 `allows_write()`/联网自检之外的第二道闸，未来新工具漏写自检也有兜底
+/// （旧实现完全依赖每工具自律，net 系列工具即漏网：ReadOnly 下 web_fetch 照跑）。
+pub struct SandboxGuard;
+
+impl Guard for SandboxGuard {
+    fn name(&self) -> &str {
+        "sandbox"
+    }
+
+    fn phases(&self) -> &[GuardPhase] {
+        &[GuardPhase::PreExecute]
+    }
+
+    fn check(&self, ctx: &GuardCtx<'_>) -> GuardDecision {
+        let sandbox = ctx.sandbox;
+        if ctx.spec.guard.writes && !sandbox.allows_write() {
+            return GuardDecision::deny(format!(
+                "tool '{}' writes and is blocked under sandbox {sandbox:?}",
+                ctx.spec.name
+            ));
+        }
+        if ctx.spec.guard.network && !sandbox.allows_network() {
+            return GuardDecision::deny(format!(
+                "tool '{}' needs network and is blocked under sandbox {sandbox:?}",
+                ctx.spec.name
+            ));
+        }
+        GuardDecision::Allow
     }
 }

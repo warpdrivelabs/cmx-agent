@@ -88,17 +88,21 @@ fn start_im_if_configured(rt: &'static tokio::runtime::Runtime, app: Arc<AgentAp
     // 个人模式：im.json `personal=true`（默认）= 所有 IM 消息直接以桌面壳当前登录用户身份
     // 跑回合，无需验证码绑定；false = 绑定模式（按发送者 open_id 鉴权）。env 来源恒绑定模式。
     let personal = resolved.personal;
+    // 无人值守全权：im.json `full_access=true`（默认）= IM 回合沙箱完全放行、从不弹审批卡
+    // （回合级覆盖档，不影响桌面）；false = 跟随桌面全局两旋钮。
+    let full_access = resolved.full_access;
     // 绑定模式才需要绑定解析器（个人模式会被桥短路，但仍装配以防模式切换复用代码路径）。
     let portal_base = portal_base();
     let labels: Vec<&str> = resolved.channels.iter().map(|c| c.kind.label()).collect();
     let mode_label = if personal { "个人模式" } else { "绑定模式" };
+    let perm_label = if full_access { "全权" } else { "随桌面档" };
     set_im_status(format!(
-        "运行中：provider={}（{mode_label}，配置来源={}，portal={portal_base}）",
+        "运行中：provider={}（{mode_label}·{perm_label}，配置来源={}，portal={portal_base}）",
         labels.join("+"),
         resolved.source
     ));
     eprintln!(
-        "[im] 启动 IM 遥控（provider={}，{mode_label}，配置来源={}，portal={portal_base}）",
+        "[im] 启动 IM 遥控（provider={}，{mode_label}，权限={perm_label}，配置来源={}，portal={portal_base}）",
         labels.join("+"),
         resolved.source
     );
@@ -117,6 +121,7 @@ fn start_im_if_configured(rt: &'static tokio::runtime::Runtime, app: Arc<AgentAp
             }
             let bridge = cmx_agent_im::ImBridge::new(app, provider, kind_label, allow.clone())
                 .with_personal(personal)
+                .with_full_access(full_access)
                 .with_bindings(std::sync::Arc::new(bindings));
             bridge.run(stop_rx).await;
         });
@@ -151,6 +156,7 @@ async fn im_config(
                         "enabled": true,
                         "kind": "feishu",
                         "personal": true,
+                        "full_access": true,
                         "app_id": "",
                         "app_secret_masked": "",
                         "base": "",
@@ -176,6 +182,8 @@ async fn im_config(
             let mut cfg = cmx_agent_im::load_im_config(&data_dir).unwrap_or_default();
             cfg.enabled = v.get("enabled").and_then(|x| x.as_bool()).unwrap_or(true);
             cfg.personal = true; // 身份模式固定个人：消息以桌面登录账号身份跑回合。
+            // 无人值守全权（默认开）：IM 回合沙箱完全放行、从不弹审批卡；false = 跟随桌面全局档。
+            cfg.full_access = v.get("full_access").and_then(|x| x.as_bool()).unwrap_or(true);
             // 多通道（2026-09-10）：面板多选 → `active` 列表；`kind` 同步为首个启用项
             // （兼容旧版本读文件的语义）。空列表 = 未勾任何通道。
             if let Some(active) = v.get("active").and_then(|x| x.as_array()) {
@@ -564,6 +572,93 @@ async fn login(
     }
 }
 
+/// 显示前把默认窗口尺寸收敛进所在屏的**真实工作区**（任务栏之外），并在工作区内居中。
+///
+/// 为何不用「显示器尺寸扣固定余量」：任务栏物理高度随缩放走（48 逻辑 × 200%=96 物理），
+/// 估算余量偏小 + `center()` 对整屏居中，两端各摊一半误差后底部仍压任务栏。Windows 直接
+/// `GetMonitorInfoW` 取 rcWork——任务栏位置 / 高度 / 自动隐藏 / 副屏差异全部精确；
+/// 其余平台无此 API，退回估计值 + `center()`。
+#[cfg(windows)]
+fn fit_default_window(win: &tauri::WebviewWindow) {
+    use windows_sys::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+    let Ok(raw) = win.hwnd() else { return };
+    let hwnd = raw.0 as windows_sys::Win32::Foundation::HWND;
+    eprintln!("[win-fit] hwnd={hwnd:?} outer={:?} sf={:?}", win.outer_size(), win.scale_factor());
+    unsafe {
+        let hmon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        if hmon.is_null() {
+            eprintln!("[win-fit] MonitorFromWindow=null");
+            return;
+        }
+        let mut mi: MONITORINFO = std::mem::zeroed();
+        mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        if GetMonitorInfoW(hmon, &mut mi) == 0 {
+            eprintln!("[win-fit] GetMonitorInfoW=0");
+            return;
+        }
+        let Ok(cur_phys) = win.outer_size() else { return };
+        let Ok(sf) = win.scale_factor() else { return };
+        // rcWork 是虚拟屏**物理**坐标；Tauri 定位/尺寸用逻辑值 = 物理 ÷ 缩放系数。
+        let wa = (
+            mi.rcWork.left as f64 / sf,
+            mi.rcWork.top as f64 / sf,
+            (mi.rcWork.right - mi.rcWork.left) as f64 / sf,
+            (mi.rcWork.bottom - mi.rcWork.top) as f64 / sf,
+        );
+        let cur = cur_phys.to_logical::<f64>(sf);
+        let w = cur.width.min(wa.2);
+        let h = cur.height.min(wa.3);
+        let changed = h < cur.height - 0.5 || w < cur.width - 0.5;
+        // 关键：tauri 的 set_size 语义是**内框**（客户区）。本窗无装饰但保留 WS_THICKFRAME
+        // 可缩放热区，外框 = 内框 + 不可见 NC 边框（本机实测 +26×+72 物理）——直接设工作区
+        // 逻辑尺寸，外框会再大出一圈、底部仍压任务栏。须按 outer−inner 差值反推内框目标，
+        // 让**外框**恰好铺满工作区（多余边框是透明热区，超出屏幕无感知）。
+        let inner = win.inner_size().unwrap_or(cur_phys);
+        let dw = f64::from(cur_phys.width.saturating_sub(inner.width));
+        let dh = f64::from(cur_phys.height.saturating_sub(inner.height));
+        // floor 不 round：舍入方向恒朝「更小」，任何 DPI 下都不会再溢出工作区半像素。
+        let iw = ((w * sf - dw) / sf).floor();
+        let ih = ((h * sf - dh) / sf).floor();
+        eprintln!(
+            "[win-fit] wa={wa:?} cur={cur:?} -> outer=({w},{h}) inner=({iw},{ih}) delta=({dw},{dh}) changed={changed}"
+        );
+        if changed {
+            let _ = win.set_size(tauri::LogicalSize::new(iw, ih));
+            // 不能用 center()：那是对**整屏**居中，会把窗口重新推回任务栏下。按工作区定位。
+            let x = wa.0 + (wa.2 - w) / 2.0;
+            let y = wa.1 + (wa.3 - h) / 2.0;
+            let _ = win.set_position(tauri::LogicalPosition::new(x.round(), y.round()));
+        }
+    }
+}
+
+/// 非 Windows：无工作区 API，按显示器物理尺寸扣固定余量估计（56≈任务栏、16≈左右边距）。
+#[cfg(not(windows))]
+fn fit_default_window(win: &tauri::WebviewWindow) {
+    let mon = win
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| win.primary_monitor().ok().flatten());
+    if let (Some(mon), Ok(cur)) = (mon, win.outer_size()) {
+        let sf = mon.scale_factor();
+        let avail = tauri::PhysicalSize::new(
+            mon.size().width.saturating_sub(16),
+            mon.size().height.saturating_sub(56),
+        )
+        .to_logical::<f64>(sf);
+        let cur = cur.to_logical::<f64>(sf);
+        let w = avail.width.max(640.0).min(cur.width);
+        let h = avail.height.max(480.0).min(cur.height);
+        if h < cur.height - 0.5 || w < cur.width - 0.5 {
+            let _ = win.set_size(tauri::LogicalSize::new(w.round(), h.round()));
+            let _ = win.center();
+        }
+    }
+}
+
 fn build_app() -> AgentApp {
     // 双壳统一数据根（与 Web 壳同一份：model.json / 会话共享；CMX_AGENT_DATA_DIR 可覆盖，隔离测试用）。
     let data_dir = cmx_agent_app::shared_data_dir();
@@ -593,6 +688,10 @@ fn build_app() -> AgentApp {
         .maybe_data_auth(std::env::var("CMX_AGENT_DATAAUTH_URL").ok())
         .build()
         .expect("build agent app");
+
+    // 登出钩子：停 IM 桥（发 stop 信号 + 断 provider 长连接）——旧实现登出后桥仍以
+    // 旧身份轮询/跑回合，换号后 IM 消息会按前任登录人身份处理。
+    app.add_logout_hook(Box::new(stop_im_bridge));
 
     // IM 绑定 client（个人模式不调用，绑定模式走它调门户 /api/agent/bindings/*）。
     // 门户基址与登录门同源（portal_base()）。
@@ -724,6 +823,10 @@ fn main() {
             // Windows/Linux 关主窗系统装饰（前端自绘三键 + 缩放热区）；macOS 走 Overlay 交通灯。
             // 窗口 visible:false 创建（conf），装饰处理完再 show——消除首帧白屏 + 系统标题栏闪烁。
             if let Some(main) = app.get_webview_window("main") {
+                // 显示前把默认窗口尺寸收敛进所在屏的**真实工作区**（任务栏之外）并重新定位。
+                // conf 的 1440×900 是逻辑像素：200% 缩放屏（2880×1800）上=物理满屏，底部整条
+                // 压在任务栏下。必须赶在 show 前做完，用户看见窗口时已是修正位。
+                fit_default_window(&main);
                 if !cfg!(target_os = "macos") {
                     let _ = main.set_decorations(false);
                 }

@@ -72,12 +72,30 @@ fn unescape_xml(s: &str) -> String {
         .replace("&apos;", "'")
 }
 
+/// 单个 zip 条目解压后上限（64MB）：docx/pptx 是 zip 壳，恶意构造的「zip 炸弹」
+/// 条目声明可解出数十 GB——旧实现 `read_to_string` 无限额直接进内存（OOM 面）。
+const MAX_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
+
 fn read_zip_entry(path: &std::path::Path, entry: &str) -> Result<String, String> {
     let file = std::fs::File::open(path).map_err(|e| format!("打开失败: {e}"))?;
     let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("非法 zip: {e}"))?;
-    let mut f = zip.by_name(entry).map_err(|_| format!("缺少 {entry}"))?;
+    let f = zip.by_name(entry).map_err(|_| format!("缺少 {entry}"))?;
+    // 第一道闸：中央目录声明大小超限直接拒（零解压成本）。
+    if f.size() > MAX_ENTRY_BYTES {
+        return Err(format!(
+            "{entry} 解压后约 {}MB，超过 {}MB 上限（疑似 zip 炸弹，已拒读）",
+            f.size() / (1024 * 1024),
+            MAX_ENTRY_BYTES / (1024 * 1024)
+        ));
+    }
+    // 第二道闸：声明可伪造（信任不了中央目录），实际读取按 `take` 硬限流。
     let mut s = String::new();
-    f.read_to_string(&mut s).map_err(|e| format!("读取 {entry} 失败: {e}"))?;
+    f.take(MAX_ENTRY_BYTES + 1)
+        .read_to_string(&mut s)
+        .map_err(|e| format!("读取 {entry} 失败: {e}"))?;
+    if s.len() as u64 > MAX_ENTRY_BYTES {
+        return Err(format!("{entry} 实际解压超过 {}MB 上限（疑似 zip 炸弹）", MAX_ENTRY_BYTES / (1024 * 1024)));
+    }
     Ok(s)
 }
 
@@ -100,5 +118,30 @@ mod tests {
     #[test]
     fn unescape_works() {
         assert_eq!(unescape_xml("a&amp;b&lt;c"), "a&b<c");
+    }
+
+    #[test]
+    fn zip_entry_over_cap_is_rejected() {
+        // zip 炸弹防线：解压后超 64MB 上限的条目（高压缩零流）按声明大小闸直接拒读。
+        let dir = std::env::temp_dir().join(format!(
+            "cmx-zipbomb-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bomb.docx");
+        let f = std::fs::File::create(&path).unwrap();
+        let mut w = zip::ZipWriter::new(f);
+        w.start_file("word/document.xml", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        let zeros = std::io::repeat(0u8).take(MAX_ENTRY_BYTES + 1);
+        std::io::copy(&mut { zeros }, &mut w).unwrap();
+        w.finish().unwrap();
+        let err = read_docx(&path).unwrap_err();
+        assert!(err.contains("超过"), "应报超限错误，实际：{err}");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

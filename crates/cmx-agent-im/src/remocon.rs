@@ -46,6 +46,11 @@ pub struct ImRemoconConfig {
     /// 鉴权，群聊多用户用，需在桌面端取码完成绑定）。
     #[serde(default = "default_true")]
     pub personal: bool,
+    /// 无人值守全权（默认 true）：IM 回合以回合级覆盖档执行——沙箱完全放行、从不弹审批卡
+    /// （审批档 Never：条件级人审被 danger 豁免，Always 级硬人审直接拒绝，不挂 300 秒）。
+    /// false = IM 回合跟随桌面全局两旋钮（桌面切了什么档 IM 就是什么档）。
+    #[serde(default = "default_true")]
+    pub full_access: bool,
     #[serde(default)]
     pub feishu: FeishuCreds,
     #[serde(default)]
@@ -131,6 +136,7 @@ impl Default for ImRemoconConfig {
             kind: "feishu".into(),
             active: Vec::new(),
             personal: true,
+            full_access: true,
             feishu: FeishuCreds::default(),
             qq: QqCreds::default(),
             wechat: WechatCreds::default(),
@@ -167,6 +173,7 @@ impl ImRemoconConfig {
             "kind": self.kind,
             "active": self.active(),
             "personal": self.personal,
+            "full_access": self.full_access,
             "app_id": self.feishu.app_id,
             "app_secret_masked": mask_secret(&self.feishu.app_secret),
             "base": self.feishu.base,
@@ -230,6 +237,10 @@ pub struct ResolvedIm {
     pub allow: Option<HashSet<String>>,
     /// 个人模式（im.json 来源读 `personal`；env 来源恒 false = 绑定模式，env 语义不变）。
     pub personal: bool,
+    /// 无人值守全权（im.json 来源读 `full_access`，默认 true；env 来源恒 true）：IM 回合以
+    /// 回合级覆盖档 [`cmx_agent_core::TurnPolicyOverride::FULL_ACCESS`] 执行——沙箱完全放行、
+    /// 从不打断（不弹审批卡）。false = IM 回合跟随桌面全局两旋钮（与桌面会话同档）。
+    pub full_access: bool,
     /// `"env"`（开发联调）或 `"im.json"`（GUI 面板）。
     pub source: &'static str,
 }
@@ -274,6 +285,7 @@ pub fn resolve(data_dir: Option<&Path>) -> Result<ResolvedIm, String> {
             channels: vec![ResolvedChannel { kind: cfg.kind, provider }],
             allow: cfg.allow,
             personal: false,
+            full_access: true,
             source: "env",
         });
     }
@@ -308,7 +320,7 @@ pub fn resolve(data_dir: Option<&Path>) -> Result<ResolvedIm, String> {
         if channels.is_empty() {
             return Err("im.json 未启用任何 IM 通道（请到 设置 → IM 遥控 勾选并填凭证）".into());
         }
-        return Ok(ResolvedIm { channels, allow, personal: cfg.personal, source: "im.json" });
+        return Ok(ResolvedIm { channels, allow, personal: cfg.personal, full_access: cfg.full_access, source: "im.json" });
     }
     Err("未配置 IM 遥控（env 与 im.json 均无，桌面壳为纯本地模式）".into())
 }
@@ -525,6 +537,7 @@ mod tests {
             kind: "qq".into(),
             active: vec!["qq".into(), "feishu".into()],
             personal: true,
+            full_access: false, // 回程断言默认序列化/读回无损（显式 false 更有区分度）
             feishu: FeishuCreds {
                 app_id: "cli_x".into(),
                 app_secret: "sec-secret-secret".into(),

@@ -70,6 +70,12 @@ pub struct GuardHints {
     /// 是否高危（仅在 danger-full-access 沙箱放行，否则拦截）。
     #[serde(default)]
     pub high_risk: bool,
+    /// 需要联网（ReadOnly 沙箱下由 [`crate::guard::SandboxGuard`] 中央拒绝——工具自检之外的第二道闸）。
+    #[serde(default)]
+    pub network: bool,
+    /// 有写副作用（ReadOnly 沙箱下由 SandboxGuard 中央拒绝；与工具内 allows_write 自检双保险）。
+    #[serde(default)]
+    pub writes: bool,
 }
 
 /// 工具规格（对齐 MCP：name/description/inputSchema + 守卫标注 x-guard）。

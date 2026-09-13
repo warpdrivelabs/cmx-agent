@@ -133,6 +133,7 @@ impl Tool for BrowserDoTool {
         .guard(GuardHints {
             requires_auth: Some("net:browser".into()),
             idempotent: false, // 交互有副作用（可能提交表单）
+            network: true,
             ..Default::default()
         })
     }

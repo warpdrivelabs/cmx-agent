@@ -4,10 +4,17 @@
 //! 客户端帧按 RFC6455 掩码；服务端帧解掩码。仅处理 text/continuation/ping/close。
 
 use serde_json::{Value, json};
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 const MAX_FRAME: usize = 64 * 1024 * 1024; // 64MB 上限，防超大 payload OOM
+/// TCP 连接超时：CDP 端口不通时快速失败（旧实现无限等）。
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// 单次读写超时：对端挂起（渲染进程假死/半开连接）时不再永久阻塞工具线程。
+const IO_TIMEOUT: Duration = Duration::from_secs(30);
+/// 单条 CDP 命令总预算（含等匹配 id 期间收到的所有事件帧）。
+const CALL_BUDGET: Duration = Duration::from_secs(60);
 
 pub struct Cdp {
     stream: TcpStream,
@@ -22,8 +29,9 @@ impl Cdp {
             Some(i) => (&rest[..i], &rest[i..]),
             None => (rest, "/"),
         };
-        let stream = TcpStream::connect(hostport)
+        let stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(hostport))
             .await
+            .map_err(|_| format!("连 CDP 端口超时（{hostport}，{CONNECT_TIMEOUT:?}）"))?
             .map_err(|e| format!("连 CDP 端口失败：{e}"))?;
         let mut c = Self { stream, next_id: 0 };
         c.handshake(hostport, path).await?;
@@ -40,7 +48,10 @@ impl Cdp {
         let mut buf = Vec::new();
         let mut b = [0u8; 1];
         loop {
-            let n = self.stream.read(&mut b).await.map_err(|e| e.to_string())?;
+            let n = tokio::time::timeout(IO_TIMEOUT, self.stream.read(&mut b))
+                .await
+                .map_err(|_| format!("CDP 握手读超时（{IO_TIMEOUT:?}）"))?
+                .map_err(|e| e.to_string())?;
             if n == 0 {
                 return Err("CDP 握手：连接关闭".into());
             }
@@ -87,6 +98,12 @@ impl Cdp {
     }
 
     async fn read_frame(&mut self) -> Result<(u8, Vec<u8>), String> {
+        tokio::time::timeout(IO_TIMEOUT, self.read_frame_raw())
+            .await
+            .map_err(|_| format!("CDP 读超时（{IO_TIMEOUT:?}）"))?
+    }
+
+    async fn read_frame_raw(&mut self) -> Result<(u8, Vec<u8>), String> {
         let mut h = [0u8; 2];
         self.stream.read_exact(&mut h).await.map_err(|e| e.to_string())?;
         let op = h[0] & 0x0f;
@@ -145,7 +162,8 @@ impl Cdp {
         self.stream.write_all(&Self::text_frame(&s)).await.map_err(|e| e.to_string())
     }
 
-    /// 发一条 CDP 命令，等匹配 id 的结果（忽略事件与其它 id）。
+    /// 发一条 CDP 命令，等匹配 id 的结果（忽略事件与其它 id）。总预算 [`CALL_BUDGET`]，
+    /// 超时即失败——旧实现按帧数上限轮询且单帧无超时，对端挂起时工具线程永久卡死。
     pub async fn call(&mut self, method: &str, params: Value, session: Option<&str>) -> Result<Value, String> {
         self.next_id += 1;
         let id = self.next_id;
@@ -153,16 +171,19 @@ impl Cdp {
         if let Some(s) = session {
             msg["sessionId"] = json!(s);
         }
-        self.send(&msg).await?;
-        for _ in 0..2000 {
-            let v = self.read_msg().await?;
-            if v.get("id").and_then(|x| x.as_i64()) == Some(id) {
-                if let Some(err) = v.get("error") {
-                    return Err(format!("CDP {method}: {err}"));
+        tokio::time::timeout(CALL_BUDGET, async {
+            self.send(&msg).await?;
+            loop {
+                let v = self.read_msg().await?;
+                if v.get("id").and_then(|x| x.as_i64()) == Some(id) {
+                    if let Some(err) = v.get("error") {
+                        return Err(format!("CDP {method}: {err}"));
+                    }
+                    return Ok(v.get("result").cloned().unwrap_or(Value::Null));
                 }
-                return Ok(v.get("result").cloned().unwrap_or(Value::Null));
             }
-        }
-        Err(format!("CDP {method}: 无响应"))
+        })
+        .await
+        .map_err(|_| format!("CDP {method} 超时（{CALL_BUDGET:?} 无响应）"))?
     }
 }

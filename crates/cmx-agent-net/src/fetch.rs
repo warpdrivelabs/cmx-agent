@@ -41,6 +41,7 @@ impl Tool for WebFetchTool {
         .guard(GuardHints {
             requires_auth: Some("net:fetch".into()),
             idempotent: true,
+            network: true,
             ..Default::default()
         })
     }

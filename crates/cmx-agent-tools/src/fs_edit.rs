@@ -30,6 +30,7 @@ impl Tool for FsEditTool {
         .guard(GuardHints {
             requires_auth: Some("fs:write".into()),
             idempotent: false,
+            writes: true,
             ..Default::default()
         })
     }

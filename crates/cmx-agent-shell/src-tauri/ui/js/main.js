@@ -51,6 +51,15 @@ async function refreshUser(){
 function logoutCancel(){ document.getElementById("logout-overlay").classList.add("hidden"); }
 async function logoutConfirm(){
   logoutCancel();
+  // 换号清场：先中断所有会话在途回合（后端取消含打断审批等待 + 前端停流 + 清排队），
+  // 防旧账号发起的回合在登录新账号后继续推进/回灌到界面。IM 侧由后端登出钩子停桥兜底。
+  try{
+    TABS.filter(t=>t.kind==="session").forEach(t=>{
+      try{ call({cmd:"cancel_session",session_id:t.sessionId}); }catch(e){}
+      try{ if(t._streamCancel) t._streamCancel(); }catch(e){}
+      t._queue=[];
+    });
+  }catch(e){}
   try{ await call({cmd:"logout"}); }catch(e){}
   CURRENT_USER = null;
   // 原生壳：回到登录窗（隐藏主窗、显示登录窗）；Web 壳：跳登录页。

@@ -52,6 +52,7 @@ impl Tool for ShellTool {
                 requires_auth: Some("exec".into()),
                 requires_approval: cmx_agent_core::tool::Approval::Conditional, // 执行命令前人在环审批（X4）
                 idempotent: false,
+                writes: true, // 命令可写盘：ReadOnly 下随 SandboxGuard 中央拒绝
                 ..Default::default()
             })
     }

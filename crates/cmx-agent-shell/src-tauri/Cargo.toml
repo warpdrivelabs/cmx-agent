@@ -38,5 +38,9 @@ tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# 窗口默认尺寸收敛进真实工作区：GetMonitorInfoW 取 rcWork（任务栏/缩放精确），仅 Windows。
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Gdi"] }
+
 [features]
 custom-protocol = ["tauri/custom-protocol"]

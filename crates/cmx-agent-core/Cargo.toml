@@ -19,6 +19,9 @@ uuid.workspace = true
 tracing.workspace = true
 # 回合内多工具调用并发执行（真并行 fan-out）用 join_all。与 cmx-agent-model 同版本，复用离线缓存。
 futures-util = "0.3"
+# 回合主体随调用链下传（task_local，TURN_SUBJECT）：task 子智能体以同一身份过守卫。
+# 内核本身仍无 I/O；tokio 在全工作区已是共同底座，此处只取 task_local 宏。
+tokio.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true

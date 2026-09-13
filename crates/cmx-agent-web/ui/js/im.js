@@ -27,6 +27,8 @@ async function scfgOpen(){
   const active = (d.active&&d.active.length) ? d.active : (d.kind?[d.kind]:[]);
   _scfgEnabled = { feishu:active.includes("feishu"), qq:active.includes("qq"), wechat:active.includes("wechat") };
   document.getElementById("scfg-enabled").checked= d.enabled!==false;
+  // 无人值守全权（默认开）：旧配置无该字段时后端 masked()/默认 JSON 均回 true。
+  document.getElementById("scfg-full-access").checked = d.full_access!==false;
   document.getElementById("scfg-app-id").value  = d.app_id||"";
   document.getElementById("scfg-app-secret").value = d.app_secret_masked||"";
   document.getElementById("scfg-base").value    = d.base||"";
@@ -221,6 +223,7 @@ async function imcfgSave(){
     active,
     enabled:document.getElementById("scfg-enabled").checked,
     personal:true,
+    full_access:document.getElementById("scfg-full-access").checked,
     app_id:document.getElementById("scfg-app-id").value.trim(),
     base:document.getElementById("scfg-base").value,
     app_secret_action:_scfgSecretUnlocked?"set":"keep",

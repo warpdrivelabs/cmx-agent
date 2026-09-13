@@ -226,6 +226,7 @@ impl Tool for BrowserReadTool {
         .guard(GuardHints {
             requires_auth: Some("net:browser".into()),
             idempotent: true,
+            network: true,
             ..Default::default()
         })
     }
@@ -291,6 +292,8 @@ impl Tool for BrowserScreenshotTool {
         .guard(GuardHints {
             requires_auth: Some("net:browser".into()),
             idempotent: false,
+            network: true,
+            writes: true, // 截图落盘工作区
             ..Default::default()
         })
     }

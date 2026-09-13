@@ -98,6 +98,7 @@ async fn im_mode(data_dir: Option<String>) -> anyhow::Result<()> {
         }
         let bridge = cmx_agent_im::ImBridge::new(Arc::clone(&app), Arc::clone(&ch.provider), kind, allow.clone())
             .with_personal(personal)
+            .with_full_access(resolved.full_access)
             .with_bindings(Arc::new(cmx_agent_im::PortalBindingResolver::new(portal_base.clone())));
         let (_stop_tx, stop_rx) = tokio::sync::watch::channel(false); // CLI 无热重载，信号永不置位
         handles.push(tokio::spawn(async move { bridge.run(stop_rx).await }));

@@ -17,6 +17,14 @@ use crate::session::Session;
 use crate::tool::{Approval, Tool, ToolCall, ToolCtx, ToolRegistry, ToolResult, ToolSpec};
 use serde::{Deserialize, Serialize};
 
+tokio::task_local! {
+    /// 回合主体 task-local：`Some(主体)` = 本回合以该身份过守卫（IM 绑定场景）。
+    /// 由 [`Agent::run_turn_observed_as_cancellable`] 在回合外层置位；`task` 子智能体工具
+    /// 经 `TURN_SUBJECT.try_with(|s| s.clone()).ok().flatten()` 读取（作用域外为 None），
+    /// 并显式传给子回合——子智能体不再回落桌面 `policy.subject` 过守卫。
+    pub static TURN_SUBJECT: Option<Subject>;
+}
+
 /// 审批策略（两旋钮之「许可」——何时问你）。对齐 codex `approval_policy`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -28,6 +36,31 @@ pub enum ApprovalPolicy {
     OnRequest,
     /// 逢写必问：任何非幂等工具都要审批（谨慎档）。
     UnlessTrusted,
+}
+
+/// 回合级权限档覆盖：本回合的沙箱/审批两旋钮以覆盖为准（其余 Policy 字段照抄全局档）。
+/// 只作用于显式 scope 的那个回合任务树（含 `task` 子智能体——子回合在同任务树上继承），
+/// **不写共享全局档**，桌面并发回合互不影响。IM 无人值守「默认全权」即经它实现。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TurnPolicyOverride {
+    pub sandbox: SandboxMode,
+    pub approval: ApprovalPolicy,
+}
+
+impl TurnPolicyOverride {
+    /// 无人值守全权档（IM 遥控默认）：沙箱完全放行 + 从不打断。条件级人审被
+    /// [`crate::guard::ApprovalGuard`] 的 danger 豁免跳过（不弹卡）；Always 级硬人审被
+    /// `policy:never` 直接拒绝——宁拒不挂，无人值守没有「等 300 秒超时」的受害者。
+    pub const FULL_ACCESS: Self = Self {
+        sandbox: SandboxMode::DangerFullAccess,
+        approval: ApprovalPolicy::Never,
+    };
+}
+
+tokio::task_local! {
+    /// 回合级权限档覆盖（见 [`TurnPolicyOverride`]）。仅在显式 scope 的回合任务树内可见；
+    /// 回合流程内的守卫/审批判定经 [`Agent::effective_policy`] 读取，作用域外回落全局档。
+    pub static TURN_POLICY_OVERRIDE: TurnPolicyOverride;
 }
 
 /// 人在环审批者（③ 人在环 的解决方；真实实现接**交互式前端审批卡片** / cmx-flow 审批 / IM 二次确认）。
@@ -164,6 +197,18 @@ impl Agent {
         *self.policy.write().expect("policy lock poisoned") = p;
     }
 
+    /// 回合内生效的策略快照：任务树上挂了 [`TURN_POLICY_OVERRIDE`] 时，其 sandbox/approval
+    /// 盖过全局档（IM 无人值守全权等回合级场景），其余字段照抄全局档。回合流程内的
+    /// 守卫/审批判定一律经此取值；全局档直读只允许在回合外（UI 展示、set_policy）。
+    fn effective_policy(&self) -> Policy {
+        let mut p = self.policy();
+        if let Ok(ov) = TURN_POLICY_OVERRIDE.try_with(|ov| *ov) {
+            p.sandbox = ov.sandbox;
+            p.approval = ov.approval;
+        }
+        p
+    }
+
     pub fn tools(&self) -> &ToolRegistry {
         &self.tools
     }
@@ -217,12 +262,54 @@ impl Agent {
     }
 
     /// [`Self::run_turn_observed_as`] 的可中断版：不传旗标时行为完全一致。
+    ///
+    /// 回合主体经 [`TURN_SUBJECT`] task-local 随调用链下传：`task` 子智能体工具读取当前回合主体
+    /// 并显式传给子回合——IM 绑定用户派发的子任务不再回落 `policy.subject`（桌面主体）过守卫。
     pub async fn run_turn_observed_as_cancellable(
         &self,
         session: &mut Session,
         user_input: &str,
         observer: Option<&dyn crate::model::TurnObserver>,
         turn_subject: Option<&crate::guard::Subject>,
+        cancel: Option<&TurnCancel>,
+        roots: Option<&[std::path::PathBuf]>,
+    ) -> AgentResult<TurnOutcome> {
+        let subject = turn_subject.cloned();
+        TURN_SUBJECT
+            .scope(subject, self.run_turn_inner(session, user_input, observer, turn_subject, cancel, roots))
+            .await
+    }
+
+    /// [`Self::run_turn_observed_as_cancellable`] 的回合级权限档覆盖版：`Some(覆盖档)` 时
+    /// 本回合（含 `task` 子智能体——同任务树继承 task-local）的沙箱/审批以覆盖为准，
+    /// 不写全局档；`None` 与原方法完全一致。IM 无人值守「默认全权」由此实现——
+    /// IM 桥驱动的回合全权执行，桌面回合仍走全局两旋钮。
+    // 与 run_turn_observed_as_cancellable 同形 + 1 个覆盖档参数：展平签名比拆结构体更贴调用侧。
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_turn_observed_as_cancellable_with_policy(
+        &self,
+        session: &mut Session,
+        user_input: &str,
+        observer: Option<&dyn crate::model::TurnObserver>,
+        turn_subject: Option<&crate::guard::Subject>,
+        cancel: Option<&TurnCancel>,
+        roots: Option<&[std::path::PathBuf]>,
+        policy_override: Option<TurnPolicyOverride>,
+    ) -> AgentResult<TurnOutcome> {
+        let inner =
+            self.run_turn_observed_as_cancellable(session, user_input, observer, turn_subject, cancel, roots);
+        match policy_override {
+            Some(ov) => TURN_POLICY_OVERRIDE.scope(ov, inner).await,
+            None => inner.await,
+        }
+    }
+
+    async fn run_turn_inner(
+        &self,
+        session: &mut Session,
+        user_input: &str,
+        observer: Option<&dyn crate::model::TurnObserver>,
+        turn_subject: Option<&Subject>,
         cancel: Option<&TurnCancel>,
         roots: Option<&[std::path::PathBuf]>,
     ) -> AgentResult<TurnOutcome> {
@@ -241,7 +328,7 @@ impl Agent {
             if cancel.is_some_and(|c| c.is_cancelled()) {
                 break StopReason::Stopped;
             }
-            if steps >= self.policy().max_steps {
+            if steps >= self.effective_policy().max_steps {
                 break StopReason::MaxSteps;
             }
             steps += 1;
@@ -287,7 +374,7 @@ impl Agent {
             // ②–⑥ 处理工具调用：一步内的多个调用**并发执行**（真并行 fan-out）。
             // 前置(路由/守卫/审批)与结果回灌仍按序（借用 &mut session + 保持日志有序），
             // 只有工具体 invoke() 并发——子智能体/网络 I/O 型调用总耗时≈最慢者而非累加。
-            self.handle_tool_calls_as(session, &resp.tool_calls, turn_subject, roots).await;
+            self.handle_tool_calls_as(session, &resp.tool_calls, turn_subject, roots, cancel).await;
 
             if cancel.is_some_and(|c| c.is_cancelled()) {
                 break StopReason::Stopped;
@@ -325,6 +412,7 @@ impl Agent {
         calls: &[ToolCall],
         turn_subject: Option<&crate::guard::Subject>,
         roots: Option<&[std::path::PathBuf]>,
+        cancel: Option<&TurnCancel>,
     ) {
         /// 通过前置、待并发执行的工具调用。
         struct Pending<'c> {
@@ -333,12 +421,19 @@ impl Agent {
             spec: ToolSpec,
         }
 
-        // 本批工具调用的策略快照（两旋钮运行时可切；一批内取一致值）。
-        let policy = self.policy();
+        // 本批工具调用的策略快照（两旋钮运行时可切；一批内取一致值；回合级覆盖优先）。
+        let policy = self.effective_policy();
         let subject = turn_subject.unwrap_or(&policy.subject);
         // —— ①–④ 前置(串行)：落库调用、路由、pre 守卫、审批 ——
         let mut pending: Vec<Pending<'_>> = Vec::new();
         for call in calls {
+            // 取消旗标在批次内也生效：中断发生在本批第 N 个调用的审批等待时，
+            // 第 N+1.. 个调用直接以取消回灌，不再弹下一张审批卡（旧实现继续走完本批，
+            // 人走开后每张卡各挂 300s 超时）。
+            if cancel.is_some_and(|c| c.is_cancelled()) {
+                self.push_result(session, &call.id, ToolResult::err("cancelled by user"));
+                continue;
+            }
             session
                 .log
                 .append(EventKind::ToolInvoked { call: call.clone() });
@@ -478,7 +573,7 @@ impl Agent {
         tool: &str,
         reason: &str,
     ) -> bool {
-        if self.policy().approval == ApprovalPolicy::Never {
+        if self.effective_policy().approval == ApprovalPolicy::Never {
             // 不打断策略：视 NeedApproval 为拒绝
             session.log.append(EventKind::ApprovalRequested {
                 call_id: call.id.clone(),

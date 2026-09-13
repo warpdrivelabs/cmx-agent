@@ -9,13 +9,13 @@ use std::sync::Arc;
 use cmx_agent_connectors::{AuthConfig, AuthProvider, ConnectorConfig, ConnectorRegistry};
 use cmx_agent_core::{
     Agent, ApprovalGuard, ApprovalPolicy, Approver, AuthGuard, AutoApprover, GuardPipeline,
-    HighRiskGuard, ModelSeam, Policy, SandboxMode, Subject,
+    HighRiskGuard, ModelSeam, Policy, SandboxGuard, SandboxMode, Subject,
 };
 use cmx_agent_tools::default_registry;
 
 use crate::app::AgentApp;
 use crate::error::AppResult;
-use crate::store::FileSessionStore;
+use crate::store::{FileSessionStore, SessionStore};
 
 /// 桌面壳后端装配器。
 pub struct DesktopAppBuilder {
@@ -178,6 +178,7 @@ impl DesktopAppBuilder {
         let mut guards = GuardPipeline::new();
         guards
             .add(Arc::new(auth_guard))
+            .add(Arc::new(SandboxGuard))
             .add(Arc::new(HighRiskGuard))
             .add(Arc::new(ApprovalGuard));
 
@@ -284,14 +285,24 @@ impl DesktopAppBuilder {
         let agent = Arc::new(agent);
         sub_handle.attach(&agent); // 注入弱引用，task 工具据此跑子回合
 
-        let data_dir = self.data_dir.clone();
-        let store = FileSessionStore::new(data_dir)?;
+        // 子会话日志落库（审计）：子回合事件 append 到 sessions/subtask-*/log.jsonl（不写 meta，
+        // UI 列表不显示）；失败仅 warn——审计是尽力而为，不得让子任务因落盘失败而报错。
+        let store = Arc::new(FileSessionStore::new(&self.data_dir)?);
+        {
+            let store_for_sink = store.clone();
+            sub_handle.attach_log_sink(Arc::new(move |id, events| {
+                if let Err(e) = store_for_sink.append_events(id, events) {
+                    eprintln!("[subagent] 子会话 {id} 日志落库失败（审计留痕缺失）：{e}");
+                }
+            }));
+        }
+
         let workspaces = crate::workspace::WorkspaceRegistry::load_or_init(
             &self.data_dir,
             Some(&self.workdir),
         )?;
         workspaces.set_allowed_roots(&agent)?;
-        let mut app = AgentApp::new(agent, Arc::new(store))
+        let mut app = AgentApp::new(agent, store)
             .with_token_store(token_store)
             .with_plugins(plugin_summaries)
             .with_plugins_dir(plugins_dir)

@@ -62,13 +62,17 @@ function closeTab(id){
   const t=TABS[idx];
   // 通知进行中的流停止渲染（doSendTab 回调检查 _cancelled flag）
   if(t._streamCancel) t._streamCancel();
+  // 关 tab 同时取消后端回合（含打断审批等待）：旧实现只停前端渲染，
+  // 后端回合继续跑完并落库——用户视角「关了还在烧」，还会弹审批卡。
+  if(t.kind==="session" && t._busy){ try{ call({cmd:"cancel_session",session_id:t.sessionId}); }catch(e){} }
   t.view.remove(); TABS.splice(idx,1);
   if(ACTIVE===id){
     // 激活相邻 tab
     const next=TABS[idx] || TABS[idx-1];
     if(next) activateTab(next.id); else { ACTIVE=null; CURRENT=null; renderTabs(); document.getElementById("inp").focus(); }
   } else { renderTabs(); }
-  refreshTasks();
+  // 防抖合并刷新（closeAll/closeOthers 逐 tab 走到这里，直调会并发多份 refreshTasks 交错重复渲染）
+  scheduleRefreshTasks();
 }
 function closeOthers(id){ TABS.filter(t=>t.id!==id).map(t=>t.id).forEach(closeTab); activateTab(id); }
 function closeRight(id){ const idx=TABS.findIndex(t=>t.id===id); TABS.slice(idx+1).map(t=>t.id).forEach(closeTab); }

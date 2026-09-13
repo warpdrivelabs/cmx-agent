@@ -118,6 +118,7 @@ impl Tool for ComputerUseTool {
         .guard(GuardHints {
             requires_auth: Some("net:browser".into()),
             idempotent: false, // 会点击/提交，有副作用
+            network: true,
             ..Default::default()
         })
     }

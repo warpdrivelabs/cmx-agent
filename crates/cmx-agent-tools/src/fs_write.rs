@@ -27,6 +27,7 @@ impl Tool for FsWriteTool {
         .guard(GuardHints {
             requires_auth: Some("fs:write".into()),
             idempotent: true,
+            writes: true,
             ..Default::default()
         })
     }

@@ -145,7 +145,7 @@ impl Tool for XlsxWriteTool {
             },
             "required": ["path", "sheets"]
         }))
-        .guard(GuardHints { requires_auth: Some("fs:write".into()), idempotent: false, ..Default::default() })
+        .guard(GuardHints { requires_auth: Some("fs:write".into()), idempotent: false, writes: true, ..Default::default() })
     }
 
     async fn invoke(&self, input: Value, ctx: &ToolCtx<'_>) -> Result<ToolResult, ToolError> {
@@ -202,7 +202,7 @@ impl Tool for PptxWriteTool {
             },
             "required": ["path", "slides"]
         }))
-        .guard(GuardHints { requires_auth: Some("fs:write".into()), idempotent: false, ..Default::default() })
+        .guard(GuardHints { requires_auth: Some("fs:write".into()), idempotent: false, writes: true, ..Default::default() })
     }
 
     async fn invoke(&self, input: Value, ctx: &ToolCtx<'_>) -> Result<ToolResult, ToolError> {

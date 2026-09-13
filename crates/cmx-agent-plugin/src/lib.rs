@@ -107,6 +107,9 @@ impl PluginManifest {
             },
             idempotent: !self.requires_approval,
             high_risk: self.requires_approval,
+            // 插件（http/command/wasm）能力任意：按可联网+可写标注，ReadOnly 沙箱中央全禁（最保守）。
+            network: true,
+            writes: true,
         }
     }
     fn tool_spec(&self) -> ToolSpec {
@@ -411,6 +414,8 @@ impl Tool for PluginInstallTool {
             requires_approval: cmx_agent_core::tool::Approval::Always,
             idempotent: false,
             high_risk: true,
+            network: true, // 安装=市场拉取 + 落盘插件目录
+            writes: true,
         })
     }
     async fn invoke(&self, input: Value, _ctx: &ToolCtx<'_>) -> Result<ToolResult, ToolError> {

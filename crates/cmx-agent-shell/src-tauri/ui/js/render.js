@@ -348,7 +348,7 @@ function fmtDur(ms){
 function closeReasoning(log){
   if(log._rraf){ cancelAnimationFrame(log._rraf); log._rraf=null; }
   if(log._rcard){
-    log._rcard.classList.remove("streaming");
+    log._rcard.classList.remove("streaming","retrying");
     log._rcard.classList.add("closed");                 // 正文/收尾开始 → 自动折叠（opencode 行为）
     const head=log._rcard.querySelector(".rh-txt");
     if(head){ head.classList.remove("shimmer"); head.textContent="思考"; }
@@ -432,8 +432,18 @@ function renderEvent(log, ev, sid){
     return;
   }
   if(k==="reasoning_reset"){
+    // 流中断重试：**保留已显示的思考正文**——这是用户唯一能看到的思考内容，清了就只剩空卡
+    // （网关重试失败时下文不再来，空卡无解）。置灰 + 标「重试中」；缓冲作废，下一轮尝试的
+    // delta 从头覆盖显示（后端 StreamAcc 也是按尝试重置的，两次尝试内容本就不该拼接）。
+    // 注意先把挂起的 rAF 同步落定再取消：reset 可能在任何一帧绘制前到达，直取消息丢整段正文。
     if(log._rraf){ cancelAnimationFrame(log._rraf); log._rraf=null; }
-    log._rraw=""; if(log._rsb) log._rsb.textContent="";
+    if(log._rsb) log._rsb.textContent=log._rraw||log._rsb.textContent;
+    log._rraw="";
+    if(log._rcard){
+      log._rcard.classList.add("retrying");
+      const dur=log._rcard.querySelector(".rh-dur");
+      if(dur) dur.textContent="· 重试中…";
+    }
     return;
   }
   if(k==="reasoning_delta" || k==="reasoning"){
@@ -443,9 +453,11 @@ function renderEvent(log, ev, sid){
       if(log._liveRDone!=null && t && t===log._liveRDone){ log._liveRDone=null; return; }
     }
     closeCtxGroup(log);
+    hideTyping(log);                                    // 思考卡本身就是可见输出：撤「思考中」占位行
     const card=ensureReasoningCard(log, log._lastTs||Date.now());
     card.classList.add("streaming");
-    card.classList.remove("closed");
+    card.classList.remove("closed","retrying");
+    if(k!=="reasoning"){ const d=card.querySelector(".rh-dur"); if(d) d.textContent=""; }  // 撤「重试中」
     if(k==="reasoning"){ log._rraw=ev.text||""; }
     else { log._rraw=(log._rraw||"")+(ev.text||""); log._liveR=true; }
     if(k==="reasoning"){
@@ -453,7 +465,7 @@ function renderEvent(log, ev, sid){
       if(log._rsb) log._rsb.textContent=log._rraw;
     } else if(!log._rraf){
       log._rraf=requestAnimationFrame(()=>{ log._rraf=null;
-        if(log._rsb) log._rsb.textContent=log._rraw;
+        if(log._rsb){ log._rsb.textContent=log._rraw; log._rsb.scrollTop=log._rsb.scrollHeight; }  // 正文超 260px 时跟随到底，所见即所想
         log.scrollTop=1e9; });
     }
     log.scrollTop=1e9; return;

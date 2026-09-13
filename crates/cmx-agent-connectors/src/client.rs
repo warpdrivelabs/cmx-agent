@@ -29,6 +29,39 @@ fn client() -> &'static reqwest::Client {
     })
 }
 
+/// 响应体上限：连接器对端是内网 cmx 服务，但被反代/故障/恶意端点吐超大 body 时
+/// 旧实现 `resp.json()` 无限额整读进内存（OOM 面）。超限报 Transport 错（回灌模型自愈）。
+const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
+
+/// 分块读响应体并硬限上限，再反序列化 JSON（替代无上限的 `resp.json()`）。
+async fn json_capped(mut resp: reqwest::Response) -> Result<Value, ClientError> {
+    // Content-Length 预检（可伪造，仅省流）；真实上限靠分块累计。
+    if let Some(len) = resp.content_length()
+        && len > MAX_BODY_BYTES as u64
+    {
+        return Err(ClientError::Transport(format!(
+            "响应体 {}MB 超过 {}MB 上限",
+            len / (1024 * 1024),
+            MAX_BODY_BYTES / (1024 * 1024)
+        )));
+    }
+    let mut buf: Vec<u8> = Vec::with_capacity(8 * 1024);
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|e| ClientError::Transport(e.to_string()))?
+    {
+        if buf.len() + chunk.len() > MAX_BODY_BYTES {
+            return Err(ClientError::Transport(format!(
+                "响应体超过 {}MB 上限",
+                MAX_BODY_BYTES / (1024 * 1024)
+            )));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&buf).map_err(|e| ClientError::Decode(e.to_string()))
+}
+
 /// 一个 cmx 服务的调用句柄。
 #[derive(Debug, Clone)]
 pub struct CmxServiceClient {
@@ -113,10 +146,7 @@ impl CmxServiceClient {
         if !status.is_success() {
             return Err(ClientError::Http(status.as_u16()));
         }
-        let body: Value = resp
-            .json()
-            .await
-            .map_err(|e| ClientError::Decode(e.to_string()))?;
+        let body: Value = json_capped(resp).await?;
         unwrap_envelope(body)
     }
 
@@ -144,10 +174,7 @@ impl CmxServiceClient {
         if !status.is_success() {
             return Err(ClientError::Http(status.as_u16()));
         }
-        let body: Value = resp
-            .json()
-            .await
-            .map_err(|e| ClientError::Decode(e.to_string()))?;
+        let body: Value = json_capped(resp).await?;
         unwrap_envelope(body)
     }
 
@@ -164,9 +191,7 @@ impl CmxServiceClient {
         if !status.is_success() {
             return Err(ClientError::Http(status.as_u16()));
         }
-        resp.json()
-            .await
-            .map_err(|e| ClientError::Decode(e.to_string()))
+        json_capped(resp).await
     }
 
     /// POST 一段 JSON body 到返回 `{code,msg,data}` 信封的端点，成功取 `data`。
@@ -183,10 +208,7 @@ impl CmxServiceClient {
             .map_err(|e| ClientError::Transport(e.to_string()))?;
         // 认证端点用信封 code 表达 401（HTTP 常为 200）；仅当 HTTP 5xx/连接层失败才当传输错。
         let status = resp.status();
-        let parsed: Value = resp
-            .json()
-            .await
-            .map_err(|e| ClientError::Decode(e.to_string()))?;
+        let parsed: Value = json_capped(resp).await?;
         // 若 body 是信封则按 code 解；否则遇 HTTP 错再报 Http。
         match unwrap_envelope(parsed) {
             Ok(v) => Ok(v),
@@ -211,10 +233,7 @@ impl CmxServiceClient {
             .await
             .map_err(|e| ClientError::Transport(e.to_string()))?;
         let status = resp.status();
-        let parsed: Value = resp
-            .json()
-            .await
-            .map_err(|e| ClientError::Decode(e.to_string()))?;
+        let parsed: Value = json_capped(resp).await?;
         match unwrap_envelope(parsed) {
             Ok(v) => Ok(v),
             Err(e) => {
@@ -244,10 +263,7 @@ impl CmxServiceClient {
             .send()
             .await
             .map_err(|e| ClientError::Transport(e.to_string()))?;
-        let parsed: Value = resp
-            .json()
-            .await
-            .map_err(|e| ClientError::Decode(e.to_string()))?;
+        let parsed: Value = json_capped(resp).await?;
         // body 是信封则按 code 解——业务错误可能伴随 4xx 状态（如改密策略不符回 400），
         // 此时 Envelope{msg}（中文提示）比裸 Http(status) 有用得多，故无条件优先信封。
         unwrap_envelope(parsed)
@@ -264,10 +280,7 @@ impl CmxServiceClient {
             .await
             .map_err(|e| ClientError::Transport(e.to_string()))?;
         let status = resp.status();
-        let parsed: Value = resp
-            .json()
-            .await
-            .map_err(|e| ClientError::Decode(e.to_string()))?;
+        let parsed: Value = json_capped(resp).await?;
         match unwrap_envelope(parsed) {
             Ok(v) => Ok(v),
             Err(e) => {

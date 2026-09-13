@@ -7,11 +7,16 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use cmx_agent_core::guard::Subject;
 use serde_json::json;
 
 use crate::client::CmxServiceClient;
+
+/// 判定缓存 TTL：到期视为未命中重新判定——权限在门户侧被收回后，进程内
+/// 旧缓存最多再放行 TTL 窗口（旧实现缓存终身有效，直到重启）。
+pub const PEP_CACHE_TTL: Duration = Duration::from_secs(300);
 
 /// 把 `scope:action` 权限串映射为 PDP 的 (kind, action)。
 /// action 归一到 read/write/execute；kind 用 scope（flow/onto/report/fs/net…）。
@@ -32,11 +37,14 @@ fn perm_to_resource(perm: &str) -> (String, String) {
     (scope.to_string(), action.to_string())
 }
 
-/// 数据权限 PEP：持 dataauth 客户端 + 判定缓存。
+/// 判定缓存：(主体, 权限) → (放行?, 写入时刻)。
+type PepCache = Arc<Mutex<HashMap<(String, String), (bool, Instant)>>>;
+
+/// 数据权限 PEP：持 dataauth 客户端 + 判定缓存（带 TTL，见 [`PEP_CACHE_TTL`]）。
 #[derive(Clone)]
 pub struct DataAuthPep {
     client: Arc<CmxServiceClient>,
-    cache: Arc<Mutex<HashMap<(String, String), bool>>>,
+    cache: PepCache,
     /// true=严格执行（缓存未命中拒绝）；false=宽松（未命中放行，仅缓存已知拒绝）。
     enforce: bool,
 }
@@ -69,7 +77,7 @@ impl DataAuthPep {
         self.cache
             .lock()
             .expect("pep cache")
-            .insert((subject.user.clone(), perm.to_string()), allowed);
+            .insert((subject.user.clone(), perm.to_string()), (allowed, Instant::now()));
         allowed
     }
 
@@ -87,13 +95,17 @@ impl DataAuthPep {
         if !ENFORCED_PERMS.contains(&perm) {
             return true; // 读类/非敏感：默认放行
         }
-        match self
-            .cache
-            .lock()
-            .expect("pep cache")
-            .get(&(subject.user.clone(), perm.to_string()))
-        {
-            Some(v) => *v,
+        let fresh = |v: Option<&(bool, Instant)>| match v {
+            Some((allowed, at)) if at.elapsed() < PEP_CACHE_TTL => Some(*allowed),
+            _ => None, // 未命中或已过期：按未命中走 fail-closed/open
+        };
+        match fresh(
+            self.cache
+                .lock()
+                .expect("pep cache")
+                .get(&(subject.user.clone(), perm.to_string())),
+        ) {
+            Some(v) => v,
             None => !self.enforce,
         }
     }
@@ -132,5 +144,25 @@ mod tests {
         assert!(!strict.cached_allow(&subj, "flow:write"), "严格模式未命中应拒绝");
         let loose = DataAuthPep::new("http://127.0.0.1:9", "default", "alice", false);
         assert!(loose.cached_allow(&subj, "flow:write"), "宽松模式未命中应放行");
+    }
+
+    #[test]
+    fn expired_cache_entry_is_treated_as_miss() {
+        // 权限收回后旧 allow 不得终身放行：过期条目按未命中走（严格拒绝 / 宽松放行）。
+        let subj = Subject::new("carol");
+        let strict = DataAuthPep::new("http://127.0.0.1:9", "default", "carol", true);
+        let key = (subj.user.clone(), "flow:write".to_string());
+        strict
+            .cache
+            .lock()
+            .expect("pep cache")
+            .insert(key.clone(), (true, Instant::now() - PEP_CACHE_TTL - Duration::from_secs(1)));
+        assert!(!strict.cached_allow(&subj, "flow:write"), "过期 allow 应按未命中拒绝");
+        strict
+            .cache
+            .lock()
+            .expect("pep cache")
+            .insert(key.clone(), (true, Instant::now()));
+        assert!(strict.cached_allow(&subj, "flow:write"), "新鲜 allow 应放行");
     }
 }

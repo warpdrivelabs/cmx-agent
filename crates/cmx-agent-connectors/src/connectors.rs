@@ -212,6 +212,8 @@ impl Tool for FlowStartInstance {
             // 企业写=仅审批门：Approval::Always 经 X4 人工批准后执行；不标 high_risk，
             // 否则 HighRiskGuard 会在桌面壳 WorkspaceWrite 沙箱下于审批前硬拦（走不到审批卡）。
             high_risk: false,
+            network: true, // 连接器走 HTTP 调企业引擎：ReadOnly 沙箱中央禁网
+            writes: false, // 写副作用由 PEP/审批门管，不进 ReadOnly 写闸
         })
     }
 
@@ -269,6 +271,8 @@ impl Tool for FlowCompleteTask {
             // 企业写=仅审批门：Approval::Always 经 X4 人工批准后执行；不标 high_risk，
             // 否则 HighRiskGuard 会在桌面壳 WorkspaceWrite 沙箱下于审批前硬拦（走不到审批卡）。
             high_risk: false,
+            network: true, // 连接器走 HTTP 调企业引擎：ReadOnly 沙箱中央禁网
+            writes: false, // 写副作用由 PEP/审批门管，不进 ReadOnly 写闸
         })
     }
 
@@ -332,6 +336,8 @@ impl Tool for OntoPutObject {
             // 企业写=仅审批门：Approval::Always 经 X4 人工批准后执行；不标 high_risk，
             // 否则 HighRiskGuard 会在桌面壳 WorkspaceWrite 沙箱下于审批前硬拦（走不到审批卡）。
             high_risk: false,
+            network: true, // 连接器走 HTTP 调企业引擎：ReadOnly 沙箱中央禁网
+            writes: false, // 写副作用由 PEP/审批门管，不进 ReadOnly 写闸
         })
     }
 
@@ -388,6 +394,8 @@ impl Tool for OntoExecuteAction {
             // 企业写=仅审批门：Approval::Always 经 X4 人工批准后执行；不标 high_risk，
             // 否则 HighRiskGuard 会在桌面壳 WorkspaceWrite 沙箱下于审批前硬拦（走不到审批卡）。
             high_risk: false,
+            network: true, // 连接器走 HTTP 调企业引擎：ReadOnly 沙箱中央禁网
+            writes: false, // 写副作用由 PEP/审批门管，不进 ReadOnly 写闸
         })
     }
 
@@ -442,6 +450,8 @@ impl Tool for ReportCompute {
             // 企业写=仅审批门：Approval::Always 经 X4 人工批准后执行；不标 high_risk，
             // 否则 HighRiskGuard 会在桌面壳 WorkspaceWrite 沙箱下于审批前硬拦（走不到审批卡）。
             high_risk: false,
+            network: true, // 连接器走 HTTP 调企业引擎：ReadOnly 沙箱中央禁网
+            writes: false, // 写副作用由 PEP/审批门管，不进 ReadOnly 写闸
         })
     }
 
@@ -723,6 +733,8 @@ impl Tool for EngineChain {
             // 企业写=仅审批门：Approval::Always 经 X4 人工批准后执行；不标 high_risk，
             // 否则 HighRiskGuard 会在桌面壳 WorkspaceWrite 沙箱下于审批前硬拦（走不到审批卡）。
             high_risk: false,
+            network: true, // 连接器走 HTTP 调企业引擎：ReadOnly 沙箱中央禁网
+            writes: false, // 写副作用由 PEP/审批门管，不进 ReadOnly 写闸
         })
     }
 

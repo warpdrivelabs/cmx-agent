@@ -78,3 +78,18 @@ fn restore_without_persist_path_is_false() {
     let restored = rt.block_on(app.try_restore_session());
     assert!(!restored);
 }
+
+#[test]
+fn logout_runs_registered_hooks() {
+    // 登出钩子（壳注册，如 Tauri 壳停 IM 桥）：logout 须逐个触发。
+    let tmp = TempDir::new("logout-hook");
+    let model = std::sync::Arc::new(cmx_agent_core::MockModel::saying("hi"));
+    let mut app = cmx_agent_app::DesktopAppBuilder::new(tmp.0.join("w"), tmp.0.clone(), model)
+        .build()
+        .unwrap();
+    let fired = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = fired.clone();
+    app.add_logout_hook(Box::new(move || flag.store(true, std::sync::atomic::Ordering::Relaxed)));
+    app.logout();
+    assert!(fired.load(std::sync::atomic::Ordering::Relaxed), "logout 应触发注册的钩子");
+}

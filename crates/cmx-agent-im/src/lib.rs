@@ -109,6 +109,11 @@ pub struct ImBridge {
     /// 自己的桌面，App ID/Secret 配好 + 登录即用，无需验证码绑定。⚠ 任何能发消息给机器人
     /// 的人都会被当作登录人——安全靠 chat_id 白名单或私聊兜底。
     personal: bool,
+    /// 无人值守全权（im.json `full_access`，默认 true 由装配侧传入）：IM 回合以回合级覆盖档
+    /// [`cmx_agent_core::TurnPolicyOverride::FULL_ACCESS`] 执行——沙箱完全放行、从不弹审批卡
+    /// （无人值守没人点卡片，默认档下高危工具会挂 300 秒然后被拒，IM 形同残废）。
+    /// false = 跟随桌面全局两旋钮。构造默认 false（fail-closed）：须装配侧显式传入。
+    full_access: bool,
     /// open_id → (身份, 缓存时刻) 正缓存（TTL 见 `BINDING_TTL`；解绑后最多 TTL 内失效）。
     binding_cache: Mutex<HashMap<String, (BoundIdentity, Instant)>>,
     /// 空白名单 TOFU 锁：`allow=None` 时首个发消息的 chat_id 成为唯一放行会话（进程生命周期内）。
@@ -135,6 +140,7 @@ impl ImBridge {
             allow,
             bindings: None,
             personal: false,
+            full_access: false,
             binding_cache: Mutex::new(HashMap::new()),
             tofu_lock: Mutex::new(None),
             offset: AtomicI64::new(0),
@@ -153,6 +159,19 @@ impl ImBridge {
     pub fn with_personal(mut self, on: bool) -> Self {
         self.personal = on;
         self
+    }
+
+    /// 无人值守全权（装配侧按 im.json `full_access` 传入）：开启后 IM 回合以
+    /// [`cmx_agent_core::TurnPolicyOverride::FULL_ACCESS`] 覆盖档执行，不弹审批卡；
+    /// 关闭则跟随桌面全局两旋钮。
+    pub fn with_full_access(mut self, on: bool) -> Self {
+        self.full_access = on;
+        self
+    }
+
+    /// 本桥回合的权限档覆盖：全权开启时为 [`cmx_agent_core::TurnPolicyOverride::FULL_ACCESS`]。
+    pub fn turn_policy_override(&self) -> Option<cmx_agent_core::TurnPolicyOverride> {
+        self.full_access.then_some(cmx_agent_core::TurnPolicyOverride::FULL_ACCESS)
     }
 
     fn allowed(&self, chat: &str) -> bool {
@@ -330,17 +349,20 @@ impl ImBridge {
                 Some(cmx_agent_app::ASSISTANT_SESSION_TITLE.to_string()),
             );
             let text = format!("【{}】{}", self.channel_label(), m.text);
+            // 无人值守全权（im.json full_access，默认开）：IM 回合以覆盖档执行——沙箱完全放行、
+            // 从不弹审批卡；关掉则跟随桌面全局两旋钮。仅本回合任务树生效，不写全局档。
+            let pol = self.turn_policy_override();
             let reply = match identity {
                 // 已绑定：以绑定用户身份跑回合（守卫/数据权限按此人判定，与桌面登录身份互不干扰）。
                 Some(id) => {
                     let mut subj = cmx_agent_core::Subject::new(&id.user_id);
                     subj.roles = id.roles.clone();
-                    match self.app.send_as(sid, &text, &subj).await {
+                    match self.app.send_as_with_policy(sid, &text, &subj, pol).await {
                         Ok(o) => o.final_text.unwrap_or_else(|| "（本回合无文字回复）".into()),
                         Err(e) => format!("⚠ 处理出错：{e}"),
                     }
                 }
-                None => match self.app.send(sid, &text).await {
+                None => match self.app.send_with_policy(sid, &text, pol).await {
                     Ok(o) => o.final_text.unwrap_or_else(|| "（本回合无文字回复）".into()),
                     Err(e) => format!("⚠ 处理出错：{e}"),
                 },
@@ -430,6 +452,7 @@ pub fn chunk_text(s: &str, max: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::chunk_text;
+    use crate::ImBridge;
 
     #[test]
     fn chunk_splits_on_limit() {
@@ -440,5 +463,46 @@ mod tests {
         assert!(parts.len() > 1);
         assert!(parts.iter().all(|p| p.chars().count() <= 40));
         assert_eq!(parts.concat(), s); // 无损
+    }
+
+    #[test]
+    fn full_access_flag_drives_turn_policy_override() {
+        // 构造默认 fail-closed（无覆盖）；with_full_access(true) → FULL_ACCESS 覆盖档。
+        // app/provider 仅装箱不触碰，用 unreachable 空实现即可（tick 不会被调用）。
+        struct NoProvider;
+        #[async_trait::async_trait]
+        impl crate::ImProvider for NoProvider {
+            async fn poll(
+                &self,
+                _offset: i64,
+            ) -> Result<(Vec<crate::InboundMsg>, i64), String> {
+                unreachable!("tick 不在单测路径上");
+            }
+            async fn send(&self, _chat_id: &str, _text: &str) -> Result<(), String> {
+                unreachable!("tick 不在单测路径上");
+            }
+        }
+        let mk = || {
+            ImBridge::new(
+                std::sync::Arc::new(
+                    cmx_agent_app::DesktopAppBuilder::new(
+                        std::env::temp_dir(),
+                        std::env::temp_dir(),
+                        std::sync::Arc::new(cmx_agent_core::MockModel::new([
+                            cmx_agent_core::ModelResponse::text("x"),
+                        ])),
+                    )
+                    .build()
+                    .unwrap(),
+                ),
+                std::sync::Arc::new(NoProvider),
+                "test",
+                None,
+            )
+        };
+        assert!(mk().turn_policy_override().is_none(), "默认无覆盖（fail-closed）");
+        let ov = mk().with_full_access(true).turn_policy_override();
+        assert_eq!(ov, Some(cmx_agent_core::TurnPolicyOverride::FULL_ACCESS));
+        assert!(mk().with_full_access(false).turn_policy_override().is_none());
     }
 }

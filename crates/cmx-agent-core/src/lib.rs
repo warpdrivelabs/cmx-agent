@@ -16,12 +16,13 @@ pub mod tool;
 
 pub use agent::{
     Agent, AgentBuilder, ApprovalPolicy, Approver, AutoApprover, Policy, TurnCancel, TurnOutcome,
+    TurnPolicyOverride, TURN_POLICY_OVERRIDE, TURN_SUBJECT,
 };
 pub use error::{AgentError, AgentResult};
 pub use event::{EventKind, EventSink, SessionEvent, SessionLog, StopReason};
 pub use guard::{
     ApprovalGuard, AuthGuard, Guard, GuardCtx, GuardDecision, GuardPhase, GuardPipeline,
-    HighRiskGuard, SandboxMode, Subject,
+    HighRiskGuard, SandboxGuard, SandboxMode, Subject,
 };
 pub use model::{
     MockModel, ModelContext, ModelError, ModelMessage, ModelResponse, ModelSeam, TurnObserver,

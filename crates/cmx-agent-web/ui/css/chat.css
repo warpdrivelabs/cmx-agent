@@ -328,6 +328,7 @@
   border-left:2px solid var(--border);margin:1px 0 4px 6px}
 .reasoning.closed .chev{transform:rotate(-90deg)}
 .reasoning.closed .reasoning-body{display:none}
+.reasoning.retrying .reasoning-body{opacity:.55}   /* 流中断重试：保正文可见仅置灰（删了就无内容可看） */
 
 /* ── 等待行（busy）：纯行小字 ── */
 .thinking-row{display:flex;align-items:center;gap:7px;padding:1px 0;font-size:12px;color:var(--muted)}

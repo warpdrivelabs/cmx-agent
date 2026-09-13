@@ -46,7 +46,7 @@ impl Tool for ChartTool {
             },
             "required": ["type","labels","series"]
         }))
-        .guard(GuardHints { requires_auth: Some("fs:write".into()), idempotent: false, ..Default::default() })
+        .guard(GuardHints { requires_auth: Some("fs:write".into()), idempotent: false, writes: true, ..Default::default() })
     }
 
     async fn invoke(&self, input: Value, ctx: &ToolCtx<'_>) -> Result<ToolResult, ToolError> {

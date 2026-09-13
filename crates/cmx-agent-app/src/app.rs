@@ -80,6 +80,12 @@ pub struct AgentApp {
     active_turns: Mutex<std::collections::HashMap<String, TurnCancel>>,
     /// 同会话回合串行队列：后发消息排队，不与当前回合并发改日志。
     session_locks: tokio::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// 已删除会话墓碑：删除时该会话若有在途回合，回合收尾的持久化步骤查墓碑放弃落库——
+    /// 防「删除后回合结束又把会话文件写回来」的僵尸复活。新消息显式复活时清墓碑。
+    pending_deleted: Mutex<std::collections::HashSet<String>>,
+    /// 登出钩子：logout 时逐个调用（壳注册，如 Tauri 壳停 IM 桥——旧实现登出后 IM 桥
+    /// 仍以旧身份拉消息跑回合）。
+    logout_hooks: Mutex<Vec<Box<dyn Fn() + Send + Sync>>>,
 }
 
 /// 落盘的登录会话（`<data_dir>/auth.json`）：启动时经 /api/auth/me 校验回放，
@@ -151,7 +157,14 @@ impl AgentApp {
             workspaces: None,
             active_turns: Mutex::new(std::collections::HashMap::new()),
             session_locks: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+            pending_deleted: Mutex::new(std::collections::HashSet::new()),
+            logout_hooks: Mutex::new(Vec::new()),
         }
+    }
+
+    /// 注册登出钩子（壳层调用，如 Tauri 壳停 IM 桥长连接）。logout 时按注册序逐个调用。
+    pub fn add_logout_hook(&mut self, f: Box<dyn Fn() + Send + Sync>) {
+        self.logout_hooks.lock().expect("logout hooks lock").push(f);
     }
 
     /// 注入工作空间注册表；调用方负责加载失败时给出明确启动错误。
@@ -549,6 +562,10 @@ impl AgentApp {
         // 防止换账号后沿用前任用户授予的免审批授权。
         if let Some(a) = &self.approver {
             a.revoke_all();
+        }
+        // 壳层钩子（如 Tauri 壳停 IM 桥长连接/轮询）：登出后 IM 不再以旧身份拉消息跑回合。
+        for h in self.logout_hooks.lock().expect("logout hooks lock").iter() {
+            h();
         }
     }
 
@@ -1126,7 +1143,7 @@ impl AgentApp {
     /// 向某会话发一条用户消息，跑一个回合，**增量落库**新事件，返回结果。
     /// 若会话已有持久化日志，先加载恢复（回合号、历史上下文都续上）。
     pub async fn send(&self, session_id: &str, user_input: &str) -> AppResult<SendOutcome> {
-        self.send_inner(session_id, user_input, None, None).await
+        self.send_inner(session_id, user_input, None, None, None).await
     }
 
     /// 以指定主体跑一个回合（IM 绑定场景）：守卫/数据权限按 `subject`（绑定用户的 user_id+roles）
@@ -1137,7 +1154,30 @@ impl AgentApp {
         user_input: &str,
         subject: &cmx_agent_core::Subject,
     ) -> AppResult<SendOutcome> {
-        self.send_inner(session_id, user_input, None, Some(subject.clone())).await
+        self.send_inner(session_id, user_input, None, Some(subject.clone()), None).await
+    }
+
+    /// [`Self::send`] 的回合级权限档覆盖版：`Some(覆盖档)` 时本回合（含子智能体）的
+    /// 沙箱/审批以覆盖为准——只 scope 在本回合任务树上，**不写全局档**，桌面并发回合
+    /// 不受影响。IM 无人值守「默认全权」（[`cmx_agent_core::TurnPolicyOverride::FULL_ACCESS`]）由此接入。
+    pub async fn send_with_policy(
+        &self,
+        session_id: &str,
+        user_input: &str,
+        policy_override: Option<cmx_agent_core::TurnPolicyOverride>,
+    ) -> AppResult<SendOutcome> {
+        self.send_inner(session_id, user_input, None, None, policy_override).await
+    }
+
+    /// [`Self::send_as`] 的回合级权限档覆盖版：以指定主体身份 + 覆盖档跑回合。语义见两者。
+    pub async fn send_as_with_policy(
+        &self,
+        session_id: &str,
+        user_input: &str,
+        subject: &cmx_agent_core::Subject,
+        policy_override: Option<cmx_agent_core::TurnPolicyOverride>,
+    ) -> AppResult<SendOutcome> {
+        self.send_inner(session_id, user_input, None, Some(subject.clone()), policy_override).await
     }
 
     /// 流式版：同 [`Self::send`]，但在回合开始前给会话日志挂上 `sink`——回合中每产生一个事件
@@ -1149,7 +1189,7 @@ impl AgentApp {
         user_input: &str,
         sink: std::sync::Arc<crate::stream::ChannelSink>,
     ) -> AppResult<SendOutcome> {
-        self.send_inner(session_id, user_input, Some(sink), None).await
+        self.send_inner(session_id, user_input, Some(sink), None, None).await
     }
 
     async fn send_inner(
@@ -1158,8 +1198,14 @@ impl AgentApp {
         user_input: &str,
         sink: Option<std::sync::Arc<crate::stream::ChannelSink>>,
         subject: Option<cmx_agent_core::Subject>,
+        policy_override: Option<cmx_agent_core::TurnPolicyOverride>,
     ) -> AppResult<SendOutcome> {
         // 同会话队列：后到请求等待当前回合完成，避免两条消息并发写入同一个 JSONL。
+        // 显式发新消息 = 该会话若曾被删除（墓碑未消费）即视为复活意图，摘除墓碑。
+        self.pending_deleted
+            .lock()
+            .expect("pending deleted lock")
+            .remove(session_id);
         let session_lock = {
             let mut locks = self.session_locks.lock().await;
             locks
@@ -1183,6 +1229,7 @@ impl AgentApp {
                 sink,
                 subject,
                 &cancel,
+                policy_override,
             )
             .await;
         self.active_turns
@@ -1200,6 +1247,7 @@ impl AgentApp {
         sink: Option<std::sync::Arc<crate::stream::ChannelSink>>,
         subject: Option<cmx_agent_core::Subject>,
         cancel: &TurnCancel,
+        policy_override: Option<cmx_agent_core::TurnPolicyOverride>,
     ) -> AppResult<SendOutcome> {
         // 加载已有会话；不存在则以默认 system 新建一个内存会话（并补落元数据）。
         let mut session = match self.store.load(session_id) {
@@ -1232,13 +1280,14 @@ impl AgentApp {
                 let observed = Arc::new(s.with_cancel(cancel.clone()));
                 session.log.add_sink(observed.clone());
                 self.agent
-                    .run_turn_observed_as_cancellable(
+                    .run_turn_observed_as_cancellable_with_policy(
                         &mut session,
                         user_input,
                         Some(observed.as_ref()),
                         Some(subj),
                         Some(cancel),
                         turn_roots.as_ref().map(std::slice::from_ref),
+                        policy_override,
                     )
                     .await
             }
@@ -1246,23 +1295,24 @@ impl AgentApp {
                 let observed = Arc::new(s.with_cancel(cancel.clone()));
                 session.log.add_sink(observed.clone());
                 self.agent
-                    .run_turn_observed_as_cancellable(
+                    .run_turn_observed_as_cancellable_with_policy(
                         &mut session,
                         user_input,
                         Some(observed.as_ref()),
                         None,
                         Some(cancel),
                         turn_roots.as_ref().map(std::slice::from_ref),
+                        policy_override,
                     )
                     .await
             }
             (None, Some(subj)) => self
                 .agent
-                .run_turn_observed_as_cancellable(&mut session, user_input, None, Some(subj), Some(cancel), turn_roots.as_ref().map(std::slice::from_ref))
+                .run_turn_observed_as_cancellable_with_policy(&mut session, user_input, None, Some(subj), Some(cancel), turn_roots.as_ref().map(std::slice::from_ref), policy_override)
                 .await,
             (None, None) => self
                 .agent
-                .run_turn_observed_as_cancellable(&mut session, user_input, None, None, Some(cancel), turn_roots.as_ref().map(std::slice::from_ref))
+                .run_turn_observed_as_cancellable_with_policy(&mut session, user_input, None, None, Some(cancel), turn_roots.as_ref().map(std::slice::from_ref), policy_override)
                 .await,
         };
         // 出错一致性（飞书 ↔ 界面）：回合中途模型失败等会让 run_turn 提前返回 Err。若直接 `?` 抛出，
@@ -1291,6 +1341,25 @@ impl AgentApp {
                 }
             }
         };
+
+        // 回合期间会话被删除（墓碑在）→ 放弃落库：本回合事件随删除一起蒸发，
+        // 不写 append/put_meta 把已删会话复活。墓碑消费掉（同 id 再发新消息视为新建复活）。
+        if self
+            .pending_deleted
+            .lock()
+            .expect("pending deleted lock")
+            .remove(session_id)
+        {
+            eprintln!("[session] {session_id} 回合期间被删除，放弃落库（防僵尸复活）");
+            return Ok(SendOutcome {
+                session_id: session_id.to_string(),
+                turn: outcome.turn,
+                reason: outcome.reason,
+                steps: outcome.steps,
+                final_text: outcome.final_text,
+                new_events: Vec::new(),
+            });
+        }
 
         // 只取本回合新增的事件，append 落库（不重写历史行）。
         let new_events: Vec<_> = session.log.events()[before..].to_vec();
@@ -1355,7 +1424,22 @@ impl AgentApp {
         if let Some(a) = &self.approver {
             a.revoke_session(session_id);
         }
-        self.store.delete(session_id)
+        // 有在途回合先取消（含打断审批等待），并落墓碑：回合收尾的持久化步骤查到墓碑
+        // 即放弃落库——否则回合结束 append_events/put_meta 会把刚删的会话「僵尸复活」。
+        self.cancel_session_turn(session_id);
+        self.pending_deleted
+            .lock()
+            .expect("pending deleted lock")
+            .insert(session_id.to_string());
+        let r = self.store.delete(session_id);
+        if r.is_ok() {
+            // 删除成功且无在途回合 → 墓碑即无用，摘除（有回合时墓碑由回合收尾消费）。
+            let mut t = self.pending_deleted.lock().expect("pending deleted lock");
+            if self.active_turns.lock().expect("active turns lock").get(session_id).is_none() {
+                t.remove(session_id);
+            }
+        }
+        r
     }
 
     pub fn agent(&self) -> &Agent {
