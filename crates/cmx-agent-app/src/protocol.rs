@@ -229,6 +229,16 @@ pub async fn dispatch(app: &AgentApp, req: AppRequest) -> AppResponse {
 }
 
 async fn dispatch_inner(app: &AgentApp, req: AppRequest) -> Result<AppResponse, AppError> {
+    // 前门硬登录门：配置了门户认证的双壳里，除登录/查当前用户外一律要求已认证。此前登录门
+    // 只存在于前端路由——任何能到达前门的执行体（Web 壳的跨站请求、注入脚本）都能 set_policy
+    // 拆沙箱、add_local_workspace 挂任意目录、install_plugin 装插件。
+    // 未配置认证（CLI serve / 单元测试的本地单机模式）不强制。
+    if app.auth_configured()
+        && !app.is_authenticated()
+        && !matches!(req, AppRequest::Login { .. } | AppRequest::CurrentUser)
+    {
+        return Err(AppError::Auth("未登录：请先登录门户账号".into()));
+    }
     match req {
         AppRequest::CreateSession { id } => {
             let id = app.create_session(id)?;

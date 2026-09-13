@@ -146,17 +146,32 @@ fn corrupt_line_is_detected() {
     let tmp = TempDir::new("store-corrupt");
     let store = FileSessionStore::new(tmp.path()).unwrap();
     store.append_events("s1", &sample_events()).unwrap();
-    // 手动往日志追加一行坏 JSON
+    // 中段坏行 = 真损坏：仍须报 Corrupt（末行残迹才可跳过自愈，见下方测试）
     let path = tmp.path().join("sessions/s1/log.jsonl");
-    let mut content = std::fs::read_to_string(&path).unwrap();
-    content.push_str("{not valid json}\n");
-    std::fs::write(&path, content).unwrap();
+    let content = std::fs::read_to_string(&path).unwrap();
+    let mut lines: Vec<String> = content.lines().map(String::from).collect();
+    lines.insert(lines.len() / 2, "{not valid json}".into());
+    std::fs::write(&path, lines.join("\n") + "\n").unwrap();
 
     let err = store.load("s1").unwrap_err();
     assert!(
         matches!(err, AppError::Corrupt(_)),
         "bad line must be reported as Corrupt"
     );
+}
+
+#[test]
+fn trailing_partial_line_is_tolerated() {
+    // 末行损坏 = 进程中断的 append 残迹：跳过自愈，不砖死整个会话。
+    let tmp = TempDir::new("store-tail");
+    let store = FileSessionStore::new(tmp.path()).unwrap();
+    store.append_events("s1", &sample_events()).unwrap();
+    let path = tmp.path().join("sessions/s1/log.jsonl");
+    let mut content = std::fs::read_to_string(&path).unwrap();
+    content.push_str("{truncated json");
+    std::fs::write(&path, content).unwrap();
+    let session = store.load("s1").unwrap();
+    assert_eq!(session.log.len(), 3, "有效事件应完整恢复，仅跳过末尾残行");
 }
 
 #[test]

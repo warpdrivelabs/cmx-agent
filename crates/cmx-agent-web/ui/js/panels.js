@@ -155,8 +155,9 @@ function renderPluginDetail(view, p, installed){
   // 信息页
   let info;
   if(p.homepage){
+    // sandbox 不得带 allow-same-origin：与 allow-scripts 同开 = 沙箱失效，远程信息页可同源调 /api 前门。
     info=`<div class="pg-frame-bar">信息页：<a class="pg-link" data-act="pluginOpenHomepage" data-url="${esc(p.homepage)}">${esc(p.homepage)}</a><span class="pg-frame-hint">（若下方空白说明该页禁止内嵌，请点链接在浏览器打开）</span></div>
-      <iframe class="pg-frame" src="${esc(p.homepage)}" referrerpolicy="no-referrer" sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe>`;
+      <iframe class="pg-frame" src="${esc(p.homepage)}" referrerpolicy="no-referrer" sandbox="allow-scripts allow-popups allow-forms"></iframe>`;
   } else {
     info=`<div class="pg-empty sm">该插件未提供信息页（cmx-plugin.json 的 homepage 字段）。</div>`;
   }

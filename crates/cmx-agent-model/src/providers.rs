@@ -60,6 +60,16 @@ fn normalize_base(u: &str) -> String {
         .to_ascii_lowercase()
 }
 
+/// 网关同源判定：normalize_base 后再去掉 `/v1` 尾段做**整段相等**。
+/// 旧实现前缀互含（starts_with 双向）——相似域名条目（llmgw-bz.mlamp.cn.evil.io）
+/// 会命中真网关并把 api_key 复制过去；同主机带不带 /v1 的写法仍视为同一网关。
+fn same_gateway(a: &str, b: &str) -> bool {
+    fn canon(s: &str) -> &str {
+        s.trim_end_matches('/').trim_end_matches("/v1")
+    }
+    !a.is_empty() && !b.is_empty() && canon(a) == canon(b)
+}
+
 impl ProviderFile {
     /// 读 `<dir>/providers.json`；不存在/解析失败则**播种**（不落盘——写发生在首次 save）：
     /// 内置预设常驻；model.json 的 key/model/base_url 合入命中 base_url 的内置条目
@@ -129,7 +139,7 @@ impl ProviderFile {
         let key = normalize_base(&cfg.base_url);
         let hit = self.providers.iter_mut().find(|p| {
             let b = normalize_base(&p.config.base_url);
-            !key.is_empty() && !b.is_empty() && (b.starts_with(&key) || key.starts_with(&b))
+            same_gateway(&key, &b)
         });
         match hit {
             Some(p) => {

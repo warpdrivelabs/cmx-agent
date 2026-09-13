@@ -205,13 +205,21 @@ pub async fn run(program: &str, args: &[String], cwd: &Path, timeout_ms: u64) ->
     let mut err_buf = Vec::new();
     let mut so = child.stdout.take();
     let mut se = child.stderr.take();
+    // stdout/stderr 必须**并发**读：串行先读尽 stdout 再读 stderr 时，子进程写满 stderr
+    // 管道缓冲（~64KB）即写阻塞 → stdout 停产 → 第一个 read_to_end 永不 EOF → 拖到超时误杀
+    // （cargo/编译类 stderr 高产场景必踩）。
     let read_fut = async {
-        if let Some(s) = so.as_mut() {
-            let _ = s.read_to_end(&mut out_buf).await;
-        }
-        if let Some(s) = se.as_mut() {
-            let _ = s.read_to_end(&mut err_buf).await;
-        }
+        let read_out = async {
+            if let Some(s) = so.as_mut() {
+                let _ = s.read_to_end(&mut out_buf).await;
+            }
+        };
+        let read_err = async {
+            if let Some(s) = se.as_mut() {
+                let _ = s.read_to_end(&mut err_buf).await;
+            }
+        };
+        tokio::join!(read_out, read_err);
         child.wait().await
     };
     // 字节读 + lossy：非 UTF-8 输出（cmd/GBK 场景）不整段丢失（PowerShell 已由 UTF-8 前缀规整）。

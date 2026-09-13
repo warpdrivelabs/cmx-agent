@@ -266,7 +266,16 @@ async function approveTool(callId, approved, all){
   document.querySelectorAll(".tool.approval").forEach(c=>{ if(c.dataset.callid===callId){
     const row=c.querySelector(".aprow"); if(row) row.innerHTML='<span class="appending">'+(all?'已允许，本对话后续不再询问…':'已提交，处理中…')+'</span>';
   }});
-  try{ await call({cmd:"approve", call_id:callId, approved, all:!!all, session_id:sid}); }catch(e){}
+  try{
+    const r=await call({cmd:"approve", call_id:callId, approved, all:!!all, session_id:sid});
+    if(!r||r.ok===false) throw new Error((r&&r.error&&r.error.message)||"未知错误");
+  }catch(e){
+    // 失败必须可见且恢复可点：旧实现空 catch，按钮永卡「处理中」。
+    showToast("审批提交失败："+(e&&e.message||e));
+    document.querySelectorAll(".tool.approval").forEach(c=>{ if(c.dataset.callid===callId){
+      const row=c.querySelector(".aprow"); if(row) row.innerHTML='<span class="appending">⚠ 提交失败：'+esc(String(e&&e.message||e))+'</span>';
+    }});
+  }
 }
 
 // ── 会话历史：大会话只渲染最近一屏，更早的按需加载（减少解析/渲染/DOM，切换更快）──
@@ -405,7 +414,7 @@ async function doSendTab(t, text){
       // 工具刚出结果 → 模型将继续思考，重新显示等待行（多步等待提示）。
       if(ev.kind==="tool_result") showTyping(log);
       else if(ev.kind==="turn_ended" || ev.kind==="approval_requested") hideTyping(log);
-    });
+    }, t._streamAbort.signal);
   } catch(e) {
     if(!_cancelled){ closeCtxGroup(log); renderEvent(log,{kind:"note",text:"⚠ 连接中断："+(e&&e.message||e)},t.sessionId); }
   } finally {
@@ -413,7 +422,9 @@ async function doSendTab(t, text){
     t._busy=false; setSessionBusy(t,false);
     if(STREAMING && STREAMING.delete) STREAMING.delete(t.sessionId);
   }
-  const m=(await call({cmd:"list_sessions"})).data.sessions.find(x=>x.id===t.sessionId);
+  // 收尾必须有保护：此处失败（网络/后端异常）若抛出，下方等待队列永不推进、消息永久滞留。
+  const resp=await call({cmd:"list_sessions"}).catch(()=>null);
+  const m=((resp&&resp.data&&resp.data.sessions)||[]).find(x=>x.id===t.sessionId);
   if(m){ t.title=m.title||t.sessionId; renderTabs(); }
   scheduleRefreshTasks();
   const next=(t._queue||[]).shift();

@@ -56,7 +56,8 @@ function cmxInitDropdown (sel) {
     Array.from(sel.options).forEach(opt => {
       const item = document.createElement("div");
       item.className = "cmx-dd-item" + (opt.value === sel.value ? " active" : "");
-      item.innerHTML = "<span>" + opt.textContent + "</span>" + CMX_DD_CHECK;
+      // textContent 若含 HTML 字面量（如文件名 <img onerror>），经 innerHTML 会被当标签解析——统一转义。
+      item.innerHTML = "<span>" + esc(opt.textContent) + "</span>" + CMX_DD_CHECK;
       item.onclick = (e) => {
         e.stopPropagation();
         sel.value = opt.value;

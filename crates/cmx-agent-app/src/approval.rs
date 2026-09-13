@@ -41,13 +41,44 @@ impl InteractiveApprover {
     }
 
     /// 前端送回决定：弹出该 `call_id` 的等待端并唤醒（同步，不需运行时）。返回是否命中一个待决审批。
-    pub fn decide(&self, call_id: &str, approved: bool) -> bool {
+    /// `session_hint` 非空时校验会话绑定——call_id 由模型自报、跨会话可能重号，
+    /// B 会话的决定不得作用于 A 会话挂起的审批（防跨会话误批/误拒）。
+    pub fn decide(&self, call_id: &str, approved: bool, session_hint: &str) -> bool {
+        let bound = self
+            .pending_sessions
+            .lock()
+            .expect("pending sessions lock")
+            .get(call_id)
+            .cloned();
+        if !session_hint.is_empty() && bound.as_deref().is_some_and(|sid| sid != session_hint) {
+            eprintln!(
+                "[approval] 审批 {call_id} 属于会话 {:?}，拒绝来自会话 {session_hint:?} 的决定",
+                bound.as_deref().unwrap_or("")
+            );
+            return false;
+        }
         let tx = self.pending.lock().expect("pending lock").remove(call_id);
         self.pending_sessions.lock().expect("pending sessions lock").remove(call_id);
         match tx {
             Some(tx) => tx.send(approved).is_ok(),
             None => false,
         }
+    }
+
+    /// 全量撤销（登出/换账号）：拒绝所有待决审批 + 清空「全部允许」授权——
+    /// 免审批授权不得跨登录身份沿用。
+    pub fn revoke_all(&self) {
+        let ids: Vec<String> = self
+            .pending
+            .lock()
+            .expect("pending lock")
+            .keys()
+            .cloned()
+            .collect();
+        for id in ids {
+            let _ = self.decide(&id, false, "");
+        }
+        self.allow_all.lock().expect("allow_all lock").clear();
     }
 
     /// 授予某会话「本对话全部允许」——此后该会话需审批的工具全部自动放行，不再弹卡。
@@ -123,7 +154,7 @@ impl Approver for InteractiveApprover {
             .map(|(call_id, _)| call_id.clone())
             .collect();
         for call_id in ids {
-            let _ = self.decide(&call_id, false);
+            let _ = self.decide(&call_id, false, "");
         }
     }
 }
@@ -143,7 +174,7 @@ mod tests {
         // 让 resolve 先登记
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(approver.pending_ids(), vec!["c1".to_string()]);
-        assert!(approver.decide("c1", true));
+        assert!(approver.decide("c1", true, ""));
         let (ok, by) = h.await.unwrap();
         assert!(ok);
         assert_eq!(by, "user");
@@ -157,7 +188,7 @@ mod tests {
         let a2 = approver.clone();
         let h = tokio::spawn(async move { a2.resolve(&call, "x").await });
         tokio::time::sleep(Duration::from_millis(50)).await;
-        assert!(approver.decide("c2", false));
+        assert!(approver.decide("c2", false, ""));
         let (ok, _) = h.await.unwrap();
         assert!(!ok);
     }
@@ -174,7 +205,7 @@ mod tests {
     #[test]
     fn decide_unknown_id_is_noop() {
         let approver = InteractiveApprover::default();
-        assert!(!approver.decide("nope", true));
+        assert!(!approver.decide("nope", true, ""));
     }
 
     #[test]

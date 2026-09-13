@@ -6,7 +6,7 @@ use cmx_agent_core::tool::GuardHints;
 use cmx_agent_core::{Tool, ToolCtx, ToolError, ToolResult, ToolSpec};
 use serde_json::{Value, json};
 
-use crate::{client, ensure_public_url, html};
+use crate::{client_no_redirect, ensure_public_url, html};
 
 /// `web_fetch` 工具。`allow_private`：是否放开私网 URL（builder 从 env 读；测试可直接置 true）。
 #[derive(Default)]
@@ -54,9 +54,45 @@ impl Tool for WebFetchTool {
             Ok(u) => u,
             Err(e) => return Ok(ToolResult::err(format!("web_fetch: {e}"))),
         };
-        let resp = match client(15000).get(u.clone()).send().await {
-            Ok(r) => r,
-            Err(e) => return Ok(ToolResult::err(format!("web_fetch: 请求失败 {e}"))),
+        // 重定向逐跳复检：关掉 reqwest 自动跟跳，手动逐跳过 ensure_public_url 再前进——
+        // 自动跟跳下公网 URL 一跳 302 到内网即穿透 SSRF 基线。
+        let http = client_no_redirect(15000);
+        let mut current = u.clone();
+        let mut resp = None;
+        for _hop in 0..5 {
+            let r = match http.get(current.clone()).send().await {
+                Ok(r) => r,
+                Err(e) => return Ok(ToolResult::err(format!("web_fetch: 请求失败 {e}"))),
+            };
+            if r.status().is_redirection() {
+                let Some(loc) = r
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string())
+                else {
+                    break;
+                };
+                let next = match reqwest::Url::parse(&loc) {
+                    Ok(abs) => abs,
+                    Err(_) => match current.join(&loc) {
+                        Ok(rel) => rel,
+                        Err(e) => {
+                            return Ok(ToolResult::err(format!("web_fetch: 非法重定向 Location {loc}: {e}")))
+                        }
+                    },
+                };
+                current = match ensure_public_url(next.as_str(), self.allow_private) {
+                    Ok(u2) => u2,
+                    Err(e) => return Ok(ToolResult::err(format!("web_fetch: {e}"))),
+                };
+                continue;
+            }
+            resp = Some(r);
+            break;
+        }
+        let Some(resp) = resp else {
+            return Ok(ToolResult::err("web_fetch: 重定向超过 5 跳，已停止"));
         };
         let status = resp.status().as_u16();
         let ctype = resp

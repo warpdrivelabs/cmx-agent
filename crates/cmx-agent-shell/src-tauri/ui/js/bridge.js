@@ -42,6 +42,12 @@ async function streamSend(sessionId, text, onEvent, signal){
   }
   // Web：fetch + ReadableStream 手动解析 SSE（\n\n 分帧，取 data: 行）
     const r = await fetch("/api/stream", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({session_id:sessionId, text}), signal});
+    // 必须检查状态：后端 401/500 返回 JSON 错误体时没有任何 data: 帧——旧实现静默结束，
+    // 用户消息石沉大海且计时器空转。失败时合成 stream_error 走统一错误渲染。
+    if (!r.ok) {
+      onEvent({kind:"stream_error", message:"请求失败（HTTP " + r.status + "）"});
+      return;
+    }
   const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = "";
   while(true){
     const {value, done} = await reader.read(); if(done) break;

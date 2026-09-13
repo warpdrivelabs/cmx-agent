@@ -84,7 +84,20 @@ fn resolve(path: &str, ctx: &ToolCtx) -> Result<PathBuf, String> {
 }
 
 fn file_uri(p: &Path) -> String {
-    format!("file://{}", p.display())
+    // RFC8089 合法 file URI：Windows 为 file:///E:/a/b.rs（旧实现 file://E:\a\b.rs——
+    // 缺第三斜杠 + 反斜杠 + 未编码，严格 LSP server 直接拒收 didOpen/rootUri）。
+    let s = p.to_string_lossy().replace('\\', "/");
+    let leading = if s.starts_with('/') { "" } else { "/" };
+    let mut out = format!("file://{leading}");
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' | b':' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 #[async_trait]

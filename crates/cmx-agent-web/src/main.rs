@@ -60,7 +60,8 @@ async fn main() {
         .route("/api", post(api))
         .route("/api/stream", post(api_stream))
         .route("/health", get(|| async { "ok" }))
-        .with_state(state);
+        .with_state(state)
+        .layer(axum::middleware::from_fn(loopback_guard));
 
     // 绑定固定端口（默认 8099）：被占用（如双开实例）时告警并回退随机端口，保证总能打开界面。
     let listener = match tokio::net::TcpListener::bind(("127.0.0.1", want_port)).await {
@@ -114,6 +115,48 @@ async fn build_app(workdir: &std::path::Path, data_dir: &std::path::Path) -> Age
     app = app.with_im_binding(cmx_agent_app::ImBindingClient::new(portal_base));
 
     app
+}
+
+/// 环回守卫：Host 必须是本机回环；带 Origin 头（浏览器跨站场景）必须是回环源。
+/// 此前 /api 零校验——任意网页可用跨站 text/plain 简单请求（无预检）驱动本机 agent
+/// （set_policy 拆沙箱 / add_local_workspace / send 全家）。同时给所有响应补 CSP，
+/// 与 Tauri 壳对齐（script-src 不放 unsafe-inline）。
+async fn loopback_guard(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let is_loopback = |s: &str| {
+        s.starts_with("127.0.0.1") || s.starts_with("localhost") || s.starts_with("[::1]")
+    };
+    let host_ok = req
+        .headers()
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(is_loopback)
+        .unwrap_or(false);
+    // 无 Origin = 非浏览器客户端（curl / 地址栏导航），放行；有则必须回环同源。
+    let origin_ok = req
+        .headers()
+        .get(axum::http::header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+        .map(|o| is_loopback(o.trim_start_matches("http://")) || is_loopback(o))
+        .unwrap_or(true);
+    if host_ok && origin_ok {
+        let mut resp = next.run(req).await;
+        resp.headers_mut().insert(
+            axum::http::header::CONTENT_SECURITY_POLICY,
+            axum::http::HeaderValue::from_static(
+                "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; frame-src 'self' https: http://127.0.0.1:* http://localhost:*",
+            ),
+        );
+        return resp;
+    }
+    tracing::warn!("已拒绝非回环请求（Host/Origin 校验失败）");
+    (
+        axum::http::StatusCode::FORBIDDEN,
+        "forbidden: loopback only",
+    )
+        .into_response()
 }
 
 async fn index() -> Html<&'static str> {

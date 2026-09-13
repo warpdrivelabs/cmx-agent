@@ -18,6 +18,19 @@ fn op_perm(op: &str) -> Option<&'static str> {
     }
 }
 
+/// URL path 段消毒：模型可控的 objectType/actionType/reportCode 直拼 path 时，
+/// 携带 `/`、`?`、`..` 可逃出端点前缀打到该服务任意 POST 路径（path 注入）。
+/// 只放行 [A-Za-z0-9._-]（cmx 侧对象类型/动作/报表编码均为该字符集）。
+fn path_seg(name: &str, v: &str) -> Result<String, String> {
+    if v.is_empty() {
+        return Err(format!("{name} 不能为空"));
+    }
+    if !v.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')) {
+        return Err(format!("{name} 含非法字符（仅允许字母/数字/._-）：{v}"));
+    }
+    Ok(v.to_string())
+}
+
 /// flow 连接器：列流程定义。端点 `POST /api/flow/v1/definitions/list`（活体契约：POST + 信封 data.definitions；
 /// auth=on 实例需登录后带 Bearer——由共享令牌槽自动附加）。
 pub struct FlowConnector {
@@ -330,6 +343,7 @@ impl Tool for OntoPutObject {
             return Ok(ToolResult::err("onto_put_object: 'properties' 必填（对象）"));
         };
         let body = json!({ "properties": props });
+        let ot = path_seg("objectType", ot).map_err(ToolError::new)?;
         let path = format!("/api/onto/v1/objects/{ot}");
         match self.client.post_write(&path, &body).await {
             Ok(data) => Ok(ToolResult::ok(json!({
@@ -440,6 +454,7 @@ impl Tool for ReportCompute {
             "periodCode": input.get("periodCode").and_then(|v| v.as_str()).unwrap_or(""),
             "schemeCode": input.get("schemeCode").and_then(|v| v.as_str()).unwrap_or(""),
         });
+        let code = path_seg("reportCode", code).map_err(ToolError::new)?;
         let path = format!("/api/report-design/reports/{code}/compute");
         match self.client.post_write(&path, &body).await {
             Ok(data) => Ok(ToolResult::ok(json!({
@@ -634,7 +649,7 @@ impl EngineChain {
         let s = |k: &str| input.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
         match op {
             "put_object" => {
-                let ot = s("objectType");
+                let ot = path_seg("objectType", &s("objectType")).map_err(|e| e.to_string())?;
                 let props = input.get("properties").cloned().unwrap_or_else(|| json!({}));
                 self.onto
                     .post_write(&format!("/api/onto/v1/objects/{ot}"), &json!({ "properties": props }))
@@ -642,7 +657,7 @@ impl EngineChain {
                     .map_err(|e| e.to_string())
             }
             "execute_action" => {
-                let at = s("actionType");
+                let at = path_seg("actionType", &s("actionType")).map_err(|e| e.to_string())?;
                 let body = json!({ "params": input.get("params").cloned().unwrap_or_else(|| json!({})),
                                    "dryRun": input.get("dryRun").and_then(|v| v.as_bool()).unwrap_or(false) });
                 self.onto
@@ -669,7 +684,7 @@ impl EngineChain {
                     .map_err(|e| e.to_string())
             }
             "compute_report" => {
-                let code = s("reportCode");
+                let code = path_seg("reportCode", &s("reportCode")).map_err(|e| e.to_string())?;
                 let body = json!({ "orgCode": s("orgCode"), "periodCode": s("periodCode"), "schemeCode": s("schemeCode") });
                 self.report
                     .post_write(&format!("/api/report-design/reports/{code}/compute"), &body)

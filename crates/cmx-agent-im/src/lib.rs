@@ -111,6 +111,9 @@ pub struct ImBridge {
     personal: bool,
     /// open_id → (身份, 缓存时刻) 正缓存（TTL 见 `BINDING_TTL`；解绑后最多 TTL 内失效）。
     binding_cache: Mutex<HashMap<String, (BoundIdentity, Instant)>>,
+    /// 空白名单 TOFU 锁：`allow=None` 时首个发消息的 chat_id 成为唯一放行会话（进程生命周期内）。
+    /// 收敛「个人模式空白名单=任何能私聊机器人的人都可驱动」的裸奔面；正式使用请配置固定白名单。
+    tofu_lock: Mutex<Option<String>>,
     offset: AtomicI64,
 }
 
@@ -133,6 +136,7 @@ impl ImBridge {
             bindings: None,
             personal: false,
             binding_cache: Mutex::new(HashMap::new()),
+            tofu_lock: Mutex::new(None),
             offset: AtomicI64::new(0),
         }
     }
@@ -152,7 +156,24 @@ impl ImBridge {
     }
 
     fn allowed(&self, chat: &str) -> bool {
-        self.allow.as_ref().map(|s| s.contains(chat)).unwrap_or(true)
+        match &self.allow {
+            Some(set) => set.contains(chat),
+            None => {
+                // None 原语义是「不限」——等于把桌面登录人身份开放给任何能私聊机器人的人。
+                // 收敛为 TOFU（trust-on-first-use）：首个会话锁定，其余一律拒绝（fail-closed）。
+                let mut lock = self.tofu_lock.lock().expect("tofu lock");
+                match lock.as_deref() {
+                    Some(first) => first == chat,
+                    None => {
+                        tracing::warn!(
+                            "IM 空白名单（TOFU）：已锁定首个会话 chat_id={chat}，其余会话将拒绝；请在设置中配置固定白名单"
+                        );
+                        *lock = Some(chat.to_string());
+                        true
+                    }
+                }
+            }
+        }
     }
 
     /// 查缓存中的绑定身份（未过期才命中）。

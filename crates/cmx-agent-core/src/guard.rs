@@ -214,10 +214,14 @@ impl Guard for ApprovalGuard {
     }
 
     fn check(&self, ctx: &GuardCtx<'_>) -> GuardDecision {
-        // danger-full-access（≈ --yolo）：沙箱完全放行即代表用户显式信任，
-        // 跳过工具级人审不再弹卡——否则"设了完全访问还被 approval rejected 拦住"自相矛盾。
+        // danger-full-access（≈ --yolo）：沙箱完全放行代表用户显式信任，Conditional 级人审
+        // 跳过不再弹卡——否则"设了完全访问还被 approval rejected 拦住"自相矛盾。
+        // 但 Always 级（硬人审）不豁免：两旋钮正交，能力旋钮不得吞掉许可旋钮的全部闸门
+        // （旧实现连 Always 一并跳过，ApprovalPolicy 形同虚设）。
         // UnlessTrusted 策略级逢写必问不受此影响（在内核另行处理）。
-        if ctx.sandbox.allows_high_risk() {
+        if ctx.sandbox.allows_high_risk()
+            && !matches!(ctx.spec.guard.requires_approval, Approval::Always)
+        {
             return GuardDecision::Allow;
         }
         match ctx.spec.guard.requires_approval {

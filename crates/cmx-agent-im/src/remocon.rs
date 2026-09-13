@@ -53,8 +53,8 @@ pub struct ImRemoconConfig {
     /// 微信 ClawBot（iLink）凭证：`cmx-agent im-login` 扫码后写入（bot_token 长期复用）。
     #[serde(default)]
     pub wechat: WechatCreds,
-    /// chat_id 白名单；**空 = 不限**。个人模式下这是唯一的安全门（任何能发消息给
-    /// 机器人的会话都会以登录人身份跑 agent）——群机器人建议配置。
+    /// chat_id 白名单；**空 = TOFU**：首个发消息的会话锁定为唯一放行会话（进程生命周期内，
+    /// 重启后重锁），其余一律拒绝。个人模式下这是唯一的安全门——正式使用务必配置固定白名单。
     #[serde(default)]
     pub allow: Vec<String>,
 }

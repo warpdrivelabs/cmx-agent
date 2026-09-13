@@ -309,10 +309,13 @@ impl AgentApp {
     ) -> bool {
         match &self.approver {
             Some(a) => {
-                if all && approved && !session_id.is_empty() {
+                let hit = a.decide(call_id, approved, session_id);
+                // 只有确实命中一个待决审批才授予「全部允许」——空点/重复点击/跨会话误投
+                // 不得静默关闭整会话的审批门。
+                if all && approved && hit && !session_id.is_empty() {
                     a.allow_session(session_id);
                 }
-                a.decide(call_id, approved)
+                hit
             }
             None => false,
         }
@@ -346,6 +349,7 @@ impl AgentApp {
         let (Some(path), Some(auth)) = (&self.auth_session_path, &self.auth) else {
             return false;
         };
+        let raw_snapshot = std::fs::read_to_string(path).ok();
         let Some(file) = read_auth_session(path) else { return false };
         eprintln!("[auth] 会话回放：检测到本地登录态（{}），校验中…", file.username);
         let mut access = file.access_token.clone();
@@ -386,7 +390,17 @@ impl AgentApp {
             eprintln!("[auth] 会话回放成功：{}，跳过登录门", user.username);
             return true;
         }
-        let _ = std::fs::remove_file(path);
+        // 防双花误删：refresh 轮换后旧 token 一次性作废，双壳/双实例并发回放时另一方必然
+        // 刷新失败走到这里。若文件内容已不等于启动时快照（= 并发方刚轮换写入新令牌），
+        // 绝不能删——否则把对方的有效会话一起清掉，双壳全部被登出。
+        match (std::fs::read_to_string(path), raw_snapshot) {
+            (Ok(cur), Some(old)) if cur != old => {
+                eprintln!("[auth] 本地会话已被其他实例更新，保留不删（防并发轮换双花误删）");
+            }
+            _ => {
+                let _ = std::fs::remove_file(path);
+            }
+        }
         eprintln!("[auth] 会话已失效，清除本地会话（回登录门）");
         false
     }
@@ -508,6 +522,12 @@ impl AgentApp {
             .is_some()
     }
 
+    /// 是否配置了门户认证（auth 客户端）。未配置 = 本地单机模式（CLI serve / 测试），
+    /// 前门登录门不强制——有门户认证的桌面壳/Web 壳才 enforce。
+    pub fn auth_configured(&self) -> bool {
+        self.auth.is_some()
+    }
+
     /// 登出：清当前用户（本地态；令牌失效由服务端会话过期兜底）。
     pub fn logout(&self) {
         *self.current_user.lock().expect("current_user lock") = None;
@@ -524,6 +544,11 @@ impl AgentApp {
         // 会话文件同步删除 → 下次启动不回放（真登出，而非"重启还挂着旧会话"）。
         if let Some(path) = &self.auth_session_path {
             let _ = std::fs::remove_file(path);
+        }
+        // 审批态随登录身份一并失效：清「全部允许」授权 + 拒绝所有待决审批——
+        // 防止换账号后沿用前任用户授予的免审批授权。
+        if let Some(a) = &self.approver {
+            a.revoke_all();
         }
     }
 
@@ -1189,9 +1214,10 @@ impl AgentApp {
             session = session.with_system(sys);
         }
 
-        // 会话可能属于非当前空间（切走当前空间后回到旧任务继续）：按会话所属空间定根，
-        // 保证本回合 fs 工具与 @ 提示解析到同一个工作空间。
-        self.root_agent_to_session_workspace(session_id)?;
+        // 会话可能属于非当前空间（切走当前空间后回到旧任务继续）：按会话所属空间取根，
+        // 作为**回合级快照**随调用传入内核——保证本回合 fs 工具与 @ 提示解析到同一个工作空间，
+        // 且不再写共享 policy（旧实现两会话并发回合互相覆盖对方的工作空间根）。
+        let turn_roots = self.session_workspace_roots(session_id)?;
 
         // 流式：加载完历史后挂 sink（历史用 push_restored 不触发 sink，故只流式本回合新事件）。
         // 同一个 sink 既是事件 EventSink（全量事件）又是 TurnObserver（文字增量）。
@@ -1212,6 +1238,7 @@ impl AgentApp {
                         Some(observed.as_ref()),
                         Some(subj),
                         Some(cancel),
+                        turn_roots.as_ref().map(std::slice::from_ref),
                     )
                     .await
             }
@@ -1225,16 +1252,17 @@ impl AgentApp {
                         Some(observed.as_ref()),
                         None,
                         Some(cancel),
+                        turn_roots.as_ref().map(std::slice::from_ref),
                     )
                     .await
             }
             (None, Some(subj)) => self
                 .agent
-                .run_turn_observed_as_cancellable(&mut session, user_input, None, Some(subj), Some(cancel))
+                .run_turn_observed_as_cancellable(&mut session, user_input, None, Some(subj), Some(cancel), turn_roots.as_ref().map(std::slice::from_ref))
                 .await,
             (None, None) => self
                 .agent
-                .run_turn_observed_as_cancellable(&mut session, user_input, None, None, Some(cancel))
+                .run_turn_observed_as_cancellable(&mut session, user_input, None, None, Some(cancel), turn_roots.as_ref().map(std::slice::from_ref))
                 .await,
         };
         // 出错一致性（飞书 ↔ 界面）：回合中途模型失败等会让 run_turn 提前返回 Err。若直接 `?` 抛出，
@@ -1412,10 +1440,10 @@ impl AgentApp {
         .map_err(|e| AppError::Agent(format!("文件检索任务失败：{e}")))?
     }
 
-    /// 回合开始前把 agent 文件根切到「会话自己所属的空间」：任务可能属于非当前空间
-    /// （切走当前空间后回到旧任务继续发消息），fs 工具的路径解析必须与该会话的
-    /// @ 提示看同一个根。会话无记录 / 空间已移除时回落当前空间（任务模式语义）。
-    fn root_agent_to_session_workspace(&self, session_id: &str) -> AppResult<()> {
+    /// 会话所属空间的文件根（**回合级快照**，随调用传给内核 ToolCtx）。
+    /// 会话无记录 / 空间已移除 → `None`：回落共享 policy 的当前空间根（任务模式语义，
+    /// 当前空间切换时由 select_workspace 即时刷新 policy）。
+    fn session_workspace_roots(&self, session_id: &str) -> AppResult<Option<std::path::PathBuf>> {
         let registry = self.workspace_registry()?;
         let workspace_id = self
             .store
@@ -1423,14 +1451,10 @@ impl AgentApp {
             .into_iter()
             .find(|m| m.id == session_id)
             .and_then(|m| m.workspace_id);
-        let rooted = match workspace_id {
-            Some(id) => registry.set_allowed_roots_for(&id, &self.agent)?,
-            None => false,
-        };
-        if !rooted {
-            registry.set_allowed_roots(&self.agent)?;
+        match workspace_id {
+            Some(id) => registry.roots_for(&id),
+            None => Ok(None),
         }
-        Ok(())
     }
 
     /// 技能 = 当前已注册工具。前端 / 菜单只做选择，发送后模型仍经工具契约与守卫执行。

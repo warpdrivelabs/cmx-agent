@@ -212,7 +212,7 @@ impl Agent {
         observer: Option<&dyn crate::model::TurnObserver>,
         turn_subject: Option<&crate::guard::Subject>,
     ) -> AgentResult<TurnOutcome> {
-        self.run_turn_observed_as_cancellable(session, user_input, observer, turn_subject, None)
+        self.run_turn_observed_as_cancellable(session, user_input, observer, turn_subject, None, None)
             .await
     }
 
@@ -224,6 +224,7 @@ impl Agent {
         observer: Option<&dyn crate::model::TurnObserver>,
         turn_subject: Option<&crate::guard::Subject>,
         cancel: Option<&TurnCancel>,
+        roots: Option<&[std::path::PathBuf]>,
     ) -> AgentResult<TurnOutcome> {
         let turn = session.next_turn_no();
         session.log.append(EventKind::TurnStarted {
@@ -286,7 +287,7 @@ impl Agent {
             // ②–⑥ 处理工具调用：一步内的多个调用**并发执行**（真并行 fan-out）。
             // 前置(路由/守卫/审批)与结果回灌仍按序（借用 &mut session + 保持日志有序），
             // 只有工具体 invoke() 并发——子智能体/网络 I/O 型调用总耗时≈最慢者而非累加。
-            self.handle_tool_calls_as(session, &resp.tool_calls, turn_subject).await;
+            self.handle_tool_calls_as(session, &resp.tool_calls, turn_subject, roots).await;
 
             if cancel.is_some_and(|c| c.is_cancelled()) {
                 break StopReason::Stopped;
@@ -323,6 +324,7 @@ impl Agent {
         session: &mut Session,
         calls: &[ToolCall],
         turn_subject: Option<&crate::guard::Subject>,
+        roots: Option<&[std::path::PathBuf]>,
     ) {
         /// 通过前置、待并发执行的工具调用。
         struct Pending<'c> {
@@ -422,7 +424,9 @@ impl Agent {
         // join_all 在同一任务上协作式并发：子智能体/网络 I/O 型工具在此段真并行推进。
         let tctx = ToolCtx {
             sandbox: policy.sandbox,
-            allowed_roots: &policy.allowed_roots,
+            // 回合级文件根：app 层按「会话所属空间」快照传入（None=回落共享 policy 的当前空间根）。
+            // 旧实现直接读共享 policy.allowed_roots——两会话并发回合互相覆盖对方的工作空间根（lost update）。
+            allowed_roots: roots.unwrap_or(&policy.allowed_roots),
         };
         let results: Vec<ToolResult> =
             futures_util::future::join_all(pending.iter().map(|p| {
@@ -592,7 +596,7 @@ mod tests {
         cancel.cancel();
         let mut session = Session::new("s-cancel");
         let outcome = agent
-            .run_turn_observed_as_cancellable(&mut session, "长任务", None, None, Some(&cancel))
+            .run_turn_observed_as_cancellable(&mut session, "长任务", None, None, Some(&cancel), None)
             .await
             .unwrap();
         assert_eq!(outcome.reason, StopReason::Stopped);

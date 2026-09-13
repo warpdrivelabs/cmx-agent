@@ -209,20 +209,21 @@ function toolBodyHtml(ev){
   }
   if(o.text!=null && o.url!=null && o.status!=null){
     const title=o.title?`<div class="wf-title">${esc(String(o.title))}</div>`:"";
-    return title+`<div class="wf-url">${esc(String(o.url))}</div><div class="tcmeta">HTTP ${o.status} · ${o.chars??""} 字符</div><pre class="tcode">${esc(String(o.text))}</pre>`;
+    return title+`<div class="wf-url">${esc(String(o.url))}</div><div class="tcmeta">HTTP ${esc(String(o.status))} · ${esc(String(o.chars??""))} 字符</div><pre class="tcode">${esc(String(o.text))}</pre>`;
   }
   if(o.rows!=null && Array.isArray(o.columns)){
     const cols=o.columns.map(c=>{
-      if(c.type==="numeric") return `<tr><td>${esc(c.name)}</td><td>数值</td><td>min ${c.min} · max ${c.max} · 均值 ${c.mean}</td></tr>`;
-      const top=(c.top||[]).map(t=>esc(String(t.value))+"("+t.count+")").join("、");
-      return `<tr><td>${esc(c.name)}</td><td>文本</td><td>去重 ${c.distinct} · Top ${top}</td></tr>`;
+      if(c.type==="numeric") return `<tr><td>${esc(c.name)}</td><td>数值</td><td>min ${esc(String(c.min))} · max ${esc(String(c.max))} · 均值 ${esc(String(c.mean))}</td></tr>`;
+      const top=(c.top||[]).map(t=>esc(String(t.value))+"("+esc(String(t.count))+")").join("、");
+      return `<tr><td>${esc(c.name)}</td><td>文本</td><td>去重 ${esc(String(c.distinct))} · Top ${top}</td></tr>`;
     }).join("");
     return `<div class="tcmeta">${o.rows} 行 · ${o.columns.length} 列</div><table class="tdata"><thead><tr><th>列</th><th>类型</th><th>统计</th></tr></thead><tbody>${cols}</tbody></table>`;
   }
   if(o.kind==="excel" && Array.isArray(o.sheets)){
     const sh=o.sheets[0]||{}; const rows=(sh.data||[]).slice(0,12);
     const body=rows.map((r,i)=>`<tr>${r.slice(0,10).map(c=>i===0?`<th>${esc(String(c))}</th>`:`<td>${esc(String(c))}</td>`).join("")}</tr>`).join("");
-    return `<div class="tcmeta">${o.sheets.length} sheet · ${sh.name||""} ${sh.rows_total??"?"}×${sh.cols_total??"?"}</div><table class="tdata"><tbody>${body}</tbody></table>`;
+    // sheet 名来自用户文件内容，必须转义（XSS 注入面：IM 遥控可驱动 agent 读任意 xlsx）。
+    return `<div class="tcmeta">${o.sheets.length} sheet · ${esc(String(sh.name||""))} ${esc(String(sh.rows_total??"?"))}×${esc(String(sh.cols_total??"?"))}</div><table class="tdata"><tbody>${body}</tbody></table>`;
   }
   if(o.kind==="pptx" && Array.isArray(o.slides)){
     const s=o.slides.map(sl=>`<b>幻灯片 ${sl.slide}</b>\n${sl.text}`).join("\n\n");

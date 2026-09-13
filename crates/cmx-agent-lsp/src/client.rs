@@ -5,6 +5,11 @@
 
 use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
+
+/// 单帧 Content-Length 上限（16MB）：防恶意/损坏流的无上限预分配 OOM。
+const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
+/// 单帧读取超时：僵死 server 不许把回合无限挂住。
+const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -47,6 +52,8 @@ impl LspClient {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
+            // 超时/被丢弃时随 Client 一起收尸，不留孤儿语言服务器进程。
+            .kill_on_drop(true)
             .spawn()
             .map_err(|e| LspError::Spawn(e.to_string()))?;
         let stdin = child.stdin.take().ok_or(LspError::Protocol("no stdin".into()))?;
@@ -210,13 +217,25 @@ impl LspClient {
             }
         }
         let len = content_len.ok_or(LspError::Protocol("缺少 Content-Length".into()))?;
+        // 无上限预分配（vec![0u8; len]）= 恶意/损坏流单帧声明 TB 级长度直接 OOM——封顶 16MB。
+        if len > MAX_FRAME_BYTES {
+            return Err(LspError::Protocol(format!(
+                "Content-Length {len} 超过上限 {MAX_FRAME_BYTES}"
+            )));
+        }
         let mut buf = vec![0u8; len];
-        self.reader.read_exact(&mut buf).await.map_err(|e| LspError::Io(e.to_string()))?;
+        // 读帧挂死 = 僵死 server 把回合永久卡住——包一层超时。
+        tokio::time::timeout(READ_TIMEOUT, self.reader.read_exact(&mut buf))
+            .await
+            .map_err(|_| LspError::Protocol(format!("server 响应超时（{}s）", READ_TIMEOUT.as_secs())))?
+            .map_err(|e| LspError::Io(e.to_string()))?;
         serde_json::from_slice(&buf).map_err(|e| LspError::Protocol(e.to_string()))
     }
 
     pub async fn shutdown(&mut self) {
         let _ = self.child.start_kill();
+        // 收尸：start_kill 后等子进程退出，避免 Unix 侧僵尸进程。
+        let _ = self.child.wait().await;
     }
 }
 

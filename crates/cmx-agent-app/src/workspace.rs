@@ -59,9 +59,20 @@ impl WorkspaceRegistry {
         migrate_legacy_default(data_dir)?;
         let mut items = if path.exists() {
             let raw = std::fs::read_to_string(&path)?;
-            serde_json::from_str::<Vec<WorkspaceEntry>>(&raw).map_err(|e| {
-                AppError::Corrupt(format!("workspaces.json 解析失败：{e}"))
-            })?
+            match serde_json::from_str::<Vec<WorkspaceEntry>>(&raw) {
+                Ok(items) => items,
+                // 损坏不再 Err 砖死启动（旧实现壳层 expect → 桌面应用永久打不开）：
+                // 备份现场后从零重建，默认空间由下方 ensure_default_workspace 恢复。
+                Err(e) => {
+                    let bak = path.with_extension("json.corrupt");
+                    let _ = std::fs::rename(&path, &bak);
+                    eprintln!(
+                        "[workspace] workspaces.json 损坏（已备份到 {}），从零重建：{e}",
+                        bak.display()
+                    );
+                    Vec::new()
+                }
+            }
         } else {
             Vec::new()
         };
@@ -278,6 +289,17 @@ impl WorkspaceRegistry {
         }
     }
 
+    /// 查指定空间的根路径（只读，不写共享 policy——回合根改由回合级快照传入内核 ToolCtx）。
+    /// 空间不存在返回 `None`。
+    pub fn roots_for(&self, id: &str) -> AppResult<Option<std::path::PathBuf>> {
+        let state = self.state.read().expect("workspace state");
+        Ok(state
+            .items
+            .iter()
+            .find(|w| w.id == id)
+            .map(|w| w.path.clone()))
+    }
+
     pub fn search_files(&self, query: &str, limit: usize) -> AppResult<Vec<WorkspaceFile>> {
         let Some(root) = self.current_path() else {
             return Ok(Vec::new());
@@ -304,7 +326,8 @@ impl WorkspaceRegistry {
             std::fs::create_dir_all(parent)?;
         }
         let raw = serde_json::to_string_pretty(&state.items)?;
-        std::fs::write(&self.path, raw)?;
+        // 原子写（temp+rename）：直写被中断会留半份 JSON，下次启动解析失败。
+        crate::store::write_atomic(&self.path, raw.as_bytes())?;
         Ok(())
     }
 }

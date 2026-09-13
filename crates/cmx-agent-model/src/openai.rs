@@ -138,25 +138,28 @@ pub fn parse_response(v: &Value) -> Result<ModelResponse, ModelError> {
 
     let mut tool_calls: Vec<ToolCall> = Vec::new();
     if let Some(calls) = msg.get("tool_calls").and_then(|c| c.as_array()) {
-        for (i, c) in calls.iter().enumerate() {
+        for c in calls.iter() {
             let id = c
                 .get("id")
                 .and_then(|x| x.as_str())
                 .map(|s| s.to_string())
-                .unwrap_or_else(|| format!("call_{i}"));
+                .unwrap_or_else(next_call_id);
             let func = c.get("function");
             let name = func
                 .and_then(|f| f.get("name"))
                 .and_then(|x| x.as_str())
                 .unwrap_or_default()
                 .to_string();
-            // arguments 是 JSON 字符串；宽松解析，失败则原样塞入 {"_raw": "..."}
+            // arguments 是 JSON 字符串；解析失败（典型：finish_reason=length 截断的半截参数）
+            // 直接丢弃该调用——旧实现塞 {"_raw": 原串} 照跑，残参会原样进入错误消息/日志。
             let args_raw = func
                 .and_then(|f| f.get("arguments"))
                 .and_then(|x| x.as_str())
                 .unwrap_or("{}");
-            let input: Value = serde_json::from_str(args_raw)
-                .unwrap_or_else(|_| json!({ "_raw": args_raw }));
+            let Ok(input) = serde_json::from_str::<Value>(args_raw) else {
+                eprintln!("[model] 工具 {name} 的参数不是合法 JSON（疑似截断），已丢弃");
+                continue;
+            };
             if !name.is_empty() {
                 tool_calls.push(ToolCall::with_id(id, name, input));
             }
@@ -174,6 +177,14 @@ pub fn parse_response(v: &Value) -> Result<ModelResponse, ModelError> {
         reasoning,
         tool_calls,
     })
+}
+
+/// 合成 tool_call id 的进程级序号：网关省略 id 时跨会话也绝不重号（旧实现按响应内
+/// index 从 0 起名，两会话并发时各自的 `call_0` 在审批 pending 表里互相覆盖）。
+fn next_call_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static CALL_SEQ: AtomicU64 = AtomicU64::new(0);
+    format!("call_{}", CALL_SEQ.fetch_add(1, Ordering::Relaxed))
 }
 
 /// 流式累加器：跨 SSE 增量拼接文字与工具调用（工具的 arguments 会分片到达，按 index 拼）。
@@ -208,16 +219,20 @@ impl StreamAcc {
             .tools
             .into_iter()
             .filter(|t| !t.name.is_empty())
-            .enumerate()
-            .map(|(i, t)| {
+            .filter_map(|t| {
                 let id = if t.id.is_empty() {
-                    format!("call_{i}")
+                    next_call_id()
                 } else {
                     t.id
                 };
-                let input: Value = serde_json::from_str(if t.args.is_empty() { "{}" } else { &t.args })
-                    .unwrap_or_else(|_| serde_json::json!({ "_raw": t.args }));
-                ToolCall::with_id(id, t.name, input)
+                // 参数解析失败（疑似 length 截断的半截参数）直接丢弃，不再以 {"_raw":…} 照跑。
+                match serde_json::from_str::<Value>(if t.args.is_empty() { "{}" } else { &t.args }) {
+                    Ok(input) => Some(ToolCall::with_id(id, t.name, input)),
+                    Err(_) => {
+                        eprintln!("[model] 工具 {} 的参数不是合法 JSON（疑似截断），已丢弃", t.name);
+                        None
+                    }
+                }
             })
             .collect();
         let reasoning = if self.reasoning.is_empty() {
@@ -281,14 +296,17 @@ fn apply_stream_chunk(acc: &mut StreamAcc, v: &Value) -> Option<StreamDelta> {
         }
     }
 
-    // 思考过程增量：先于正文/工具调用到达，单独累计并回调。
+    // 思考过程增量 + 文字增量：两者各自累计。部分网关（如 GLM 推理模型）会把两类并进
+    // 同一帧 delta——不能因先命中 reasoning 就 early-return 丢掉同帧正文。返回值只能带
+    // 一种增量：同帧并存时返回正文（思考卡丢一帧增量，但数据一个字都不丢）。
+    let mut reasoning_delta = None;
     if let Some(content) = delta
         .get("reasoning_content")
         .and_then(|c| c.as_str())
         && !content.is_empty()
     {
         acc.reasoning.push_str(content);
-        return Some(StreamDelta::Reasoning(content.to_string()));
+        reasoning_delta = Some(content.to_string());
     }
 
     // 文字增量
@@ -297,7 +315,7 @@ fn apply_stream_chunk(acc: &mut StreamAcc, v: &Value) -> Option<StreamDelta> {
             acc.text.push_str(content);
             return Some(StreamDelta::Text(content.to_string()));
         }
-    None
+    reasoning_delta.map(StreamDelta::Reasoning)
 }
 
 /// 单次 SSE 读取尝试：逐行消费响应体，把增量灌进 `acc`。
@@ -644,11 +662,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_malformed_arguments_falls_back_to_raw() {
+    fn parse_malformed_arguments_drops_tool_call() {
         let v = json!({"choices":[{"message":{"tool_calls":[
             {"id":"c1","function":{"name":"x","arguments":"not-json"}}]}}]});
         let r = parse_response(&v).unwrap();
-        assert_eq!(r.tool_calls[0].input["_raw"], "not-json");
+        assert!(
+            r.tool_calls.is_empty(),
+            "坏 JSON 参数的调用应被丢弃（不再以 _raw 照跑——残参会进错误消息/日志）"
+        );
     }
 
     #[test]

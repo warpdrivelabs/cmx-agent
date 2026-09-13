@@ -34,6 +34,17 @@ pub(crate) fn client(timeout_ms: u64) -> reqwest::Client {
         .unwrap_or_else(|_| reqwest::Client::new())
 }
 
+/// 不自动跟重定向的客户端（web_fetch 逐跳复检 SSRF 用）：reqwest 默认自动跟 10 跳，
+/// 公网 URL 一跳 302 到 169.254.169.254/127.0.0.1 即绕过 ensure_public_url。
+pub(crate) fn client_no_redirect(timeout_ms: u64) -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(Duration::from_millis(timeout_ms))
+        .user_agent("Mozilla/5.0 (compatible; cmx-agent/1.0; +https://cmx.local)")
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
 /// SSRF 基线防护：仅允许 http/https；`allow_private=false` 时拒绝 loopback/私网/链路本地/元数据主机。
 /// 仅拦截「字面量私网 IP + localhost 类主机名」——桌面助手基线，不做 DNS 重绑定深防。
 /// `allow_private` 由工具持有（builder 从 env `CMX_AGENT_NET_ALLOW_PRIVATE` 读，自托管/测试可放开）。

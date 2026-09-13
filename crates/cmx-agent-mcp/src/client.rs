@@ -6,6 +6,9 @@
 
 use std::process::Stdio;
 
+/// 单帧读取超时：僵死/不回包的外部 server 不许把回合无限挂住。
+const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin};
@@ -54,7 +57,9 @@ impl McpClient {
         cmd.args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            .stderr(Stdio::null())
+            // 超时/被丢弃时随 Client 一起收尸，不留孤儿 MCP server 进程。
+            .kill_on_drop(true);
         for (k, v) in env {
             cmd.env(k, v);
         }
@@ -170,10 +175,10 @@ impl McpClient {
     async fn read_msg(&mut self) -> Result<Value, McpError> {
         loop {
             let mut buf = String::new();
-            let n = self
-                .reader
-                .read_line(&mut buf)
+            // 单帧读取挂死 = 僵死 server 把回合永久卡住（外部进程必须会失败）——包一层超时。
+            let n = tokio::time::timeout(READ_TIMEOUT, self.reader.read_line(&mut buf))
                 .await
+                .map_err(|_| McpError::Protocol(format!("{}: 响应超时（{}s）", self.label, READ_TIMEOUT.as_secs())))?
                 .map_err(|e| McpError::Io(e.to_string()))?;
             if n == 0 {
                 return Err(McpError::Eof);

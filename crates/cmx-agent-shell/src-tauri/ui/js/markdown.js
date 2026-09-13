@@ -6,7 +6,9 @@ function mdInline(t){
     .replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>')
     .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g,'$1<em>$2</em>')
     .replace(/~~([^~]+)~~/g,'<del>$1</del>')
-    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+    // 链接协议白名单：只放行 http/https/mailto/页内锚点，[x](javascript:...) 降级为纯文本
+    // （txt/href 已过 esc，引号均转义，属性位安全）。
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g,(m,txt,href)=>/^(https?:|mailto:|#)/i.test(href)?`<a href="${href}" target="_blank" rel="noopener">${txt}</a>`:`${txt}（${href}）`);
 }
 /** 轻量 Markdown → HTML。@param {string} src @returns {string} HTML */
 function renderMarkdown(src){

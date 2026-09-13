@@ -16,7 +16,12 @@ use crate::client::CmxServiceClient;
 /// 把 `scope:action` 权限串映射为 PDP 的 (kind, action)。
 /// action 归一到 read/write/execute；kind 用 scope（flow/onto/report/fs/net…）。
 fn perm_to_resource(perm: &str) -> (String, String) {
-    let (scope, act) = perm.split_once(':').unwrap_or((perm, "read"));
+    let (scope, act) = match perm.split_once(':') {
+        Some((s, a)) => (s, a),
+        // 无冒号权限（exec 等）按「执行」判——旧实现退化为 read，"允许读"类策略
+        // 即可放行 shell 执行，判定语义与策略作者意图错位。
+        None => (perm, "exec"),
+    };
     let action = match act {
         "read" => "read",
         "write" => "write",
@@ -105,7 +110,7 @@ mod tests {
     fn perm_maps_to_kind_action() {
         assert_eq!(perm_to_resource("flow:write"), ("flow".into(), "write".into()));
         assert_eq!(perm_to_resource("onto:read"), ("onto".into(), "read".into()));
-        assert_eq!(perm_to_resource("exec"), ("exec".into(), "read".into())); // 无冒号退化
+        assert_eq!(perm_to_resource("exec"), ("exec".into(), "execute".into())); // 无冒号按执行判
         assert_eq!(perm_to_resource("net:fetch"), ("net".into(), "read".into()));
     }
 

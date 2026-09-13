@@ -268,9 +268,10 @@ async fn high_risk_allowed_under_danger_full_access() {
 }
 
 #[tokio::test]
-async fn danger_full_access_skips_tool_approval() {
-    // danger-full-access（≈ --yolo）：即便工具声明 requires_approval: Always，
-    // 也不再弹审批卡——approver 挂 reject 兜底，若被问就会失败。
+async fn danger_full_access_still_gates_always_approval() {
+    // danger-full-access（≈ --yolo）：Conditional 级人审跳过不弹卡，但 **Always 级（硬人审）
+    // 不豁免**——两旋钮正交，能力旋钮不得吞掉许可旋钮的全部闸门。
+    // approver 挂 reject 兜底：被问即拒。
     let mut guards = GuardPipeline::new();
     guards
         .add(Arc::new(HighRiskGuard))
@@ -290,15 +291,15 @@ async fn danger_full_access_skips_tool_approval() {
         })
         .build()
         .unwrap();
-    let mut s = Session::new("yolo-skip");
+    let mut s = Session::new("yolo-gate");
     agent.run_turn(&mut s, "rm").await.unwrap();
     let (ok, _) = last_tool_result(&s);
-    assert!(ok, "danger-full-access 下 requires_approval 工具应跳过人审直接放行");
+    assert!(!ok, "danger 沙箱不得豁免 requires_approval:Always 的硬人审");
     assert!(
-        !s.log
+        s.log
             .iter()
             .any(|e| matches!(e.kind, EventKind::ApprovalRequested { .. })),
-        "不应产生 ApprovalRequested 事件"
+        "Always 工具在 danger 下仍应产生 ApprovalRequested"
     );
 }
 

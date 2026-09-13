@@ -753,9 +753,20 @@ fn main() {
             });
             net_rt().spawn(async move {
                 let mut rx = app_ref.event_bus().subscribe();
-                while let Ok(env) = rx.recv().await {
-                    eprintln!("[bus] emit session_event session={} kind={}", env.session_id, serde_json::to_string(&env.event.kind).unwrap_or_default());
-                    let _ = handle.emit("session_event", env);
+                loop {
+                    match rx.recv().await {
+                        Ok(env) => {
+                            eprintln!("[bus] emit session_event session={} kind={}", env.session_id, serde_json::to_string(&env.event.kind).unwrap_or_default());
+                            let _ = handle.emit("session_event", env);
+                        }
+                        // Lagged = 订阅者落后被广播器丢帧：必须续收而非退出——旧实现 `while let Ok`
+                        // 在 Lagged 时直接终结转发 task，审批卡/消息/工具结果从此不再推前端，
+                        // 挂起的审批只能等 300s 超时拒绝（长回合/多通道并发正是 lag 高发场景）。
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            eprintln!("[bus] session_event 落后 {n} 帧，已续收（前端可重拉会话补齐）");
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
                 }
                 eprintln!("[main] session_event 转发 task 结束（总线已关闭）");
             });

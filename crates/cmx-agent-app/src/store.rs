@@ -146,15 +146,28 @@ impl SessionStore for FileSessionStore {
         let file = std::fs::File::open(&path)?;
         let reader = BufReader::new(file);
         let mut events = Vec::new();
-        for (i, line) in reader.lines().enumerate() {
-            let line = line?;
-            if line.trim().is_empty() {
+        let lines: Vec<String> = reader.lines().collect::<Result<_, _>>()?;
+        let last = lines.len().saturating_sub(1);
+        for (i, raw) in lines.iter().enumerate() {
+            let line = raw.trim();
+            if line.is_empty() {
                 continue;
             }
-            let ev: SessionEvent = serde_json::from_str(&line).map_err(|e| {
-                AppError::Corrupt(format!("session '{session_id}' line {}: {e}", i + 1))
-            })?;
-            events.push(ev);
+            match serde_json::from_str::<SessionEvent>(line) {
+                Ok(ev) => events.push(ev),
+                Err(e) => {
+                    // 末行损坏 = 进程中断的 append 残迹（行写非原子）：跳过可自愈；
+                    // 中段坏行 = 真损坏：仍报 Corrupt，不静默吞数据。
+                    if i == last {
+                        eprintln!("[store] 会话 {session_id} 末行损坏（疑似崩溃残迹），已跳过：{e}");
+                    } else {
+                        return Err(AppError::Corrupt(format!(
+                            "session '{session_id}' line {}: {e}",
+                            i + 1
+                        )));
+                    }
+                }
+            }
         }
         let system = meta.and_then(|m| m.system);
         Ok(Session::from_events(session_id, system, events))
@@ -238,7 +251,7 @@ impl SessionStore for FileSessionStore {
         let dir = self.session_dir(&meta.id)?;
         std::fs::create_dir_all(&dir)?;
         let json = serde_json::to_string_pretty(meta)?;
-        std::fs::write(self.meta_path(&meta.id)?, json)?;
+        write_atomic(&self.meta_path(&meta.id)?, json.as_bytes())?;
         Ok(())
     }
 
@@ -256,7 +269,22 @@ fn read_meta(path: &Path) -> AppResult<Option<SessionMeta>> {
         return Ok(None);
     }
     let s = std::fs::read_to_string(path)?;
-    let meta: SessionMeta = serde_json::from_str(&s)
-        .map_err(|e| AppError::Corrupt(format!("meta {}: {e}", path.display())))?;
-    Ok(Some(meta))
+    match serde_json::from_str::<SessionMeta>(&s) {
+        Ok(meta) => Ok(Some(meta)),
+        // meta 损坏不再砖死全局：旧实现一个坏 meta.json 让 list_sessions/send 全挂——
+        // 降级为无元数据，会话正文仍可从 log.jsonl 恢复。
+        Err(e) => {
+            eprintln!("[store] meta 损坏，降级为无元数据（{}）：{e}", path.display());
+            Ok(None)
+        }
+    }
+}
+
+/// 原子写：先落同目录临时文件再 rename 覆盖（std rename 在 Windows 上可替换已存在目标）。
+/// 进程中断最多留下 .tmp 残迹，不会写出半份 JSON 砖死读取方。
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> AppResult<()> {
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, bytes)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
 }
