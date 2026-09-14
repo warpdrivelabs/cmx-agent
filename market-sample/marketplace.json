@@ -1,0 +1,101 @@
+{
+  "name": "cmx 本地插件市场（示例）",
+  "plugins": [
+    {
+      "name": "cmx-rules",
+      "kind": "http",
+      "version": "1.0.0",
+      "description": "决策表 / FEEL 规则评估连接器：调用 cmx-rule-server 评估规则集",
+      "icon": "⚖",
+      "author": "cmx",
+      "homepage": "https://127.0.0.1:8094/",
+      "manifest": {
+        "name": "cmx-rules",
+        "kind": "http",
+        "version": "1.0.0",
+        "description": "评估决策规则集：传入规则集编码与输入数据，返回规则命中结果（cmx-rule-server :8094）",
+        "icon": "⚖",
+        "author": "cmx",
+        "permissions": [
+          "net:fetch"
+        ],
+        "base_url": "http://127.0.0.1:8094",
+        "method": "POST",
+        "path": "/api/rules/v1/evaluate",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "ruleSetCode": {
+              "type": "string",
+              "description": "规则集编码"
+            },
+            "input": {
+              "type": "object",
+              "description": "评估输入数据（字段名与规则集定义一致）"
+            }
+          },
+          "required": [
+            "ruleSetCode",
+            "input"
+          ]
+        }
+      }
+    },
+    {
+      "name": "excel-stats",
+      "kind": "command",
+      "version": "0.1.0",
+      "description": "Excel 列统计：输出各列行数/空值率/去重数（演示 command 载体；本机 python3 执行）",
+      "icon": "📊",
+      "author": "javier",
+      "manifest": {
+        "name": "excel-stats",
+        "kind": "command",
+        "version": "0.1.0",
+        "description": "统计 Excel/CSV 文件各列的行数、空值率与去重数（需要 python3；统计 CSV 用内置 csv 模块）",
+        "icon": "📊",
+        "author": "javier",
+        "requires_approval": false,
+        "permissions": [
+          "exec"
+        ],
+        "command": "python3",
+        "args": [
+          "/Users/javier/Documents/workspace/rust/cmx-workspace/backend/cmx-agent/market-sample/plugins/excel_stats.py",
+          "--file",
+          "{file}"
+        ],
+        "schema": {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": "string",
+              "description": "CSV/Excel 文件的绝对路径"
+            }
+          },
+          "required": [
+            "file"
+          ]
+        }
+      }
+    },
+    {
+      "name": "wasm-add",
+      "kind": "wasm",
+      "version": "0.1.0",
+      "description": "两数相加（wasm 载体演示；依赖本机 wasmer，未装则安装后调用报错）",
+      "icon": "🧱",
+      "author": "cmx",
+      "manifest": {
+        "name": "wasm-add",
+        "kind": "wasm",
+        "version": "0.1.0",
+        "description": "两数相加（wasm 演示插件）",
+        "icon": "🧱",
+        "author": "cmx",
+        "module": "/Users/javier/Documents/workspace/rust/cmx-workspace/backend/cmx-agent/market-sample/plugins/add.wat",
+        "invoke": "add"
+      }
+    }
+  ]
+}
