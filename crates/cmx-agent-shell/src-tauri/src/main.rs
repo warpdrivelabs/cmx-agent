@@ -715,6 +715,8 @@ fn build_app() -> AgentApp {
         .auth(AuthConfig { base_url: portal_base() })
         .interactive_approval() // X4：shell 等需审批工具挂起等前端点按
         .mcp_tools(mcp_tools)   // U3：外部 MCP 工具
+        // U15 插件市场：配 env 则拉远程目录（未配回落 env/无市场，见 builder 双保险）。
+        .plugin_market(std::env::var("CMX_AGENT_PLUGIN_MARKET").ok())
         // U13：opt-in 数据权限接地——CMX_AGENT_DATAAUTH_URL 指向 cmx-data-auth 即启用真 PEP。
         .maybe_data_auth(std::env::var("CMX_AGENT_DATAAUTH_URL").ok())
         .build()

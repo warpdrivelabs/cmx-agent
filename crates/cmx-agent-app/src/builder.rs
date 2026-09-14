@@ -39,6 +39,8 @@ pub struct DesktopAppBuilder {
     data_auth: Option<String>,
     /// Web 壳 per-user 模型配置基目录：Some(base) = `<base>/<username>/model.json`；None = 全局（Tauri 用）。
     user_config_base: Option<PathBuf>,
+    /// U15 远程插件市场 URL（build() 未显式注入时回落读 env `CMX_AGENT_PLUGIN_MARKET`）。
+    plugin_market: Option<String>,
 }
 
 impl DesktopAppBuilder {
@@ -63,6 +65,7 @@ impl DesktopAppBuilder {
             mcp_tools: Vec::new(),
             data_auth: None,
             user_config_base: None,
+            plugin_market: None,
         }
     }
 
@@ -114,6 +117,14 @@ impl DesktopAppBuilder {
     /// Tauri 壳不调用此方法，始终用全局 data_dir/model.json（单机单用户场景）。
     pub fn user_config_base(mut self, dir: impl Into<PathBuf>) -> Self {
         self.user_config_base = Some(dir.into());
+        self
+    }
+
+    /// 注入远程插件市场 URL（U15）：Some(非空) = list_plugins 拉该目录、面板市场区可一键安装；
+    /// None/空 = 无远程市场（面板回落演示目录）。**builder 未显式注入时 build() 仍会回落
+    /// 读 env `CMX_AGENT_PLUGIN_MARKET`**（见 build 内 plugin_market 解析），双保险。
+    pub fn plugin_market(mut self, url: Option<String>) -> Self {
+        self.plugin_market = url.filter(|s| !s.trim().is_empty());
         self
     }
 
@@ -239,7 +250,12 @@ impl DesktopAppBuilder {
         registry.register(Arc::new(cmx_agent_plugin::PluginInstallTool::new(plugins_dir.clone())));
         registry.register(Arc::new(cmx_agent_plugin::PluginMarketplaceTool::default()));
         let plugin_summaries = cmx_agent_plugin::plugin_summaries(&plugin_manifests);
-        let plugin_market = std::env::var("CMX_AGENT_PLUGIN_MARKET").ok().filter(|s| !s.is_empty());
+        // 市场 URL：显式注入优先（`plugin_market` setter），未注入回落 env `CMX_AGENT_PLUGIN_MARKET`。
+        let plugin_market = self
+            .plugin_market
+            .clone()
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| std::env::var("CMX_AGENT_PLUGIN_MARKET").ok().filter(|s| !s.is_empty()));
         // 共享令牌槽：登录后 app 写入 access_token，连接器读出带 Bearer（auth=on 服务如 cmx-flow 必需）。
         let token_store: cmx_agent_connectors::TokenStore =
             Arc::new(std::sync::RwLock::new(None));

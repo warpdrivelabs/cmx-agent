@@ -101,6 +101,8 @@ async fn build_app(workdir: &std::path::Path, data_dir: &std::path::Path) -> Age
         .auth(cmx_agent_app::AuthConfig::default())
         .interactive_approval() // X4：shell 等需审批工具挂起等前端点按
         .mcp_tools(mcp_tools) // U3：外部 MCP 工具
+        // U15 插件市场：配 env 则拉远程目录（未配回落 env/无市场，见 builder 双保险）。
+        .plugin_market(std::env::var("CMX_AGENT_PLUGIN_MARKET").ok())
         .maybe_data_auth(std::env::var("CMX_AGENT_DATAAUTH_URL").ok())
         .user_config_base(data_dir.join("users")) // per-user 模型配置：<data_dir>/users/<username>/model.json
         .build()
