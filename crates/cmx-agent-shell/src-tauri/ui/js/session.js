@@ -294,6 +294,7 @@ async function approveTool(callId, approved, all, note){
 // 审批卡忙碌态：禁用全部选项/按钮 + 状态行文案；失败时恢复可点。
 function setApprovalCardBusy(card,busy,msg){
   if(!card) return;
+  card.classList.toggle("busy",!!busy);
   card.querySelectorAll(".apopt,.apbtn").forEach(b=>{ b.disabled=busy; });
   const w=card.querySelector(".apwaitline"); if(w) w.textContent=msg||(busy?"已提交，处理中…":"等待确认…");
 }
@@ -328,9 +329,17 @@ async function answerQuestion(btn){
   if(!dismiss){
     answers=collectQuestionAnswers(card||{dataset:{rid:rid},_questions:[]});
   }
+  // 必答校验（提交路径；忽略整卡放弃不受限）：有空页跳到第一处并提示，不发命令
+  if(!dismiss && card){
+    const empty=(answers||[]).findIndex(a=>!a.length);
+    if(empty>=0){ qGoPage(card,empty);
+      const hint=card.querySelector(".qchint"); if(hint) hint.textContent="第 "+(empty+1)+" 问未作答（逐题作答，或用「忽略」整卡放弃）";
+      return; }
+  }
   // 立即置「处理中」防重复点击（对齐 approveTool）
   document.querySelectorAll(".tool.qcard").forEach(c=>{ if(c.dataset.rid===rid){
-    c.querySelectorAll(".apbtn,.qopt").forEach(b=>{ b.disabled=true; });
+    c.classList.add("busy");
+    c.querySelectorAll(".apbtn,.qopt input").forEach(b=>{ b.disabled=true; });
     const f=c.querySelector(".qcfoot"); if(f) f.dataset.busy="1";
     const hint=c.querySelector(".qchint"); if(hint) hint.textContent="已提交，处理中…";
   }});
@@ -355,7 +364,8 @@ async function answerQuestion(btn){
     // 失败必须可见且恢复可点
     showToast("提问提交失败："+(e&&e.message||e));
     document.querySelectorAll(".tool.qcard").forEach(c=>{ if(c.dataset.rid===rid){
-      c.querySelectorAll(".apbtn,.qopt").forEach(b=>{ b.disabled=false; });
+      c.classList.remove("busy");
+      c.querySelectorAll(".apbtn,.qopt input").forEach(b=>{ b.disabled=false; });
       const f=c.querySelector(".qcfoot"); if(f) delete f.dataset.busy;
       const hint=c.querySelector(".qchint"); if(hint) hint.textContent="⚠ 提交失败："+String(e&&e.message||e);
     }});
@@ -436,6 +446,7 @@ function makeLoadMore(log, sid, start, total){
   b.onclick=()=>loadEarlier(log, b);
   return b;
 }function renderHistory(log, sid, events, start, total){
+  ensureStick(log);                 // 贴底/回底监听绑真实滚动元素（renderInto 里 renderEvent 拿到的是 frag）
   const frag=document.createDocumentFragment();
   if(start>0) frag.append(makeLoadMore(log, sid, start, total));   // 上方还有更早的
   renderInto(frag, sid, events);
@@ -588,7 +599,7 @@ async function doSendTab(t, text){
 function queueNote(log, text){
   const host=log._turn||log;
   host.append(el("meta note",esc(text)));
-  log.scrollTop=1e9;
+  log._stick=true; log.scrollTop=log.scrollHeight;
 }
 async function sendChatTab(t){
   const box=t.view.querySelector(".inp2"); const text=box.value.trim(); if(!text) return;
@@ -620,6 +631,20 @@ function closeInterruptedTurn(log){
     log._intMarked=true;
     log._turn=null;
   }
+  // 中断即时清场：内核 cancel_session 会把挂起审批/提问统一拒绝，但 SSE 已被客户端掐断，
+  // 这些回执永远渲染不到——工具卡转圈、审批卡残留必须就地收敛（口径与重放 settlePendingCards 一致）。
+  log.querySelectorAll(".tool.tcard.run").forEach(card=>{
+    card.classList.remove("run"); card.classList.add("done");
+    setToolStatus(card,"ok","已中断");
+    const body=card.querySelector(".tc-body");
+    if(body && !body.childNodes.length) body.innerHTML=`<div class="tcempty">（已中断：未收到回执）</div>`;
+  });
+  log.querySelectorAll(".iline.ap-wait").forEach(l=>{
+    l.classList.remove("ap-wait"); l.classList.add("no");
+    l.textContent="⏸ 审批无回执（回合被中断）";
+  });
+  const sv=log.closest(".session-view"), zone=sv&&sv.querySelector(".interact");
+  if(zone) zone.querySelectorAll(".tool.approval,.tool.qcard").forEach(c=>c.remove());
 }
 async function stopSession(t){
   if(t._streamCancel) t._streamCancel();

@@ -137,6 +137,10 @@ document.addEventListener("click", e=>{
   } else if(act === "answerQuestion"){
     answerQuestion(el);
   } else if(act === "toolCopy"){ toolCopy(el);
+  } else if(act === "copyBody"){
+    const b=el.closest(".tc-body");
+    if(b){ const c=b.cloneNode(true); c.querySelectorAll(".tc-copy").forEach(n=>n.remove());
+      copyText(c.innerText).then(ok=>showToast(ok?"已复制到剪贴板":"复制失败")); }
   } else if(act === "toolShare"){ toolShare(el);
   } else if(act === "toolLike"){ toolLike(el);
   } else if(act === "toolDislike"){ toolDislike(el);

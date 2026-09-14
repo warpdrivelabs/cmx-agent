@@ -141,6 +141,13 @@ function ensureToolCard(log, call){
   }
   return card;
 }
+// 结果体「复制」浮钮（opencode ContentText 自带复制的对齐）：仅代码/终端/差异类结果体需要
+function addBodyCopy(card){
+  const b=card.querySelector(".tc-body"); if(!b) return;
+  if(!b.querySelector(".tcode,.tterm,.tdiff")) return;
+  if(b.querySelector(".tc-copy")) return;
+  b.insertAdjacentHTML("beforeend",`<button class="tc-copy" type="button" data-act="copyBody" title="复制结果">复制</button>`);
+}
 // tool_result：按 call_id 配对回填；上下文工具折叠入组；找不到卡（分页边界）走旧式独立结果卡
 function completeToolCard(log, ev){
   const id=ev.call_id||"";
@@ -155,11 +162,18 @@ function completeToolCard(log, ev){
   card.classList.remove("run");
   card.classList.add(ev.ok?"done":"fail");
   setToolStatus(card, ev.ok?"ok":"bad", ev.ok?"完成":"失败 / 被拦截");
+  // 工具耗时（opencode 式 >2s 才显示）：invoke/result 事件 ts 差。被拒/被拦（denied 类，
+  // 工具从未执行）不显示；数值含人工审批等待，悬停可见口径说明
+  { const o2=ev.output||{};
+    const deniedLike=o2&&typeof o2==="object"&&typeof o2.error==="string";
+    const t1=(typeof ev.ts==="string"?Date.parse(ev.ts):ev.ts)||null;
+    if(!deniedLike&&t1&&card._t0&&t1>card._t0){ const dt=t1-card._t0;
+      if(dt>2000){ const chev=card.querySelector(".tc-chev"); if(chev) chev.insertAdjacentHTML("beforebegin",`<span class="tc-dur" title="自调用起（含人工审批等待）">· ${esc(fmtDur(dt))}</span>`); } } }
   // fs_write 成功时内容体已在建卡时渲染（正文即记录），不回退成结果 JSON；失败照常展示被拦截原因
   const isWrite = card.dataset.tool==="fs_write" && card._input && typeof card._input.content==="string";
   // ask_user 成功：问句行原地落「已询问 N 个问题」+ Q/A 体（trigger 一并重写，状态点让位给 ? 图标）
   if(card.dataset.tool==="ask_user" && ev.ok){ settleAskCard(card, ev.output); }
-  else if(!(isWrite && ev.ok)) card.querySelector(".tc-body").innerHTML=toolBodyHtml(ev);
+  else if(!(isWrite && ev.ok)){ card.querySelector(".tc-body").innerHTML=toolBodyHtml(ev); addBodyCopy(card); }
   if(CONTEXT_GROUP_TOOLS.has(card.dataset.tool)){ foldIntoCtxGroup(log, card, !!ev.ok); return; }   // 失败也入组：满屏红叉比静默失败更吵（opencode 降噪）
   closeCtxGroup(log);                      // 非只读结果落卡后，引用组定格（后续只读工具另起一组）
 }
@@ -255,12 +269,30 @@ function settlePendingCards(root){
     l.classList.remove("ap-wait"); l.classList.add("no");
     l.textContent="⏸ 审批无回执（回合被中断或超出历史分页）";
   });
+  // 截断回合（无 turn_ended → 无计时行）补折叠开关并默认收起，与完整回合形态一致；
+  // 最后一个回合可能仍在实时进行（恢复挂起场景），不动它。
+  const turns=root.querySelectorAll(".turn");
+  turns.forEach((turn,i)=>{
+    if(i===turns.length-1||turn.querySelector(".work-dur")) return;
+    const row=el("work-dur");
+    row.innerHTML=`<span class="wd-t">回合不完整（历史截断）</span><span class="chev">▾</span>`;
+    row.addEventListener("click",()=>{ turn._userFold=true; turn.classList.toggle("folded"); });
+    const first=turn.firstElementChild;
+    if(first&&first.classList.contains("user-chip")) first.after(row); else turn.prepend(row);
+    turn.classList.add("folded");
+  });
 }
 
 // ── 结果正文（只含内容，头部信息由 trigger 承担）──
 function toolBodyHtml(ev){
   const o=ev.output||{};
-  if(!ev.ok) return `<div class="tcempty">⛔ 被拦截 <code>${esc(compact(o))}</code></div>`;
+  if(!ev.ok){
+    // 拦截/失败美化（opencode ContentError 式）：字符串错误=红标签+正文分离；结构化怪形仍走 JSON 兜底
+    const msg=(o&&typeof o==="object")?(o.error??o.message):o;
+    if(typeof msg==="string"&&msg.length<=500)
+      return `<div class="tcerr"><span class="tcerr-tag">⛔ 拦截</span><span class="tcerr-msg">${esc(msg)}</span></div>`;
+    return `<div class="tcempty">⛔ 被拦截 <code>${esc(compact(o))}</code></div>`;
+  }
   if(o.final!=null) return `<div class="tcsub md">${renderMarkdown(String(o.final))}</div>`;
   if(o.svg!=null){
     let b64=""; try{ b64=btoa(unescape(encodeURIComponent(o.svg))); }catch(e){}
@@ -378,6 +410,17 @@ function toolBodyHtml(ev){
   }
   if(o.text!=null) return `<pre class="tcode">${esc(String(o.text))}</pre>`;
   if(o.tree!=null) return `<pre class="tcode">${esc(String(o.tree))}</pre>`;
+  // 兜底（opencode FallbackTool 式）：扁平化键值表，长值截断悬停看全文；超过 12 项折叠计数
+  if(o&&typeof o==="object"&&Object.keys(o).length){
+    const flat=[]; (function walk(v,pre){ for(const [k,val] of Object.entries(v)){
+      const path=pre?pre+"."+k:k;
+      if(val&&typeof val==="object") walk(val,path); else flat.push([path,val]); } })(o,"");
+    if(flat.length){
+      const rows=flat.slice(0,12).map(([k,v])=>`<div class="argrow"><span class="argk" title="${esc(k)}">${esc(k)}</span><span class="argv" title="${esc(String(v))}">${esc(String(v))}</span></div>`).join("")
+        +(flat.length>12?`<div class="argrow"><span class="argk">…</span><span class="argv">另有 ${flat.length-12} 项</span></div>`:"");
+      return `<div class="argtable">${rows}</div>`;
+    }
+  }
   return `<span class="chip">✅ <code>${esc(compact(o))}</code></span>`;
 }
 
@@ -393,10 +436,10 @@ function compact(v){ try{ const s=JSON.stringify(v); return s.length>240?s.slice
 
 // ── 思考行（opencode Thinking row）：busy 且暂无可见输出时显示 shimmer 行 ──
 function showTyping(log){
-  if(log._typing) { ensureTurn(log).append(log._typing); log.scrollTop=1e9; return; }
+  if(log._typing) { ensureTurn(log).append(log._typing); stickScroll(log); return; }
   const t=el("thinking-row","<span class='th-ico'>✦</span><span class='th-txt shimmer'>思考中</span>");
   ensureTurn(log).append(t);
-  log._typing=t; log.scrollTop=1e9;
+  log._typing=t; stickScroll(log);
 }
 function hideTyping(log){ if(log._typing){ log._typing.remove(); log._typing=null; } }
 
@@ -438,10 +481,9 @@ function bindInteractKeys(card, onEnter, onSpace){
     .filter(r=>{ const pg=r.closest(".qq"); return !pg||pg.style.display!=="none"; });
   const hi=()=>card.querySelector(".qsel");
   const setHi=row=>{ card.querySelectorAll(".qsel").forEach(x=>x.classList.remove("qsel")); if(row) row.classList.add("qsel"); };
-  card.addEventListener("mousemove",e=>{
-    const r=e.target.closest(".qopt,.apopt");
-    if(r&&!r.classList.contains("apcustom")) setHi(r);
-  });
+  // 悬停只做 CSS :hover 视觉反馈，**不改选中态**——否则点选后鼠标移向「确认」途中扫过
+  // 其它选项会把选中偷走（实测：点「允许」后扫过「拒绝」，确认即误拒）。
+  // 选中只认两条路：鼠标点击、键盘 Tab/↑/↓。
   card.addEventListener("click",e=>{
     if(e.target.closest(".qnote")) return;                 // 输入行：焦点留给打字
     const r=e.target.closest(".qopt,.apopt");
@@ -643,7 +685,7 @@ function ensureWorkDur(log){
   const turn=ensureTurn(log);
   const row=el("work-dur");
   row.innerHTML=`<span class="wd-t">已工作 ${esc(fmtDur(Date.now()-log._turnStartTs))}</span><span class="chev">▾</span>`;
-  row.addEventListener("click",()=>turn.classList.toggle("folded"));
+  row.addEventListener("click",()=>{ turn._userFold=true; turn.classList.toggle("folded"); });
   insertWorkDur(turn,row);
   log._durRow=row;
   log._durTick=setInterval(()=>{                        // 实时跳动（codex StatusTimer 的渲染时现算版）
@@ -664,7 +706,7 @@ function finalizeWorkDur(log){
     const t=log._durRow.querySelector(".wd-t");
     if(t&&log._turnStartTs) t.textContent="已工作 "+fmtDur(Math.max(0,end-log._turnStartTs));
     const turn=log._durRow.closest(".turn");
-    if(turn) turn.classList.add("folded");              // 回合结束默认收起过程：只留「已工作 N」+ 最终回复
+    if(turn&&!turn._userFold) turn.classList.add("folded");  // 回合结束默认收起（用户手动展开过则不强制收回）：只留「已工作 N」+ 最终回复
     log._durRow=null;
     return;
   }
@@ -672,16 +714,38 @@ function finalizeWorkDur(log){
   const turn=log._turn;                                 // 局部捕获：turn_ended 收尾即置 null，点击时不能再摸 log._turn
   const row=el("work-dur");
   row.innerHTML=`<span class="wd-t">已工作 ${esc(fmtDur(Math.max(0,end-log._turnStartTs)))}</span><span class="chev">▾</span>`;
-  row.addEventListener("click",()=>turn.classList.toggle("folded"));
+  row.addEventListener("click",()=>{ turn._userFold=true; turn.classList.toggle("folded"); });
   insertWorkDur(turn,row);
-  turn.classList.add("folded");                         // 回放里的历史回合同样默认收起
+  if(!turn._userFold) turn.classList.add("folded");     // 回放里的历史回合同样默认收起（用户手动展开过则不强制）
 }
 
 // ── 会话事件渲染主入口（历史回放与实时流共用）──
 // 视觉对齐参考界面：无头像、无气泡底的连续文档式线程；
 // 用户消息=小气泡条；回合计时行「已工作 X」可折叠思考/工具等执行细节。
+// ── 贴底策略（opencode 式近底检测）：用户上翻阅读时不再被流式输出强拉回底，仅当视口
+// 处于底部附近（<80px）才自动跟随；「回到底部」悬浮钮由滚动联动显隐（>300px 出现）。──
+function nearBottom(log){
+  return log.scrollHeight-log.scrollTop-log.clientHeight<80;
+}
+function stickScroll(log){
+  if(log._stick===false) return;
+  log.scrollTop=log.scrollHeight;
+}
+function ensureStick(log){
+  if(log._sBound) return;
+  log._sBound=1; log._stick=true;
+  log.addEventListener("scroll",()=>{
+    const dist=log.scrollHeight-log.scrollTop-log.clientHeight;
+    log._stick=dist<80;
+    const v=log.closest(".session-view"), b=v&&v.querySelector(".jump-btm");
+    if(b) b.hidden=dist<=200;
+  },{passive:true});
+  const v=log.closest(".session-view"), b=v&&v.querySelector(".jump-btm");
+  if(b) b.addEventListener("click",()=>{ log._stick=true; log.scrollTop=log.scrollHeight; b.hidden=true; });
+}
 function renderEvent(log, ev, sid){
   const k=ev.kind;
+  ensureStick(log);
   if(log._emptyCard){ log._emptyCard.remove(); log._emptyCard=null; }   // 首条事件：撤空会话占位卡
   if(ev.ts) log._lastTs = (typeof ev.ts==="string" ? Date.parse(ev.ts) : ev.ts) || log._lastTs;
   if(k==="turn_started"){
@@ -694,8 +758,8 @@ function renderEvent(log, ev, sid){
     closeCtxGroup(log);
     if(!log._sb){ closeReasoning(log); const b=el("bubble bare md"); ensureTurn(log).append(b); log._sb=b; log._raw=""; }
     log._raw=(log._raw||"")+(ev.text||"");
-    if(!log._raf){ log._raf=requestAnimationFrame(()=>{ log._raf=null; if(log._sb) log._sb.innerHTML=renderMarkdown(log._raw); log.scrollTop=1e9; }); }
-    log.scrollTop=1e9; return;
+    if(!log._raf){ log._raf=requestAnimationFrame(()=>{ log._raf=null; if(log._sb) log._sb.innerHTML=renderMarkdown(log._raw); stickScroll(log); }); }
+    stickScroll(log); return;
   }
   if(k==="text_reset"){
     if(log._raf){ cancelAnimationFrame(log._raf); log._raf=null; }
@@ -737,14 +801,14 @@ function renderEvent(log, ev, sid){
     } else if(!log._rraf){
       log._rraf=requestAnimationFrame(()=>{ log._rraf=null;
         if(log._rsb){ log._rsb.textContent=log._rraw; log._rsb.scrollTop=log._rsb.scrollHeight; }  // 正文超 260px 时跟随到底，所见即所想
-        log.scrollTop=1e9; });
+        stickScroll(log); });
     }
-    log.scrollTop=1e9; return;
+    stickScroll(log); return;
   }
   if(k==="user_message"){
     closeCtxGroup(log);
-    if(log._skipUser){ log._skipUser=false; return; }   // 已乐观渲染，跳过流里的回显
-    log._sb=null; closeReasoning(log); ensureTurn(log).append(el("user-chip", esc(ev.text)));
+    if(log._skipUser){ log._skipUser=false; log._stick=true; stickScroll(log); return; }   // 已乐观渲染，跳过流里的回显
+    log._sb=null; closeReasoning(log); ensureTurn(log).append(el("user-chip", esc(ev.text))); log._stick=true; stickScroll(log);
   }
   else if(k==="model_message"){
     closeCtxGroup(log);
@@ -753,7 +817,7 @@ function renderEvent(log, ev, sid){
     else if(ev.text){ closeReasoning(log); const b=el("bubble bare md"); b.innerHTML=renderMarkdown(ev.text); ensureTurn(log).append(b); }
     // 操作行不在此挂——loop 中间消息（提问/审批前后）保持素净；turn_ended 时挂到本回合最后一条回复（ZCode 式）
   }
-  else if(k==="tool_invoked"){ log._sb=null; closeReasoning(log); ensureToolCard(log, ev.call||{}); }
+  else if(k==="tool_invoked"){ log._sb=null; closeReasoning(log); const ic=ensureToolCard(log, ev.call||{}); ic._t0=(typeof ev.ts==="string"?Date.parse(ev.ts):ev.ts)||null; }
   else if(k==="tool_result"){ log._sb=null; completeToolCard(log, ev); }
   else if(k==="approval_requested"){ log._sb=null; closeCtxGroup(log);
     // 轨迹行留在会话里（回执后落终态，审计可循）；卡片本体挂交互槽（ZCode 式），答完即撤。
@@ -795,8 +859,8 @@ function renderEvent(log, ev, sid){
       if(log._intMarked){ log._intMarked=false; }
       else (turn||ensureTurn(log)).append(el("turn-divider int","⎋ 已中断"));
     }
-    else if(ev.reason==="max_steps"){ ensureTurn(log).append(el("meta note","— 达到步数上限（"+ev.steps+" 步）—")); }
-    else if(ev.reason==="error"){ ensureTurn(log).append(el("meta note bad","— 回合异常结束 —")); }
+    else if(ev.reason==="max_steps"){ ensureTurn(log).append(el("meta note turn-note","— 达到步数上限（"+ev.steps+" 步）—")); }
+    else if(ev.reason==="error"){ ensureTurn(log).append(el("meta note bad turn-note","— 回合异常结束 —")); }
     // 回合计时行定格（实时行就地落字；回放补静态行）——贴参考图「已工作 1 分 11 秒」，点击折叠执行细节
     finalizeWorkDur(log);
     // 操作按钮（复制/赞/踩/分享）在回合**结束**时挂到本回合最后一条回复气泡上（ZCode 式）：
@@ -819,5 +883,5 @@ function renderEvent(log, ev, sid){
     log._turn=null;
   }
   else if(k==="note"){ log._sb=null; closeCtxGroup(log); ensureTurn(log).append(el("meta note",esc(ev.text||""))); }
-  log.scrollTop=1e9;
+  stickScroll(log);
 }

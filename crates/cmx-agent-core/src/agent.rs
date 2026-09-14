@@ -351,6 +351,8 @@ impl Agent {
 
         let mut steps = 0usize;
         let mut final_text = None;
+        // 「勿绕道」提示同回合只发全量一次：连续多工具被拦时重复全文只会膨胀上下文，后续拦截给短句重申。
+        let mut detour_hinted = false;
         let reason = loop {
             if cancel.is_some_and(|c| c.is_cancelled()) {
                 break StopReason::Stopped;
@@ -401,7 +403,7 @@ impl Agent {
             // ②–⑥ 处理工具调用：一步内的多个调用**并发执行**（真并行 fan-out）。
             // 前置(路由/守卫/审批)与结果回灌仍按序（借用 &mut session + 保持日志有序），
             // 只有工具体 invoke() 并发——子智能体/网络 I/O 型调用总耗时≈最慢者而非累加。
-            self.handle_tool_calls_as(session, &resp.tool_calls, turn_subject, roots, cancel).await;
+            self.handle_tool_calls_as(session, &resp.tool_calls, turn_subject, roots, cancel, &mut detour_hinted).await;
 
             if cancel.is_some_and(|c| c.is_cancelled()) {
                 break StopReason::Stopped;
@@ -440,6 +442,8 @@ impl Agent {
         turn_subject: Option<&crate::guard::Subject>,
         roots: Option<&[std::path::PathBuf]>,
         cancel: Option<&TurnCancel>,
+        // 「勿绕道」全量提示是否已发（回合级去重：跨步骤只发一次全量，后续短句重申）。
+        detour_hinted: &mut bool,
     ) {
         /// 通过前置、待并发执行的工具调用。
         struct Pending<'c> {
@@ -501,7 +505,10 @@ impl Agent {
                     self.push_result(
                         session,
                         &call.id,
-                        ToolResult::err(format!("denied: {reason}；{NO_DETOUR}")),
+                        ToolResult::err(format!(
+                            "denied: {reason}；{}",
+                            { let t = if *detour_hinted { NO_DETOUR_SHORT } else { NO_DETOUR }; *detour_hinted = true; t }
+                        )),
                     );
                     continue;
                 }
@@ -662,7 +669,9 @@ impl Agent {
                     guard: post_guard,
                     decision: GuardDecision::deny(reason.clone()),
                 });
-                ToolResult::err(format!("post-guard denied: {reason}；{NO_DETOUR}"))
+                let tail = if *detour_hinted { NO_DETOUR_SHORT } else { NO_DETOUR };
+                *detour_hinted = true;
+                ToolResult::err(format!("post-guard denied: {reason}；{tail}"))
             } else {
                 result
             };
@@ -816,6 +825,8 @@ pub fn call_summary(call: &ToolCall) -> String {
 /// 不是只拦这一把工具——不讲清模型就会换工具变通绕过闸门。
 const NO_DETOUR: &str =
     "请勿换用其它工具或变通手段达成同一目的，也不要原样重试；请简要说明情况后停下，等待用户的进一步指示。";
+/// 同回合已给过全量提示后的短句重申（防连续拦截时上下文膨胀）。
+const NO_DETOUR_SHORT: &str = "重申前述要求：勿绕道、勿重试，停下等待用户指示。";
 
 /// 拒绝回灌文本：把「拒绝」的语义讲全——用户拒的是**这件事本身**，不是只拒这一把工具调用。
 /// 不讲清模型就会绕道换工具变相执行（实测：shell 被拒后改用内置 echo 免审批完成同一操作）。

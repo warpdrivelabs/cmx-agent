@@ -359,7 +359,7 @@
 /* 折叠组只留「已工作 N」+ 最终回复（.tail）：思考/工具卡/上下文组之外，中间过程的文字气泡、
    状态注记（.iline ✕已拒绝、.meta 注脚、回合内 .turn-divider ⎋已中断）也一并收起 */
 .turn.folded .reasoning,.turn.folded .tool.tcard,.turn.folded .ctxgroup,.turn.folded .thinking-row,
-.turn.folded .iline,.turn.folded .meta,.turn.folded .turn-divider,.turn.folded .bubble:not(.tail){display:none}
+.turn.folded .iline,.turn.folded .meta:not(.turn-note),.turn.folded .turn-divider,.turn.folded .bubble:not(.tail){display:none}
 
 /* ── 回合分隔条（中断）：轻量一行小字，不画贯穿横线（920px 列宽下横线太抢眼）── */
 .turn-divider{align-self:flex-start;width:fit-content;display:flex;align-items:center;gap:6px;
@@ -453,3 +453,27 @@
    width:100% 必须显式——flex 子项一旦带 auto margin 就失去默认 stretch，会塌成内容宽 ── */
 .log>*{width:100%;max-width:min(920px,100%);margin-left:auto;margin-right:auto}
 .log>.loadmore{width:fit-content}
+
+/* ── 回到底部悬浮钮（近底检测联动，opencode 式）── */
+.jump-btm{position:absolute;right:18px;bottom:120px;z-index:30;padding:6px 14px;border-radius:16px;
+  border:1px solid var(--border);background:var(--panel);color:var(--muted);font-size:12px;cursor:pointer;
+  box-shadow:0 4px 14px rgba(0,0,0,.35)}
+.jump-btm:hover{color:var(--ink);border-color:var(--ink2)}
+/* 提交/审批置忙：选项行禁点（.qopt 是 label，disabled 属性无效，用 pointer-events） */
+.tool.qcard.busy .qopt,.tool.approval.busy .qopt{pointer-events:none;opacity:.6}
+/* 工具卡耗时（>2s 才显示） */
+.tc-dur{font-size:11px;color:var(--muted);font-weight:400;margin-left:2px}
+/* 拦截错误卡：红标签+正文分离（opencode ContentError 式） */
+.tcerr{display:flex;gap:8px;align-items:baseline;font-size:12px;padding:2px 0}
+.tcerr-tag{color:var(--red);flex:none;font-weight:600}
+.tcerr-msg{color:var(--ink2);word-break:break-all}
+/* 兜底工具卡：扁平化键值表（长值截断，悬停看全文） */
+.argtable{display:flex;flex-direction:column;gap:2px;font-size:12px;min-width:0}
+.argrow{display:flex;gap:10px;min-width:0}
+.argk{color:var(--muted);flex:none;min-width:72px;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.argv{color:var(--ink2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 结果体复制浮钮 */
+.tc-body{position:relative}
+.tc-copy{position:absolute;top:4px;right:4px;font-size:11px;padding:2px 9px;border-radius:6px;
+  border:1px solid var(--border);background:var(--panel);color:var(--muted);cursor:pointer;opacity:.55}
+.tc-copy:hover{opacity:1;color:var(--ink)}
