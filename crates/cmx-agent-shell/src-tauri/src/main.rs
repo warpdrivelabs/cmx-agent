@@ -791,7 +791,7 @@ fn main() {
     // 不开窗，直接在 net_rt 上执行并打印——把「网络/认证」与「窗口/运行时」问题分开验证。
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--selftest") {
-        let app = Arc::new(app);
+        let app = app.into_shared();
         let out = net_rt()
             .block_on(async move { dispatch_json(&app, r#"{"cmd":"list_connectors"}"#).await });
         println!("{out}");
@@ -803,7 +803,7 @@ fn main() {
             .get(i + 2)
             .cloned()
             .unwrap_or_else(|| "Admin@12345".into());
-        let app = Arc::new(app);
+        let app = app.into_shared();
         let payload =
             serde_json::json!({"cmd":"login","username":user,"password":pass}).to_string();
         let out = net_rt().block_on(async move { dispatch_json(&app, &payload).await });
@@ -815,7 +815,7 @@ fn main() {
     let _ = net_rt();
     eprintln!("[main] net_rt ready; launching login window (main hidden until login)（登录在前端 #/login 路由，§11.4）");
 
-    let app = Arc::new(app);
+    let app = app.into_shared();
 
     // U16：IM 遥控（飞书/微信/钉钉…）。按 env 装配——配了 CMX_AGENT_IM_KIND 等就启动 ImBridge
     // 后台 task（与 CLI `im` 模式同一套装配），与桌面 UI 共用同一个 AgentApp：IM 消息跑同一回合循环，

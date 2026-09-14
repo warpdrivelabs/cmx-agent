@@ -477,3 +477,29 @@
 .tc-copy{position:absolute;top:4px;right:4px;font-size:11px;padding:2px 9px;border-radius:6px;
   border:1px solid var(--border);background:var(--panel);color:var(--muted);cursor:pointer;opacity:.55}
 .tc-copy:hover{opacity:1;color:var(--ink)}
+
+
+/* ── 计划模式 chip（阶段二）：composer 行内，on 态高亮 ── */
+.plan-chip{
+  display:inline-flex;align-items:center;gap:4px;
+  padding:4px 10px;border-radius:999px;font-size:12px;white-space:nowrap;cursor:pointer;
+  border:1px solid var(--border);background:transparent;color:var(--ink2);
+  transition:border-color .15s,color .15s,background .15s;
+}
+.plan-chip:hover{ border-color:var(--violet);color:var(--ink); }
+.plan-chip.on{
+  border-color:var(--violet);color:var(--violet);
+  background:color-mix(in srgb, var(--violet) 12%, transparent);
+}
+
+/* ── 子智能体类型徽标（阶段一）：task 工具卡工具名后 ── */
+.tc-badge{
+  flex:none;font-size:10.5px;line-height:1;padding:3px 7px;border-radius:999px;
+  border:1px solid var(--violet);color:var(--violet);background:transparent;white-space:nowrap;
+}
+.tc-badge.bg{ border-color:var(--blue);color:var(--blue); }
+
+/* ── 后台子任务完成系统卡（阶段三，<task_result> 注入）── */
+.task-result .tc-name{ color:var(--aqua); }
+.task-result.tr-fail .tc-name{ color:var(--red); }
+.task-result .tc-body .tterm{ white-space:pre-wrap;word-break:break-word; }

@@ -50,7 +50,7 @@ async fn main() {
     std::fs::create_dir_all(&workdir).expect("create workdir");
 
     let app = build_app(&workdir, &data_dir).await;
-    let state = AppState { app: Arc::new(app) };
+    let state = AppState { app: app.into_shared() };
 
     let router = Router::new()
         .route("/", get(index))
@@ -210,6 +210,7 @@ async fn js_asset(
         "login.js" => include_bytes!("../ui/js/login.js"),
         "update.js" => include_bytes!("../ui/js/update.js"),
         "settings.js" => include_bytes!("../ui/js/settings.js"),
+        "agents.js" => include_bytes!("../ui/js/agents.js"),
         "platform.js" => include_bytes!("../ui/js/platform.js"),
         "main.js" => include_bytes!("../ui/js/main.js"),
         _ => return axum::http::StatusCode::NOT_FOUND.into_response(),

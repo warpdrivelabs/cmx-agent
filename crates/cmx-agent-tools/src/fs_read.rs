@@ -82,7 +82,7 @@ mod tests {
     async fn reads_relative_path_against_workspace_root() {
         // 回归：相对路径「notes.md」应按工作根解析（此前误按进程 CWD → 逃逸拒绝）。
         let (root, roots) = setup("notes.md", "hello office");
-        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
         let r = FsReadTool.invoke(json!({"path":"notes.md"}), &ctx).await.unwrap();
         assert!(r.ok, "相对路径应被接受: {r:?}");
         assert_eq!(r.output["text"], "hello office");
@@ -93,7 +93,7 @@ mod tests {
     async fn reads_absolute_path_within_root() {
         let (root, roots) = setup("a.txt", "abc");
         let abs = root.join("a.txt");
-        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
         let r = FsReadTool.invoke(json!({"path": abs.display().to_string()}), &ctx).await.unwrap();
         assert!(r.ok, "{r:?}");
         assert_eq!(r.output["text"], "abc");
@@ -103,7 +103,7 @@ mod tests {
     #[tokio::test]
     async fn truncates_to_max_bytes() {
         let (root, roots) = setup("big.txt", "0123456789");
-        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
         let r = FsReadTool.invoke(json!({"path":"big.txt","max_bytes":4}), &ctx).await.unwrap();
         assert_eq!(r.output["text"], "0123");
         assert_eq!(r.output["truncated"], true);
@@ -114,7 +114,7 @@ mod tests {
     #[tokio::test]
     async fn dotdot_escape_denied() {
         let (root, roots) = setup("f.txt", "x");
-        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
         let r = FsReadTool.invoke(json!({"path":"../../../etc/passwd"}), &ctx).await.unwrap();
         assert!(!r.ok);
         std::fs::remove_dir_all(&root).ok();
@@ -123,7 +123,7 @@ mod tests {
     #[tokio::test]
     async fn no_roots_denies() {
         let roots: Vec<PathBuf> = vec![];
-        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
         let r = FsReadTool.invoke(json!({"path":"x"}), &ctx).await.unwrap();
         assert!(!r.ok);
     }

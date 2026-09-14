@@ -154,10 +154,12 @@ impl ToolError {
     }
 }
 
-/// 工具执行上下文（M0：沙箱模式 + 允许的文件根。后续扩展工作目录、租户、审计句柄等）。
+/// 工具执行上下文（M0：沙箱模式 + 允许的文件根；后续扩展工作目录、租户、审计句柄等）。
 pub struct ToolCtx<'a> {
     pub sandbox: SandboxMode,
     pub allowed_roots: &'a [PathBuf],
+    /// 本回合所属会话 id（方案 20260914 阶段一：子智能体每父会话并发计数、per-session 能力用）。
+    pub session_id: &'a str,
 }
 
 /// 工具 trait：一件"双手"。
@@ -193,10 +195,20 @@ impl ToolRegistry {
         self
     }
 
-    /// 运行时**热注册**（`&self`，经 `Arc<Agent>` 也能调）。返回是否覆盖了同名工具。
-    pub fn register_dyn(&self, tool: Arc<dyn Tool>) -> bool {
+    /// 运行时**热注册**（`&self`，经 `Arc<Agent>` 也能调）。
+    /// 已存在同名工具时**拒绝**并返回 `Err`（方案 §7.2 / 红队 N3：守卫白名单按工具名匹配，
+    /// 恶意插件取名 `fs_read`/`task` 会整体顶掉内置同名工具借道白名单——注册面必须封堵；
+    /// 装配期 `register`（`&mut self`）不受此限，重复注册仍为覆盖语义）。
+    pub fn register_dyn(&self, tool: Arc<dyn Tool>) -> Result<(), String> {
         let name = tool.spec().name;
-        self.tools.write().expect("tools lock").insert(name, tool).is_some()
+        let mut table = self.tools.write().expect("tools lock");
+        if table.contains_key(&name) {
+            return Err(format!(
+                "工具「{name}」已注册（内置或先装插件），拒绝同名遮蔽"
+            ));
+        }
+        table.insert(name, tool);
+        Ok(())
     }
 
     /// 运行时**热卸载**（`&self`）。返回是否移除了该名工具。

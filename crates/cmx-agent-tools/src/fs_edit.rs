@@ -101,7 +101,7 @@ mod tests {
     #[tokio::test]
     async fn unique_replace_ok() {
         let (root, roots) = setup("hello world");
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
         let r = FsEditTool
             .invoke(json!({"path":"f.txt","old_string":"world","new_string":"cmx"}), &ctx)
             .await
@@ -114,7 +114,7 @@ mod tests {
     #[tokio::test]
     async fn ambiguous_denied_without_replace_all() {
         let (root, roots) = setup("a a a");
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
         let r = FsEditTool
             .invoke(json!({"path":"f.txt","old_string":"a","new_string":"b"}), &ctx)
             .await
@@ -126,7 +126,7 @@ mod tests {
     #[tokio::test]
     async fn replace_all_ok() {
         let (root, roots) = setup("a a a");
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
         let r = FsEditTool
             .invoke(json!({"path":"f.txt","old_string":"a","new_string":"b","replace_all":true}), &ctx)
             .await
@@ -139,7 +139,7 @@ mod tests {
     #[tokio::test]
     async fn not_found_errors() {
         let (root, roots) = setup("xyz");
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
         let r = FsEditTool
             .invoke(json!({"path":"f.txt","old_string":"nope","new_string":"b"}), &ctx)
             .await

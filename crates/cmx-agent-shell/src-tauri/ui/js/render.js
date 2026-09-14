@@ -133,6 +133,15 @@ function ensureToolCard(log, call){
   card._input=call&&call.input;
   card.innerHTML=toolCardHtml(call||{});
   bindToolCard(card);
+  // 子智能体类型徽标（阶段一）：task 卡显示 subagent_type / 后台标记
+  if(card.dataset.tool==="task" && call && call.input){
+    const t=call.input.subagent_type;
+    const nameEl=card.querySelector(".tc-name");
+    if(nameEl){
+      if(t) nameEl.insertAdjacentHTML("afterend",`<span class="tc-badge">${esc(String(t))}</span>`);
+      if(call.input.background) nameEl.insertAdjacentHTML("afterend",`<span class="tc-badge bg">后台</span>`);
+    }
+  }
   if(id){ log._tools=log._tools||new Map(); log._tools.set(id,card); }
   ensureTurn(log).append(card);
   // fs_write 内容体建卡即展开（ZCode 式：写入内容直接可见；点 trigger 可收起）
@@ -808,6 +817,26 @@ function renderEvent(log, ev, sid){
   if(k==="user_message"){
     closeCtxGroup(log);
     if(log._skipUser){ log._skipUser=false; log._stick=true; stickScroll(log); return; }   // 已乐观渲染，跳过流里的回显
+    // 后台子智能体完成注入（阶段三）：<task_result …>…</task_result> 渲染为可折叠系统卡，
+    // 不出现「用户说」气泡（重放恢复同规则）。
+    if((ev.text||"").startsWith("<task_result")){
+      const m=(ev.text.match(/^<task_result\s+id="([^"]*)"(?:\s+state="([^"]*)")?([\s\S]*)<\/task_result>$/))||[];
+      const id2=m[1]||"", st=m[2]||"completed";
+      const body=ev.text.replace(/^<task_result[^>]*>/,"").replace(/<\/task_result>$/,"").trim();
+      const card=el("tool tcard done task-result"+(st==="failed"?" tr-fail":""));
+      card.innerHTML=`<button class="tc-trig" type="button">`
+        +`<span class="tc-st ${st==="failed"?"bad":"ok"}" title="${esc(st)}">${st==="failed"?ICON_X:ICON_CHECK}</span>`
+        +`<span class="tc-g">🛰</span>`
+        +`<span class="tc-name">后台子任务完成</span>`
+        +(id2?`<span class="tc-sub">${esc(id2)}</span>`:"")
+        +`<span class="tc-badge">${esc(st==="failed"?"失败":"完成")}</span>`
+        +`<span class="tc-chev">▾</span></button>`
+        +`<div class="tc-body" hidden><div class="tterm">${esc(body||"（无输出）")}</div></div>`;
+      card.querySelector(".tc-trig").addEventListener("click",()=>{
+        const b=card.querySelector(".tc-body"); b.hidden=!b.hidden; card.classList.toggle("open",!b.hidden);
+      });
+      ensureTurn(log).append(card); log._stick=true; stickScroll(log); return;
+    }
     log._sb=null; closeReasoning(log); ensureTurn(log).append(el("user-chip", esc(ev.text))); log._stick=true; stickScroll(log);
   }
   else if(k==="model_message"){

@@ -72,9 +72,10 @@ async fn web_fetch_and_search_via_mock() {
 
     let roots = vec![std::path::PathBuf::from("/tmp")];
     let ctx = ToolCtx {
-        sandbox: SandboxMode::WorkspaceWrite,
-        allowed_roots: &roots,
-    };
+         sandbox: SandboxMode::WorkspaceWrite,
+         allowed_roots: &roots,
+         session_id: "test",
+     };
 
     // ── web_fetch：抽正文 + 标题，剔除 script/head（allow_private 放开 localhost）──
     let r = WebFetchTool { allow_private: true }

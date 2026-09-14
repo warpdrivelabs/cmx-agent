@@ -90,7 +90,7 @@ mod tests {
     #[tokio::test]
     async fn runs_and_captures_stdout() {
         let (root, roots) = tmp();
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
         let r = ShellTool.invoke(json!({"cmd":"echo hello-cmx"}), &ctx).await.unwrap();
         assert!(r.ok, "{r:?}");
         assert_eq!(r.output["exit_code"], 0);
@@ -102,7 +102,7 @@ mod tests {
     async fn cwd_is_workspace_root() {
         let (root, roots) = tmp();
         std::fs::write(root.join("marker.txt"), "x").unwrap();
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
         let r = ShellTool.invoke(json!({"cmd":"ls"}), &ctx).await.unwrap();
         assert!(r.output["stdout"].as_str().unwrap().contains("marker.txt"));
         std::fs::remove_dir_all(&root).ok();
@@ -111,7 +111,7 @@ mod tests {
     #[tokio::test]
     async fn nonzero_exit_reported() {
         let (root, roots) = tmp();
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
         let r = ShellTool.invoke(json!({"cmd":"exit 3"}), &ctx).await.unwrap();
         assert_eq!(r.output["exit_code"], 3);
         std::fs::remove_dir_all(&root).ok();
@@ -120,7 +120,7 @@ mod tests {
     #[tokio::test]
     async fn timeout_terminates() {
         let (root, roots) = tmp();
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
         let r = ShellTool.invoke(json!({"cmd":"sleep 5","timeout_ms":300}), &ctx).await.unwrap();
         assert_eq!(r.output["timed_out"], true);
         std::fs::remove_dir_all(&root).ok();
@@ -129,7 +129,7 @@ mod tests {
     #[tokio::test]
     async fn denied_in_readonly() {
         let (root, roots) = tmp();
-        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
         let r = ShellTool.invoke(json!({"cmd":"echo x"}), &ctx).await.unwrap();
         assert!(!r.ok);
         std::fs::remove_dir_all(&root).ok();

@@ -31,12 +31,12 @@ fn clone_shares_same_table_hot_add_remove() {
     assert!(handle.get("builtin").is_some());
 
     // 经 handle 热注册（&self）→ base 立即可见（同一张表）
-    assert!(!handle.register_dyn(Arc::new(NamedTool("plugin_a"))));
+    handle.register_dyn(Arc::new(NamedTool("plugin_a"))).expect("首次热注册应成功");
     assert!(base.get("plugin_a").is_some(), "热注册应对另一句柄立即可见");
     assert!(base.specs().iter().any(|s| s.name == "plugin_a"));
 
-    // 重名覆盖返回 true
-    assert!(handle.register_dyn(Arc::new(NamedTool("plugin_a"))));
+    // 重名拒绝（N3：register_dyn 不得同名遮蔽）
+    assert!(handle.register_dyn(Arc::new(NamedTool("plugin_a"))).is_err());
 
     // 经 base 热卸载 → handle 立即看不到
     assert!(base.unregister("plugin_a"));

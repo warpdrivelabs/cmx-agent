@@ -591,6 +591,7 @@ async fn turn_policy_override_beats_read_only_global() {
             None,
             None,
             Some(cmx_agent_core::TurnPolicyOverride::FULL_ACCESS),
+            None,
         )
         .await
         .unwrap();
@@ -609,7 +610,7 @@ async fn without_override_global_read_only_still_blocks() {
     let agent = override_agent(SandboxMode::ReadOnly, ApprovalPolicy::OnRequest);
     let mut s = Session::new("override-absent");
     agent
-        .run_turn_observed_as_cancellable_with_policy(&mut s, "run", None, None, None, None, None)
+        .run_turn_observed_as_cancellable_with_policy(&mut s, "run", None, None, None, None, None, None)
         .await
         .unwrap();
     let (ok, _out) = last_tool_result(&s);
@@ -663,6 +664,7 @@ async fn turn_policy_override_never_denies_always_approval_without_hanging() {
             None,
             None,
             Some(cmx_agent_core::TurnPolicyOverride::FULL_ACCESS),
+            None,
         )
         .await
         .unwrap();

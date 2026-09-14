@@ -124,7 +124,7 @@ mod tests {
     #[tokio::test]
     async fn maps_tree_and_ignores_target() {
         let (root, roots) = setup();
-        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
         let r = RepoMapTool.invoke(json!({}), &ctx).await.unwrap();
         assert!(r.ok, "{r:?}");
         let tree = r.output["tree"].as_str().unwrap();

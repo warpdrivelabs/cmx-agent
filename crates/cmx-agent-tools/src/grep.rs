@@ -112,7 +112,7 @@ mod tests {
     #[tokio::test]
     async fn finds_regex_matches() {
         let (root, roots) = setup();
-        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
         let r = GrepTool.invoke(json!({"pattern":"fn \\w+"}), &ctx).await.unwrap();
         assert!(r.ok, "{r:?}");
         assert_eq!(r.output["count"], 2); // foo + bar in a.rs
@@ -122,7 +122,7 @@ mod tests {
     #[tokio::test]
     async fn glob_filter_and_ignore_case() {
         let (root, roots) = setup();
-        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
         let r = GrepTool
             .invoke(json!({"pattern":"foo","glob":"**/*.rs","ignore_case":true}), &ctx)
             .await

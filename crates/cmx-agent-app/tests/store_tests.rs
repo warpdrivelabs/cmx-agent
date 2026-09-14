@@ -123,6 +123,7 @@ fn list_sorts_by_updated_desc() {
             system: None,
             created_at: t0,
             updated_at: t0 + chrono::Duration::seconds(i as i64),
+            plan_mode: false,
             event_count: 0,
             workspace_id: None,
         };
@@ -334,6 +335,7 @@ fn load_events_window_tails_pages_and_full() {
             updated_at: chrono::Utc::now(),
             event_count: n,
             workspace_id: None,
+            plan_mode: false,
         })
         .unwrap();
 

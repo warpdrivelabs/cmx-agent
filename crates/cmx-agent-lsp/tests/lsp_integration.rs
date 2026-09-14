@@ -73,7 +73,7 @@ async fn lsp_hover_and_symbols_and_diagnostics() {
     if !python3_ok() { eprintln!("python3 不可用，跳过 LSP 集成测试"); return; }
     let (root, tool) = setup_tool();
     let roots = vec![root.clone()];
-    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
 
     // hover
     let r = tool.invoke(json!({"operation":"hover","path":"main.rs","line":0,"character":3}), &ctx).await.unwrap();
@@ -99,7 +99,7 @@ async fn lsp_hover_and_symbols_and_diagnostics() {
 async fn unconfigured_degrades_gracefully() {
     let tool = LspTool::new(HashMap::new());
     let roots: Vec<std::path::PathBuf> = vec![std::env::temp_dir()];
-    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
     let r = tool.invoke(json!({"operation":"hover","path":"x.rs"}), &ctx).await.unwrap();
     assert!(!r.ok);
     assert!(r.output["error"].as_str().unwrap().contains("未配置语言服务器"));
@@ -111,7 +111,7 @@ async fn unknown_extension_reports() {
     let (root, tool) = setup_tool();
     std::fs::write(root.join("a.xyz"), "??").unwrap();
     let roots = vec![root.clone()];
-    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
     let _ = tool; let _t = LspTool::new({ let mut m=HashMap::new(); m.insert(".rs".to_string(), LspServerConfig{command:"python3".into(),args:vec!["-c".into(),MOCK_LSP.into()],language_id:None}); m });
     let r = _t.invoke(json!({"operation":"hover","path":"a.xyz","line":0,"character":0}), &ctx).await.unwrap();
     assert!(!r.ok, "无对应 server 应降级报错");

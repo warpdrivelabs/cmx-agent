@@ -354,7 +354,7 @@ mod tests {
     fn escapes_sandbox_rejected() {
         let roots = vec![PathBuf::from("/tmp/cmx-u8-root")];
         std::fs::create_dir_all(&roots[0]).ok();
-        let ctx = ToolCtx { sandbox: cmx_agent_core::guard::SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: cmx_agent_core::guard::SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
         assert!(resolve_out("shot.png", &ctx).is_ok());
         assert!(resolve_out("../escape.png", &ctx).is_err());
     }

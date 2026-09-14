@@ -122,6 +122,7 @@ const ACTIONS = { newTask, openConnectors, openAssistant, startFromHome, toggleS
   closeSettings, scfgSecretLock: scfgToggleSecretLock, scfgQqLock: scfgToggleQqLock, scfgQqLogin, scfgSelect: scfgSelectChannel, scfgWechatLogin, imcfgSave,
   mcfgClose: closeModelConfig, mcfgKeyLock: mcfgToggleKeyLock, mcfgSave: saveModelConfig,
   mcfgNew: mcfgNew, mcfgDelete: deleteModelProvider,
+  agentsSelect, agentsNew, agentsSave, agentsDelete, togglePlanMode,
   userChangePassword, pwdClose, pwdExit, pwdSave, logoutCancel, logoutConfirm };
 document.addEventListener("click", e=>{
   const el = e.target.closest("[data-act]");

@@ -180,6 +180,19 @@ pub enum AppRequest {
     ImListBindings,
     /// IM 绑定：解绑一个 IM 身份。
     ImUnbind { provider: String, open_id: String },
+    /// 阶段一：列子智能体（内置两条带覆盖项 + 自定义）——设置中心「子智能体」分区。
+    ListAgents,
+    /// 阶段一：保存子智能体。内置只允许改 model/enabled（协议层校验，其余字段忽略）；
+    /// 自定义按 name upsert（snake_case 校验、撞内置名拒绝）。保存即热生效。
+    SaveAgent { spec: cmx_agent_core::agents::AgentSpec },
+    /// 阶段一：删除一个自定义子智能体（内置/未知 → 拒绝）。
+    DeleteAgent { name: String },
+    /// 阶段二：切换会话计划模式（**仅用户可调**——UI chip；模型无任何切换工具）。
+    /// im-assistant / im-* 会话拒绝；与回合生命周期串行（session_locks permit）。
+    SetPlanMode {
+        session_id: String,
+        enabled: bool,
+    },
 }
 
 fn default_keep() -> String {
@@ -413,6 +426,12 @@ async fn dispatch_inner(app: &AgentApp, req: AppRequest) -> Result<AppResponse, 
         AppRequest::ImListBindings => Ok(AppResponse::ok(app.im_list_bindings().await?)),
         AppRequest::ImUnbind { provider, open_id } => {
             Ok(AppResponse::ok(app.im_unbind(&provider, &open_id).await?))
+        }
+        AppRequest::ListAgents => Ok(AppResponse::ok(app.list_agents()?)),
+        AppRequest::SaveAgent { spec } => Ok(AppResponse::ok(app.save_agent(spec)?)),
+        AppRequest::DeleteAgent { name } => Ok(AppResponse::ok(app.delete_agent(&name)?)),
+        AppRequest::SetPlanMode { session_id, enabled } => {
+            Ok(AppResponse::ok(app.set_plan_mode(&session_id, enabled).await?))
         }
     }
 }

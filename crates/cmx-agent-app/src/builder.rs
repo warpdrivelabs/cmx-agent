@@ -190,6 +190,9 @@ impl DesktopAppBuilder {
         guards
             .add(Arc::new(auth_guard))
             .add(Arc::new(SandboxGuard))
+            // 阶段二：计划模式守卫（默认拒绝 + PLAN_READ_TOOLS 白名单；TURN_PLAN_MODE 未 scope
+            // 时恒放行）。装配在 sandbox 之后、high_risk 之前；danger 档不豁免（用户意图比旋钮硬）。
+            .add(Arc::new(cmx_agent_core::PlanModeGuard))
             .add(Arc::new(HighRiskGuard))
             .add(Arc::new(ApprovalGuard));
 
@@ -213,9 +216,23 @@ impl DesktopAppBuilder {
             Arc::new(cmx_agent_core::QuestionService::disabled())
         };
         registry.register(Arc::new(cmx_agent_core::AskUserTool));
-        // U1 子智能体：task 工具持 Weak<Agent> 句柄，构建出 Arc<Agent> 后注入（不成环）。max_depth=2。
+        // 阶段二：exit_plan（计划退出批准）——同为内核托管 user_interactive 工具。
+        registry.register(Arc::new(cmx_agent_core::ExitPlanTool));
+        // B2 模型选择器：把选定模型包进可热换的 ModelSlot（提前构造：专属模型解析缝要持有其 clone，
+        // None 解析（继承默认）不依赖 app 实例——CLI/e2e 无头装配也能跑 general-purpose/explore）。
+        let model_slot = crate::ModelSlot::new(self.model);
+        // 阶段一：子智能体注册表（agents.json）+ 共享生效清单 + 模型解析缝。
+        let agents_registry = Arc::new(crate::agents::AgentRegistry::load_or_init(&self.data_dir));
+        let shared_specs = agents_registry.shared();
+        let model_resolver = Arc::new(crate::agents::AppModelResolver::new(model_slot.clone()));
+        // U1 子智能体：task 工具持 Weak<Agent> 句柄 + 共享类型清单 + 解析缝，构建出 Arc<Agent>
+        // 后注入（不成环）。max_depth=2。
         let sub_handle = Arc::new(cmx_agent_tools::SubagentHandle::new(2));
-        registry.register(Arc::new(cmx_agent_tools::TaskTool::new(sub_handle.clone())));
+        registry.register(Arc::new(cmx_agent_tools::TaskTool::new(
+            sub_handle.clone(),
+            shared_specs,
+            model_resolver.clone(),
+        )));
         // U2 LSP：代码智能工具（懒连语言服务器，配置读 <data_dir>/lsp.json；无配置则调用时降级提示）。
         registry.register(Arc::new(cmx_agent_lsp::LspTool::from_config_file(
             &self.data_dir.join("lsp.json"),
@@ -294,8 +311,7 @@ impl DesktopAppBuilder {
             None => self.approver,
         };
 
-        // B2 模型选择器：把选定模型包进可热换的 ModelSlot（Agent 持 wrapper，app 经句柄换实现）。
-        let model_slot = crate::ModelSlot::new(self.model);
+        // B2 模型配置目录（model_slot 已提前构造）。
         let model_config_dir = self.data_dir.clone();
         // 登录会话落盘路径（data_dir 本体稍后 move 进 FileSessionStore，先克隆备用）。
         let auth_session_path = self.data_dir.clone().join("auth.json");
@@ -334,7 +350,10 @@ impl DesktopAppBuilder {
             .with_plugins(plugin_summaries)
             .with_plugins_dir(plugins_dir)
             .with_plugin_market(plugin_market)
-            .with_model(model_slot, model_config_dir);
+            .with_model(model_slot, model_config_dir)
+            .with_subagents(sub_handle)
+            .with_agents(agents_registry)
+            .with_model_resolver(model_resolver);
         app = app.with_workspace_registry(workspaces);
         if let Some(a) = interactive {
             app = app.with_approver(a);

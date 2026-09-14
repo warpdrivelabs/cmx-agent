@@ -300,7 +300,7 @@ mod tests {
     #[tokio::test]
     async fn bar_chart_returns_svg() {
         let roots = ctx_roots();
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
         let r = ChartTool
             .invoke(json!({"type":"bar","title":"销量","labels":["一月","二月","三月"],
                 "series":[{"name":"A","values":[10,20,15]}]}), &ctx)
@@ -316,7 +316,7 @@ mod tests {
     #[tokio::test]
     async fn pie_and_save() {
         let roots = ctx_roots();
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
         let r = ChartTool
             .invoke(json!({"type":"pie","labels":["北","南"],"series":[{"values":[60,40]}],"save_as":"p.svg"}), &ctx)
             .await
@@ -331,7 +331,7 @@ mod tests {
     #[tokio::test]
     async fn empty_errors() {
         let roots = ctx_roots();
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
         let r = ChartTool.invoke(json!({"type":"bar","labels":[],"series":[]}), &ctx).await.unwrap();
         assert!(!r.ok);
         std::fs::remove_dir_all(&roots[0]).ok();

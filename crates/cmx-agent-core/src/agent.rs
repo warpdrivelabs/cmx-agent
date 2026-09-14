@@ -66,6 +66,29 @@ tokio::task_local! {
     /// 回合级权限档覆盖（见 [`TurnPolicyOverride`]）。仅在显式 scope 的回合任务树内可见；
     /// 回合流程内的守卫/审批判定经 [`Agent::effective_policy`] 读取，作用域外回落全局档。
     pub static TURN_POLICY_OVERRIDE: TurnPolicyOverride;
+    /// 计划模式活开关（方案 20260914 §7.1，阶段二）：`Some(flag)` = 本回合任务树处于计划模式。
+    /// 守卫（[`crate::guard::PlanModeGuard`]）每批工具调用现读；exit_plan 批准后同回合置 false
+    /// 立即放行写。task-local 随 future 树下传 → task 子回合自动继承且不可绕过；作用域外 =
+    /// 非计划模式。app 层回合开始插入、收尾摘除并对账回写 meta。
+    pub static TURN_PLAN_MODE: Arc<AtomicBool>;
+}
+
+/// 当前回合任务树是否处于计划模式（守卫/内核托管路径读取；作用域外 = false）。
+pub fn plan_mode_active() -> bool {
+    TURN_PLAN_MODE
+        .try_with(|f| f.load(Ordering::Relaxed))
+        .unwrap_or(false)
+}
+
+/// 退出计划模式（exit_plan 批准路径调用）：同回合下一批工具调用立即放行写。
+/// 返回是否在计划模式任务树内（false = 本就不在，调用方兜底）。
+pub fn deactivate_plan_mode() -> bool {
+    TURN_PLAN_MODE
+        .try_with(|f| {
+            f.store(false, Ordering::Relaxed);
+            true
+        })
+        .unwrap_or(false)
 }
 
 /// 人在环审批者（③ 人在环 的解决方；真实实现接**交互式前端审批卡片** / cmx-flow 审批 / IM 二次确认）。
@@ -214,6 +237,21 @@ impl Agent {
         self.policy.read().expect("policy lock poisoned").clone()
     }
 
+    /// 守卫管道引用（子智能体派生装配用：`Agent` 字段私有，方案 §11.1 补的访问器之一）。
+    pub fn guards(&self) -> &GuardPipeline {
+        &self.guards
+    }
+
+    /// 审批者句柄（子智能体派生装配用：审批卡照常弹父 UI，call_id 校验跨会话不误命中）。
+    pub fn approver(&self) -> Arc<dyn Approver> {
+        self.approver.clone()
+    }
+
+    /// 当前模型缝（子智能体派生装配兜底用；正常走 ModelResolver 解析）。
+    pub fn model(&self) -> Arc<dyn ModelSeam> {
+        self.model.clone()
+    }
+
     /// 运行时替换策略（前门 set_policy 用；其余字段照抄当前值由调用方组装）。
     pub fn set_policy(&self, p: Policy) {
         *self.policy.write().expect("policy lock poisoned") = p;
@@ -311,7 +349,11 @@ impl Agent {
     /// 本回合（含 `task` 子智能体——同任务树继承 task-local）的沙箱/审批以覆盖为准，
     /// 不写全局档；`None` 与原方法完全一致。IM 无人值守「默认全权」由此实现——
     /// IM 桥驱动的回合全权执行，桌面回合仍走全局两旋钮。
-    // 与 run_turn_observed_as_cancellable 同形 + 1 个覆盖档参数：展平签名比拆结构体更贴调用侧。
+    ///
+    /// `plan`：计划模式活开关（§7.1）。`Some(flag)` 时整个回合 future 在
+    /// [`TURN_PLAN_MODE`] 作用域内——守卫每批现读，exit_plan 批准后同回合放行写；
+    /// task 子回合随 future 树自动继承且不可绕过。`None` = 非计划模式。
+    // 与 run_turn_observed_as_cancellable 同形 + 2 个可选参数：展平签名比拆结构体更贴调用侧。
     #[allow(clippy::too_many_arguments)]
     pub async fn run_turn_observed_as_cancellable_with_policy(
         &self,
@@ -322,12 +364,17 @@ impl Agent {
         cancel: Option<&TurnCancel>,
         roots: Option<&[std::path::PathBuf]>,
         policy_override: Option<TurnPolicyOverride>,
+        plan: Option<Arc<AtomicBool>>,
     ) -> AgentResult<TurnOutcome> {
         let inner =
             self.run_turn_observed_as_cancellable(session, user_input, observer, turn_subject, cancel, roots);
-        match policy_override {
-            Some(ov) => TURN_POLICY_OVERRIDE.scope(ov, inner).await,
-            None => inner.await,
+        match (policy_override, plan) {
+            (Some(ov), Some(flag)) => {
+                TURN_POLICY_OVERRIDE.scope(ov, TURN_PLAN_MODE.scope(flag, inner)).await
+            }
+            (Some(ov), None) => TURN_POLICY_OVERRIDE.scope(ov, inner).await,
+            (None, Some(flag)) => TURN_PLAN_MODE.scope(flag, inner).await,
+            (None, None) => inner.await,
         }
     }
 
@@ -550,53 +597,94 @@ impl Agent {
                     }
                 }
             }
-            // 交互提问工具（ask_user）内核托管：门控 → 规范化 → 登记 → 落 QuestionAsked。
+            // 交互提问/计划审批等 user_interactive 工具内核托管：门控 → 分派 → 登记 → 落事件。
             // 工具不触碰 SessionLog，事件只从内核写入（方案 20260914 §4.3 不变量）。
-            let mut question = None;
+            let mut question: Option<QuestionTicket> = None;
             if spec.user_interactive {
-                // 门控矩阵：提问挂起只允许发生在"用户看得见、答得了"的桌面交互回合。
+                // 门控矩阵：挂起只允许发生在"用户看得见、答得了"的桌面交互回合。
                 // - 服务降级（CLI/e2e 装配）：fail-open，直接 dismissed；
                 // - policy=Never（无人值守档，含 IM FULL_ACCESS 覆盖）：对齐"宁拒不挂"语义，
                 //   IM tick 串行内联 await 回合，挂起会冻死整条 IM 通道；
                 // - task 子回合：TurnCancel 旗标在子回合内不可达、事件不实时外送，挂起即失控。
+                //   （红队 N4 的内核级闸门：子代理另有 ToolRegistry 层收走交互控制面工具，双保险。）
                 let subagent = SUBAGENT_TURN.try_with(|s| *s).unwrap_or(false);
                 if !self.questions.enabled()
                     || policy.approval == ApprovalPolicy::Never
                     || subagent
                 {
-                    self.push_result(
-                        session,
-                        &call.id,
-                        question_dismissed_result("非交互回合，提问不可用（已自动忽略）"),
-                    );
+                    let note = if spec.name == crate::exit_plan::EXIT_PLAN_TOOL_NAME {
+                        "非交互回合，计划审批不可用（已自动忽略）。请继续调整计划并等待用户指示"
+                    } else {
+                        "非交互回合，提问不可用（已自动忽略）"
+                    };
+                    self.push_result(session, &call.id, question_dismissed_result(note));
                     continue;
                 }
-                // 同会话串行化：已有待答提问时拒绝新问（审批闸门刻意串行的同款考量，
-                // join_all 下两个 ask_user 会并发弹双卡）。
-                if self.questions.has_pending(&session.id) {
-                    self.push_result(
-                        session,
-                        &call.id,
-                        ToolResult::err("已有待答提问，请等待用户回答当前问题后再发起新提问"),
-                    );
-                    continue;
-                }
-                match normalize_ask_input(&call.input) {
-                    Ok(questions) => {
-                        let (request_id, rx) = self.questions.register(&session.id, questions.clone());
-                        session.log.append(EventKind::QuestionAsked {
-                            request_id: request_id.clone(),
-                            questions,
-                        });
-                        question = Some(QuestionTicket { request_id, rx });
-                    }
-                    Err(e) => {
+                if spec.name == crate::exit_plan::EXIT_PLAN_TOOL_NAME {
+                    // —— exit_plan（计划审批）托管路径（§7.4）——
+                    // 模式外调用 → 显式报错（不挂起、不误触答题卡）。
+                    if !plan_mode_active() {
                         self.push_result(
                             session,
                             &call.id,
-                            ToolResult::err(format!("ask_user 参数无效：{e}")),
+                            ToolResult::err("当前不在计划模式：exit_plan 仅在计划模式可用"),
                         );
                         continue;
+                    }
+                    let plan_text = match crate::exit_plan::normalize_plan_input(&call.input) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            self.push_result(session, &call.id, ToolResult::err(format!("exit_plan 参数无效：{e}")));
+                            continue;
+                        }
+                    };
+                    let (request_id, rx) =
+                        self.questions.register(&session.id, crate::exit_plan::approval_question());
+                    session.log.append(EventKind::QuestionAsked {
+                        request_id: request_id.clone(),
+                        questions: crate::exit_plan::approval_question(),
+                    });
+                    question = Some(QuestionTicket {
+                        request_id,
+                        rx,
+                        kind: TicketKind::ExitPlan {
+                            plan: plan_text,
+                            roots: roots.unwrap_or(&policy.allowed_roots).to_vec(),
+                        },
+                    });
+                } else {
+                    // —— ask_user 托管路径 ——
+                    // 同会话串行化：已有待答提问时拒绝新问（审批闸门刻意串行的同款考量，
+                    // join_all 下两个 ask_user 会并发弹双卡）。
+                    if self.questions.has_pending(&session.id) {
+                        self.push_result(
+                            session,
+                            &call.id,
+                            ToolResult::err("已有待答提问，请等待用户回答当前问题后再发起新提问"),
+                        );
+                        continue;
+                    }
+                    match normalize_ask_input(&call.input) {
+                        Ok(questions) => {
+                            let (request_id, rx) = self.questions.register(&session.id, questions.clone());
+                            session.log.append(EventKind::QuestionAsked {
+                                request_id: request_id.clone(),
+                                questions,
+                            });
+                            question = Some(QuestionTicket {
+                                request_id,
+                                rx,
+                                kind: TicketKind::Ask,
+                            });
+                        }
+                        Err(e) => {
+                            self.push_result(
+                                session,
+                                &call.id,
+                                ToolResult::err(format!("ask_user 参数无效：{e}")),
+                            );
+                            continue;
+                        }
                     }
                 }
             }
@@ -619,6 +707,8 @@ impl Agent {
             // 回合级文件根：app 层按「会话所属空间」快照传入（None=回落共享 policy 的当前空间根）。
             // 旧实现直接读共享 policy.allowed_roots——两会话并发回合互相覆盖对方的工作空间根（lost update）。
             allowed_roots: roots.unwrap_or(&policy.allowed_roots),
+            // 会话归属（阶段一）：子智能体每父会话并发计数等 per-session 能力用。
+            session_id: &session.id,
         };
         // 提问票据先 take 出来（oneshot await 需独占所有权；闭包按索引取走，None = 普通工具）。
         let mut waiters: Vec<Option<QuestionTicket>> = Vec::with_capacity(pending.len());
@@ -708,27 +798,59 @@ impl Agent {
             },
             None => wait.await.unwrap_or(QuestionOutcome::Dismissed("canceled")),
         };
-        let (result, verdict) = match outcome {
-            QuestionOutcome::Answered(map) => {
-                let answers = map.clone(); // 事件要带一份给 UI 还原 Q/A；json! 按值消费原 map
+        let (result, verdict) = match ticket.kind {
+            TicketKind::Ask => match outcome {
+                QuestionOutcome::Answered(map) => {
+                    let answers = map.clone(); // 事件要带一份给 UI 还原 Q/A；json! 按值消费原 map
+                    (
+                        ToolResult::ok(serde_json::json!({ "answers": map })),
+                        QuestionVerdict { request_id, answered: true, by: "user", answers },
+                    )
+                }
+                QuestionOutcome::Dismissed(by) => (
+                    ToolResult::ok(serde_json::json!({
+                        "answers": {},
+                        "dismissed": true,
+                        "note": format!("用户未回答（{by}），请自行选择合理默认继续，不要反复追问")
+                    })),
+                    QuestionVerdict {
+                        request_id,
+                        answered: false,
+                        by,
+                        answers: serde_json::Map::new(),
+                    },
+                ),
+            },
+            TicketKind::ExitPlan { plan, roots } => {
+                // 批准判定（§7.4）：首项 == 批准 label 且无附言。批准 → 同回合翻活开关
+                // （托管路径与守卫同在回合任务树内，try_with 必命中）→ 下一批工具立即放行写；
+                // 计划文本落盘 `<roots[0]>/.cmx/plans/<ts>.md`（失败不阻塞，计划仍在会话内）。
+                let answered = matches!(&outcome, QuestionOutcome::Answered(_));
+                let approved = match &outcome {
+                    QuestionOutcome::Answered(m) => crate::exit_plan::is_approval_answer(m),
+                    QuestionOutcome::Dismissed(_) => false,
+                };
+                if approved {
+                    deactivate_plan_mode();
+                }
+                let saved_path = if approved {
+                    crate::exit_plan::save_plan(&plan, &roots)
+                } else {
+                    None
+                };
+                let answers = match &outcome {
+                    QuestionOutcome::Answered(m) => m.clone(),
+                    QuestionOutcome::Dismissed(_) => serde_json::Map::new(),
+                };
+                let by = match &outcome {
+                    QuestionOutcome::Dismissed(b) => *b,
+                    QuestionOutcome::Answered(_) => "user",
+                };
                 (
-                    ToolResult::ok(serde_json::json!({ "answers": map })),
-                    QuestionVerdict { request_id, answered: true, by: "user", answers },
+                    crate::exit_plan::compose_result(&outcome, saved_path.as_ref()),
+                    QuestionVerdict { request_id, answered, by, answers },
                 )
             }
-            QuestionOutcome::Dismissed(by) => (
-                ToolResult::ok(serde_json::json!({
-                    "answers": {},
-                    "dismissed": true,
-                    "note": format!("用户未回答（{by}），请自行选择合理默认继续，不要反复追问")
-                })),
-                QuestionVerdict {
-                    request_id,
-                    answered: false,
-                    by,
-                    answers: serde_json::Map::new(),
-                },
-            ),
         };
         CallOutcome {
             result,
@@ -797,9 +919,18 @@ impl Agent {
 }
 
 /// 一次提问挂起的票据：执行段据 rx 等待结局，回灌段据 request_id/by 落解决事件。
+/// `kind` 区分 ask_user（通用提问）与 exit_plan（计划审批，结果需判定+翻旗标+落盘）。
 struct QuestionTicket {
     request_id: String,
     rx: tokio::sync::oneshot::Receiver<QuestionOutcome>,
+    kind: TicketKind,
+}
+
+enum TicketKind {
+    /// ask_user：结果即答案 JSON。
+    Ask,
+    /// exit_plan：批准 → 翻 TURN_PLAN_MODE + 计划落盘（roots 为本回合工作区根快照）。
+    ExitPlan { plan: String, roots: Vec<PathBuf> },
 }
 
 /// 工具调用参数的单行摘要（审批卡 `$ …` 展示 + 待决恢复用）：

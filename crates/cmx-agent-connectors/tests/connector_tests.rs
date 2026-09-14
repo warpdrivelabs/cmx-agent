@@ -64,9 +64,10 @@ async fn connector_tool_gracefully_degrades_when_service_down() {
     };
     let roots = dummy_ctx_roots();
     let ctx = ToolCtx {
-        sandbox: SandboxMode::WorkspaceWrite,
-        allowed_roots: &roots,
-    };
+         sandbox: SandboxMode::WorkspaceWrite,
+         allowed_roots: &roots,
+         session_id: "test",
+     };
     let r = flow.invoke(serde_json::json!({}), &ctx).await.unwrap();
     assert!(
         !r.ok,
@@ -110,9 +111,10 @@ async fn live_flow_lists_real_definitions() {
     };
     let roots = dummy_ctx_roots();
     let ctx = ToolCtx {
-        sandbox: SandboxMode::WorkspaceWrite,
-        allowed_roots: &roots,
-    };
+         sandbox: SandboxMode::WorkspaceWrite,
+         allowed_roots: &roots,
+         session_id: "test",
+     };
     let r = flow.invoke(serde_json::json!({}), &ctx).await.unwrap();
     assert!(r.ok, "live flow call failed: {:?}", r.output);
     assert_eq!(r.output["service"], "cmx-flow");
@@ -148,9 +150,10 @@ async fn live_flow_start_instance() {
     };
     let roots = dummy_ctx_roots();
     let ctx = ToolCtx {
-        sandbox: SandboxMode::WorkspaceWrite,
-        allowed_roots: &roots,
-    };
+         sandbox: SandboxMode::WorkspaceWrite,
+         allowed_roots: &roots,
+         session_id: "test",
+     };
     let r = start
         .invoke(
             serde_json::json!({ "definitionKey": "s5_voucher", "variables": { "amount": 42 } }),
@@ -184,9 +187,10 @@ async fn live_flow_start_then_complete() {
         .with_token(store);
     let roots = dummy_ctx_roots();
     let ctx = ToolCtx {
-        sandbox: SandboxMode::WorkspaceWrite,
-        allowed_roots: &roots,
-    };
+         sandbox: SandboxMode::WorkspaceWrite,
+         allowed_roots: &roots,
+         session_id: "test",
+     };
     // ① 起实例 → 取 instanceId + 首个待办 taskId。
     let start = FlowStartInstance { client: client.clone() };
     let sr = start
@@ -233,9 +237,10 @@ async fn live_report_lists_real_reports() {
     };
     let roots = dummy_ctx_roots();
     let ctx = ToolCtx {
-        sandbox: SandboxMode::WorkspaceWrite,
-        allowed_roots: &roots,
-    };
+         sandbox: SandboxMode::WorkspaceWrite,
+         allowed_roots: &roots,
+         session_id: "test",
+     };
     let r = report.invoke(serde_json::json!({}), &ctx).await.unwrap();
     assert!(r.ok, "live report failed: {:?}", r.output);
     assert_eq!(r.output["service"], "cmx-report");
@@ -279,7 +284,7 @@ httpd=socketserver.TCPServer(("127.0.0.1",0),H); print(httpd.server_address[1]);
 
     let tool = FlowStartInstance { client: CmxServiceClient::new(format!("http://127.0.0.1:{port}")) };
     let roots = vec![std::path::PathBuf::from("/tmp")];
-    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
     let r = tool.invoke(serde_json::json!({"definitionKey":"leave_approval","variables":{"days":3}}), &ctx).await.unwrap();
 
     let _ = child.kill();
@@ -320,7 +325,7 @@ httpd=socketserver.TCPServer(("127.0.0.1",0),H); print(httpd.server_address[1]);
 
     let tool = OntoExecuteAction { client: CmxServiceClient::new(format!("http://127.0.0.1:{port}")) };
     let roots = vec![std::path::PathBuf::from("/tmp")];
-    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
     let r = tool.invoke(serde_json::json!({"actionType":"wsClose","params":{"orderId":"WO-1"},"dryRun":true}), &ctx).await.unwrap();
 
     let _ = child.kill();
@@ -419,7 +424,7 @@ httpd=socketserver.TCPServer(("127.0.0.1",0),H); print(httpd.server_address[1]);
         report: CmxServiceClient::new(base),
     };
     let roots = vec![std::path::PathBuf::from("/tmp")];
-    let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots };
+    let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
     let r = tool.invoke(serde_json::json!({}), &ctx).await.unwrap();
 
     let _ = child.kill();
@@ -477,7 +482,7 @@ httpd=socketserver.TCPServer(("127.0.0.1",0),H); print(httpd.server_address[1]);
         identity: None,
     };
     let roots = vec![std::path::PathBuf::from("/tmp")];
-    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
     // 步1 建对象；步2 起流程，businessKey 引用步1输出的 id
     let r = tool.invoke(serde_json::json!({"steps":[
         {"op":"put_object","input":{"objectType":"WsOrd","properties":{"amount":500}}},
@@ -520,7 +525,7 @@ async fn live_onto_put_object() {
         .await;
     let put = OntoPutObject { client };
     let roots = dummy_ctx_roots();
-    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
     let r = put
         .invoke(
             serde_json::json!({"objectType":"Widget","properties":{"id":"w-live-1","name":"活体测试"}}),
@@ -547,7 +552,7 @@ async fn live_report_compute() {
             .with_token(store),
     };
     let roots = dummy_ctx_roots();
-    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
     let r = comp
         .invoke(
             serde_json::json!({"reportCode":"STAT_01_D","orgCode":"0000","periodCode":"2026-07"}),
@@ -600,7 +605,7 @@ async fn live_onto_execute_action() {
     })).await;
     let exec = OntoExecuteAction { client };
     let roots = dummy_ctx_roots();
-    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
     // dryRun：应解析出 1 条编辑、不落库。
     let r = exec.invoke(serde_json::json!({"actionType":"renameWidget","params":{"id":"w1","name":"renamed"},"dryRun":true}), &ctx).await.unwrap();
     assert!(r.ok, "live onto execute failed: {:?}", r.output);
@@ -626,7 +631,7 @@ async fn live_business_chain_end_to_end() {
     })).await;
     let chain = EngineChain { onto, flow: mk(8091), report: mk(8092), pep: None, identity: None };
     let roots = dummy_ctx_roots();
-    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
     // 整链：① 建对象 → ② 起流程(businessKey 引用①的 id) → ③ 算报表。验 $N 穿线 + 各步 ok。
     let r = chain.invoke(serde_json::json!({"steps":[
         {"op":"put_object","input":{"objectType":"Widget","properties":{"id":"chain-obj-1","name":"链测"}}},
@@ -659,7 +664,7 @@ async fn live_business_chain_per_op_pep_denies_viewer() {
     let chain = EngineChain { onto: mk(8097), flow: mk(8091), report: mk(8092),
         pep: Some(pep), identity: Some(identity) };
     let roots = dummy_ctx_roots();
-    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
     let r = chain.invoke(serde_json::json!({"steps":[
         {"op":"put_object","input":{"objectType":"Widget","properties":{"id":"deny-1","name":"x"}}}
     ]}), &ctx).await.unwrap();

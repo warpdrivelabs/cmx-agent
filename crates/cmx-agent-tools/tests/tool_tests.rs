@@ -15,9 +15,10 @@ fn ctx_with_roots(roots: Vec<PathBuf>) -> (SandboxMode, Vec<PathBuf>) {
 async fn echo_roundtrips_text() {
     let (sb, roots) = ctx_with_roots(vec![]);
     let ctx = ToolCtx {
-        sandbox: sb,
-        allowed_roots: &roots,
-    };
+         sandbox: sb,
+         allowed_roots: &roots,
+         session_id: "test",
+     };
     let r = EchoTool
         .invoke(serde_json::json!({"text":"hello"}), &ctx)
         .await
@@ -30,9 +31,10 @@ async fn echo_roundtrips_text() {
 async fn add_handles_missing_args_gracefully() {
     let (sb, roots) = ctx_with_roots(vec![]);
     let ctx = ToolCtx {
-        sandbox: sb,
-        allowed_roots: &roots,
-    };
+         sandbox: sb,
+         allowed_roots: &roots,
+         session_id: "test",
+     };
     let ok = AddTool
         .invoke(serde_json::json!({"a":2,"b":3}), &ctx)
         .await
@@ -56,9 +58,10 @@ async fn clock_fixed_is_deterministic() {
     let clock = ClockTool::fixed(t);
     let (sb, roots) = ctx_with_roots(vec![]);
     let ctx = ToolCtx {
-        sandbox: sb,
-        allowed_roots: &roots,
-    };
+         sandbox: sb,
+         allowed_roots: &roots,
+         session_id: "test",
+     };
     let r = clock.invoke(serde_json::json!({}), &ctx).await.unwrap();
     assert_eq!(r.output["now"], "2026-09-02T00:00:00+00:00");
 }
@@ -67,9 +70,10 @@ async fn clock_fixed_is_deterministic() {
 async fn fs_read_denies_empty_roots() {
     let (sb, roots) = ctx_with_roots(vec![]);
     let ctx = ToolCtx {
-        sandbox: sb,
-        allowed_roots: &roots,
-    };
+         sandbox: sb,
+         allowed_roots: &roots,
+         session_id: "test",
+     };
     let r = FsReadTool
         .invoke(serde_json::json!({"path":"/etc/hosts"}), &ctx)
         .await
@@ -86,9 +90,10 @@ async fn fs_read_reads_within_root() {
 
     let roots = vec![dir.clone()];
     let ctx = ToolCtx {
-        sandbox: SandboxMode::WorkspaceWrite,
-        allowed_roots: &roots,
-    };
+         sandbox: SandboxMode::WorkspaceWrite,
+         allowed_roots: &roots,
+         session_id: "test",
+     };
     let r = FsReadTool
         .invoke(serde_json::json!({"path": file.to_str().unwrap()}), &ctx)
         .await
@@ -119,9 +124,10 @@ async fn fs_read_blocks_parent_dir_escape() {
 
     let roots = vec![inside.clone()]; // 只允许 inside/
     let ctx = ToolCtx {
-        sandbox: SandboxMode::WorkspaceWrite,
-        allowed_roots: &roots,
-    };
+         sandbox: SandboxMode::WorkspaceWrite,
+         allowed_roots: &roots,
+         session_id: "test",
+     };
     let escape = format!("{}/../secret.txt", inside.to_str().unwrap());
     let r = FsReadTool
         .invoke(serde_json::json!({"path": escape}), &ctx)

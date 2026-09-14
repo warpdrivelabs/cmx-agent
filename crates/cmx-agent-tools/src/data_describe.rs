@@ -166,7 +166,7 @@ mod tests {
     #[tokio::test]
     async fn describes_numeric_and_text() {
         let (root, roots) = setup("city,pop,region\nBJ,100,north\nSH,90,east\nBJ,80,north\n");
-        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
         let r = DataDescribeTool.invoke(json!({"path":"d.csv"}), &ctx).await.unwrap();
         assert!(r.ok, "{r:?}");
         assert_eq!(r.output["rows"], 3);
@@ -187,7 +187,7 @@ mod tests {
     #[tokio::test]
     async fn missing_file_errors() {
         let (root, roots) = setup("a\n1\n");
-        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
         let r = DataDescribeTool.invoke(json!({"path":"nope.csv"}), &ctx).await.unwrap();
         assert!(!r.ok);
         std::fs::remove_dir_all(&root).ok();

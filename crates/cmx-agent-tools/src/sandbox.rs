@@ -101,9 +101,10 @@ mod tests {
         let root = crate::testutil::unique_dir("cmx-sbx");
         let roots = vec![root.clone()];
         let ctx = ToolCtx {
-            sandbox: SandboxMode::WorkspaceWrite,
-            allowed_roots: &roots,
-        };
+             sandbox: SandboxMode::WorkspaceWrite,
+             allowed_roots: &roots,
+             session_id: "test",
+         };
         let p = resolve("sub/new.txt", &ctx).expect("new file within sandbox");
         assert!(p.ends_with("sub/new.txt"));
         std::fs::remove_dir_all(&root).ok();
@@ -114,9 +115,10 @@ mod tests {
         let root = crate::testutil::unique_dir("cmx-sbx2");
         let roots = vec![root.clone()];
         let ctx = ToolCtx {
-            sandbox: SandboxMode::WorkspaceWrite,
-            allowed_roots: &roots,
-        };
+             sandbox: SandboxMode::WorkspaceWrite,
+             allowed_roots: &roots,
+             session_id: "test",
+         };
         assert!(resolve("../escape.txt", &ctx).is_err());
         std::fs::remove_dir_all(&root).ok();
     }

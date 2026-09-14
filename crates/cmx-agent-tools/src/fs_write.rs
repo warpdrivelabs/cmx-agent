@@ -75,9 +75,10 @@ mod tests {
         let root = tmp();
         let roots = vec![root.clone()];
         let ctx = ToolCtx {
-            sandbox: SandboxMode::WorkspaceWrite,
-            allowed_roots: &roots,
-        };
+             sandbox: SandboxMode::WorkspaceWrite,
+             allowed_roots: &roots,
+             session_id: "test",
+         };
         let r = FsWriteTool
             .invoke(json!({"path":"a/b/hi.txt","content":"你好"}), &ctx)
             .await
@@ -92,9 +93,10 @@ mod tests {
         let root = tmp();
         let roots = vec![root.clone()];
         let ctx = ToolCtx {
-            sandbox: SandboxMode::ReadOnly,
-            allowed_roots: &roots,
-        };
+             sandbox: SandboxMode::ReadOnly,
+             allowed_roots: &roots,
+             session_id: "test",
+         };
         let r = FsWriteTool
             .invoke(json!({"path":"x.txt","content":"y"}), &ctx)
             .await
@@ -108,9 +110,10 @@ mod tests {
         let root = tmp();
         let roots = vec![root.clone()];
         let ctx = ToolCtx {
-            sandbox: SandboxMode::WorkspaceWrite,
-            allowed_roots: &roots,
-        };
+             sandbox: SandboxMode::WorkspaceWrite,
+             allowed_roots: &roots,
+             session_id: "test",
+         };
         let r = FsWriteTool
             .invoke(json!({"path":"../evil.txt","content":"y"}), &ctx)
             .await

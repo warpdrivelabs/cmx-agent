@@ -92,7 +92,7 @@ mod tests {
     #[tokio::test]
     async fn matches_rs_files() {
         let (root, roots) = setup();
-        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
         let r = GlobTool.invoke(json!({"pattern":"**/*.rs"}), &ctx).await.unwrap();
         assert!(r.ok, "{r:?}");
         assert_eq!(r.output["count"], 2);
@@ -102,7 +102,7 @@ mod tests {
     #[tokio::test]
     async fn matches_single_dir() {
         let (root, roots) = setup();
-        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
         let r = GlobTool.invoke(json!({"pattern":"*.md"}), &ctx).await.unwrap();
         assert_eq!(r.output["count"], 1);
         std::fs::remove_dir_all(&root).ok();

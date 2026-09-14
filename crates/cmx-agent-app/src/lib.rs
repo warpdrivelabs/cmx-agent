@@ -11,6 +11,7 @@
 
 pub mod app;
 pub mod approval;
+pub mod agents;
 pub mod builder;
 pub mod bus;
 pub mod data_dir;
@@ -23,6 +24,7 @@ pub mod store;
 pub mod stream;
 pub mod workspace;
 
+pub use agents::{AgentRegistry, AppModelResolver};
 pub use app::{
     ASSISTANT_SESSION_ID, ASSISTANT_SESSION_TITLE, AgentApp, AuthSessionFile, SendOutcome,
     read_auth_session, write_auth_session,

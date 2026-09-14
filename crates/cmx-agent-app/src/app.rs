@@ -20,6 +20,13 @@ pub const ASSISTANT_SESSION_ID: &str = "im-assistant";
 /// 统一会话的固定展示标题（创建时写入，此后由 meta 保留机制维持）。
 pub const ASSISTANT_SESSION_TITLE: &str = "IM 助理";
 
+/// 计划模式回合追加的系统提示词章节（§7.3）。
+const PLAN_MODE_PROMPT_SECTION: &str = "\n\n【计划模式】当前处于计划模式（只读档）：只做调研分析，\
+不得修改任何文件或系统状态（写操作会被守卫拒绝，也不要用变通手段绕过）。\
+先充分调研再收敛；最终产出结构化计划（目标 / 步骤 / 涉及文件 / 风险 / 验证方式），\
+完成后调用 exit_plan 工具提交计划请求用户批准。不得宣称已修改任何文件；\
+被拒绝的工具不要重试，改用白名单内的只读工具继续调研，或直接调用 exit_plan。";
+
 /// 一个回合的对外结果（含新产生的事件条数，便于前门增量渲染）。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SendOutcome {
@@ -86,6 +93,14 @@ pub struct AgentApp {
     /// 登出钩子：logout 时逐个调用（壳注册，如 Tauri 壳停 IM 桥——旧实现登出后 IM 桥
     /// 仍以旧身份拉消息跑回合）。
     logout_hooks: Mutex<Vec<Box<dyn Fn() + Send + Sync>>>,
+    /// 阶段一：子智能体句柄（后台注入/取消/并发计数需要 app 层可达）。
+    subagents: Option<Arc<cmx_agent_tools::SubagentHandle>>,
+    /// 阶段一：子智能体注册表（agents.json 读写 + 热生效清单）。
+    agents: Option<Arc<crate::agents::AgentRegistry>>,
+    /// 阶段一：专属模型解析缝（None=父模型槽不需 app；Some(id)=需 providers 装配）。
+    model_resolver: Option<Arc<crate::agents::AppModelResolver>>,
+    /// 阶段二：计划模式活开关注册表：session_id → flag（回合开始插入、收尾摘除并对账回写 meta）。
+    turn_plan_flags: Mutex<std::collections::HashMap<String, Arc<std::sync::atomic::AtomicBool>>>,
 }
 
 /// 落盘的登录会话（`<data_dir>/auth.json`）：启动时经 /api/auth/me 校验回放，
@@ -159,6 +174,10 @@ impl AgentApp {
             session_locks: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             pending_deleted: Mutex::new(std::collections::HashSet::new()),
             logout_hooks: Mutex::new(Vec::new()),
+            subagents: None,
+            agents: None,
+            model_resolver: None,
+            turn_plan_flags: Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -258,6 +277,65 @@ impl AgentApp {
     pub fn with_im_binding(mut self, client: cmx_agent_connectors::ImBindingClient) -> Self {
         self.im_binding = Some(client);
         self
+    }
+
+    /// 阶段一：注入子智能体句柄（由 DesktopAppBuilder 调用；取消/注入器挂 app 层用）。
+    pub fn with_subagents(mut self, handle: Arc<cmx_agent_tools::SubagentHandle>) -> Self {
+        self.subagents = Some(handle);
+        self
+    }
+
+    /// 阶段一：注入子智能体注册表（ListAgents/SaveAgent/DeleteAgent 用）。
+    pub fn with_agents(mut self, agents: Arc<crate::agents::AgentRegistry>) -> Self {
+        self.agents = Some(agents);
+        self
+    }
+
+    /// 阶段一：注入模型解析缝（`into_shared` 时 attach app 弱引用）。
+    pub fn with_model_resolver(mut self, resolver: Arc<crate::agents::AppModelResolver>) -> Self {
+        self.model_resolver = Some(resolver);
+        self
+    }
+
+    /// 阶段三：把 `self` 变成共享 `Arc`，并装配「需要 app 弱引用」的回调缝：
+    /// 后台子任务完成注入器（升级 Weak → `send` 唤醒父会话，父忙经 session_locks 排队）
+    /// 与专属模型解析器（按 provider id 解析）。CLI/e2e 等直接 `Arc::new` 的装配不调本方法——
+    /// 后台 task 据此 fail-closed 拒绝，专属模型解析报"需完整装配"。
+    pub fn into_shared(self) -> Arc<Self> {
+        let arc = Arc::new(self);
+        if let (Some(handle), Some(resolver)) = (&arc.subagents, &arc.model_resolver) {
+            resolver.attach(&arc);
+            let weak = Arc::downgrade(&arc);
+            handle.attach_injector(Arc::new(move |parent_id, text| {
+                let weak = weak.clone();
+                Box::pin(async move {
+                    if let Some(app) = weak.upgrade() {
+                        // AgentApp::send 自动获得 session_locks 按会话排队：父会话忙则
+                        // <task_result> 排在当前回合之后（不与在途回合并发写日志）。
+                        if let Err(e) = app.send(&parent_id, &text).await {
+                            eprintln!("[subagent] 后台结果注入会话 {parent_id} 失败：{e}");
+                        }
+                    }
+                })
+            }));
+        }
+        arc
+    }
+
+    /// 阶段一：解析一个命名 provider 为模型缝（子智能体专属模型用）。失败显式报错不静默降级。
+    pub fn resolve_named_provider(&self, id: &str) -> Result<Arc<dyn cmx_agent_core::ModelSeam>, String> {
+        let dir = self
+            .effective_model_config_dir()
+            .ok_or_else(|| "模型配置目录不可用".to_string())?;
+        let _g = self.providers_lock.lock().expect("providers lock");
+        let pf = self.provider_file_inherited(&dir);
+        let p = pf
+            .get(id)
+            .ok_or_else(|| format!("provider '{id}' 不存在"))?;
+        if p.config.base_url.is_empty() {
+            return Err(format!("provider '{id}' 未配置 base_url"));
+        }
+        Ok(Arc::new(cmx_agent_model::OpenAiCompatModel::new(p.config.clone())))
     }
 
     /// 当前登录用户的 access_token（绑定命令用；从共享令牌槽读）。
@@ -995,11 +1073,19 @@ impl AgentApp {
         let name = manifest.get("name").and_then(|v| v.as_str()).unwrap_or("");
         let hot = if kind == "mcp" {
             // mcp：异步连上 server，代理其工具热注册；记录工具名供卸载。
+            // 同名遮蔽拒绝（N3）：任一代理工具与既有工具重名 → 整体安装失败。
             match cmx_agent_plugin::connect_mcp_manifest(manifest).await {
                 Ok(tools) => {
                     let names: Vec<String> = tools.iter().map(|t| t.spec().name).collect();
-                    for t in tools {
-                        self.agent.tools().register_dyn(t);
+                    let mut conflict: Option<String> = None;
+                    for t in &tools {
+                        if let Err(e) = self.agent.tools().register_dyn(t.clone()) {
+                            conflict = Some(e);
+                            break;
+                        }
+                    }
+                    if let Some(e) = conflict {
+                        return Err(AppError::BadRequest(e));
                     }
                     cmx_agent_plugin::record_mcp_tools(&dir, name, &names);
                     !names.is_empty()
@@ -1011,10 +1097,11 @@ impl AgentApp {
             }
         } else {
             match cmx_agent_plugin::tool_for_installed(&dir, manifest) {
-                Some(tool) => {
-                    self.agent.tools().register_dyn(tool);
-                    true
-                }
+                Some(tool) => match self.agent.tools().register_dyn(tool) {
+                    Ok(()) => true,
+                    // 同名遮蔽拒绝（N3）：重装/改名冲突 → 上抛为安装失败（先卸旧再装）。
+                    Err(e) => return Err(AppError::BadRequest(e)),
+                },
                 None => false,
             }
         };
@@ -1069,10 +1156,10 @@ impl AgentApp {
             match cmx_agent_plugin::read_plugin_manifest(dir, name)
                 .and_then(|mf| cmx_agent_plugin::tool_for_installed(dir, &mf))
             {
-                Some(tool) => {
-                    self.agent.tools().register_dyn(tool);
-                    true
-                }
+                Some(tool) => match self.agent.tools().register_dyn(tool) {
+                    Ok(()) => true,
+                    Err(e) => return Err(AppError::BadRequest(e)),
+                },
                 None => false,
             }
         } else {
@@ -1112,6 +1199,7 @@ impl AgentApp {
             updated_at: now,
             event_count: 0,
             workspace_id: self.current_workspace_id(),
+            plan_mode: false,
         };
         self.store.put_meta(&meta)?;
         Ok(id)
@@ -1141,6 +1229,7 @@ impl AgentApp {
             updated_at: now,
             event_count: 0,
             workspace_id,
+            plan_mode: false,
         };
         self.store.put_meta(&meta)?;
         Ok(id)
@@ -1283,6 +1372,28 @@ impl AgentApp {
         // 且不再写共享 policy（旧实现两会话并发回合互相覆盖对方的工作空间根）。
         let turn_roots = self.session_workspace_roots(session_id)?;
 
+        // 计划模式（阶段二）：回合开始插活开关（值 = meta.plan_mode），整个回合任务树在
+        // TURN_PLAN_MODE 作用域内（PlanModeGuard 每批现读）；收尾摘除并对账回写 meta——
+        // 覆盖 exit_plan 批准后同回合翻旗标的落盘（§7.1）。
+        let plan_initial = self
+            .store
+            .list()?
+            .iter()
+            .find(|m| m.id == session_id)
+            .map(|m| m.plan_mode)
+            .unwrap_or(false);
+        let plan_flag = Arc::new(std::sync::atomic::AtomicBool::new(plan_initial));
+        self.turn_plan_flags
+            .lock()
+            .expect("plan flags lock")
+            .insert(session_id.to_string(), plan_flag.clone());
+        if plan_initial {
+            // 计划模式回合追加固定章节（§7.3）：session.system 每回合都由 current_system_prompt
+            // 重置，此处追加只影响本回合的模型上下文。
+            let sys = self.current_system_prompt().unwrap_or_default() + PLAN_MODE_PROMPT_SECTION;
+            session = session.with_system(sys);
+        }
+
         // 流式：加载完历史后挂 sink（历史用 push_restored 不触发 sink，故只流式本回合新事件）。
         // 同一个 sink 既是事件 EventSink（全量事件）又是 TurnObserver（文字增量）。
         let before = session.log.len();
@@ -1304,6 +1415,7 @@ impl AgentApp {
                         Some(cancel),
                         turn_roots.as_ref().map(std::slice::from_ref),
                         policy_override,
+                        Some(plan_flag.clone()),
                     )
                     .await
             }
@@ -1319,16 +1431,17 @@ impl AgentApp {
                         Some(cancel),
                         turn_roots.as_ref().map(std::slice::from_ref),
                         policy_override,
+                        Some(plan_flag.clone()),
                     )
                     .await
             }
             (None, Some(subj)) => self
                 .agent
-                .run_turn_observed_as_cancellable_with_policy(&mut session, user_input, None, Some(subj), Some(cancel), turn_roots.as_ref().map(std::slice::from_ref), policy_override)
+                .run_turn_observed_as_cancellable_with_policy(&mut session, user_input, None, Some(subj), Some(cancel), turn_roots.as_ref().map(std::slice::from_ref), policy_override, Some(plan_flag.clone()))
                 .await,
             (None, None) => self
                 .agent
-                .run_turn_observed_as_cancellable_with_policy(&mut session, user_input, None, None, Some(cancel), turn_roots.as_ref().map(std::slice::from_ref), policy_override)
+                .run_turn_observed_as_cancellable_with_policy(&mut session, user_input, None, None, Some(cancel), turn_roots.as_ref().map(std::slice::from_ref), policy_override, Some(plan_flag.clone()))
                 .await,
         };
         // 出错一致性（飞书 ↔ 界面）：回合中途模型失败等会让 run_turn 提前返回 Err。若直接 `?` 抛出，
@@ -1357,6 +1470,28 @@ impl AgentApp {
                 }
             }
         };
+
+        // 计划模式收尾对账（§7.1）：摘活开关；flag 与回合初值不一致（exit_plan 批准后内核
+        // 同回合翻 false 是唯一变化路径）→ 落 Note 事件（随本回合事件一起持久化 + 广播），
+        // 并以 flag 为准持久化 meta。
+        let flag_now = {
+            let removed = self
+                .turn_plan_flags
+                .lock()
+                .expect("plan flags lock")
+                .remove(session_id);
+            removed.map(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+        };
+        let plan_final = flag_now.unwrap_or(plan_initial);
+        if plan_initial && !plan_final {
+            session.log.append(cmx_agent_core::event::EventKind::Note {
+                text: "计划模式已退出（计划已批准），进入实现阶段".to_string(),
+            });
+        } else if !plan_initial && plan_final {
+            session.log.append(cmx_agent_core::event::EventKind::Note {
+                text: "计划模式已开启".to_string(),
+            });
+        }
 
         // 回合期间会话被删除（墓碑在）→ 放弃落库：本回合事件随删除一起蒸发，
         // 不写 append/put_meta 把已删会话复活。墓碑消费掉（同 id 再发新消息视为新建复活）。
@@ -1396,6 +1531,9 @@ impl AgentApp {
             updated_at: now,
             event_count: session.log.len(),
             workspace_id: prev.as_ref().and_then(|m| m.workspace_id.clone()).or_else(|| self.current_workspace_id()),
+            // 计划模式：以回合收尾对账后的 flag 值为准（覆盖 exit_plan 批准的落盘；
+            // 无活开关变化时保住 prev 值——否则每回合 meta 重建会把它抹成 false）。
+            plan_mode: plan_final,
         };
         self.store.put_meta(&meta)?;
 
@@ -1440,8 +1578,13 @@ impl AgentApp {
         if let Some(a) = &self.approver {
             a.revoke_session(session_id);
         }
-        // 有在途回合先取消（含打断审批等待），并落墓碑：回合收尾的持久化步骤查到墓碑
-        // 即放弃落库——否则回合结束 append_events/put_meta 会把刚删的会话「僵尸复活」。
+        // 阶段三：清计划模式旗标残项（红队 N6 内存泄漏点；子任务级联在 cancel_session_turn 内）。
+        self.turn_plan_flags
+            .lock()
+            .expect("plan flags lock")
+            .remove(session_id);
+        // 有在途回合先取消（含打断审批等待 + 级联取消子任务），并落墓碑：回合收尾的持久化
+        // 步骤查到墓碑即放弃落库——否则回合结束 append_events/put_meta 会把刚删的会话「僵尸复活」。
         self.cancel_session_turn(session_id);
         self.pending_deleted
             .lock()
@@ -1584,6 +1727,17 @@ impl AgentApp {
         // 同步忽略本会话待决提问：走 oneshot 唤醒（而非杀任务）→ 工具路径回灌 dismissed
         // 结果 → 回合在旗标边界收尾。提问挂起点不经旗标检查，不走 oneshot 就永远停在那里。
         self.agent.questions().cancel_session(session_id);
+        // 阶段三：级联取消该会话派生的全部子任务（前台 join_all 内与后台 spawn 的子回合——
+        // 修复旧实现对 subtask-* 取消恒 no-op），并连带清掉 subtask-* 会话名下挂起的
+        // 审批/提问（审批可挂在子会话名下，是实测路径）。
+        if let Some(h) = &self.subagents {
+            for sub_id in h.cancel_for_parent_with_ids(session_id) {
+                if let Some(a) = &self.approver {
+                    a.cancel_session(&sub_id);
+                }
+                self.agent.questions().cancel_session(&sub_id);
+            }
+        }
         self.active_turns
             .lock()
             .expect("active turns lock")
@@ -1622,6 +1776,128 @@ impl AgentApp {
         self.agent.questions().pending_in_session(session_id)
     }
 
+    // ———————————————— 阶段一：子智能体注册表（§6.6）————————————————
+
+    /// 列子智能体（内置两条带覆盖项 + 自定义）。未装配注册表（旧测试/CLI）返回空内置表。
+    pub fn list_agents(&self) -> AppResult<serde_json::Value> {
+        match &self.agents {
+            Some(r) => {
+                let list = r.list();
+                let builtin: Vec<serde_json::Value> = list
+                    .iter()
+                    .filter(|a| a.builtin)
+                    .map(agent_spec_json)
+                    .collect();
+                let custom: Vec<serde_json::Value> =
+                    r.customs().iter().map(agent_spec_json).collect();
+                Ok(serde_json::json!({ "builtin": builtin, "custom": custom }))
+            }
+            None => Ok(serde_json::json!({ "builtin": [], "custom": [] })),
+        }
+    }
+
+    /// 保存子智能体：内置只允许改 model/enabled（覆盖项）；自定义 upsert（name 唯一）。
+    /// 保存即热生效（共享清单 + TaskTool::spec() 动态枚举）。
+    pub fn save_agent(
+        &self,
+        spec: cmx_agent_core::agents::AgentSpec,
+    ) -> AppResult<serde_json::Value> {
+        let registry = self
+            .agents
+            .as_ref()
+            .ok_or_else(|| AppError::BadRequest("子智能体注册表未启用".into()))?;
+        let name = spec.name.trim().to_string();
+        let is_builtin = cmx_agent_core::agents::builtin_specs().iter().any(|b| b.name == name);
+        if is_builtin {
+            registry.set_builtin_override(&name, spec.model.clone(), spec.enabled)?;
+        } else {
+            registry.upsert_custom(cmx_agent_core::agents::AgentSpec {
+                builtin: false,
+                ..spec
+            })?;
+        }
+        Ok(serde_json::json!({ "saved": name, "hot": true }))
+    }
+
+    /// 删除一个自定义子智能体（内置/未知 → 拒绝）。删除即热生效。
+    pub fn delete_agent(&self, name: &str) -> AppResult<serde_json::Value> {
+        let registry = self
+            .agents
+            .as_ref()
+            .ok_or_else(|| AppError::BadRequest("子智能体注册表未启用".into()))?;
+        registry.delete_custom(name)?;
+        Ok(serde_json::json!({ "deleted": name }))
+    }
+
+    // ———————————————— 阶段二：计划模式（§7.1）————————————————
+
+    /// 用户切换会话计划模式（模型无任何切换工具，用户独占）。
+    /// 先取该会话 `session_locks` permit（与回合生命周期串行——红队 N1：防落在「回合收尾
+    /// 摘 flag 之后、对账回写之前」的窗口被旧 flag 覆盖），再校验会话存在（红队 N6：防
+    /// put_meta 造幽灵会话），然后写 meta + 落 Note 事件（审计 + UI 系统行）。
+    /// im-assistant / im-* 会话拒绝（IM 共享会话 + 无人值守 FULL_ACCESS，不进只读规划态）。
+    pub async fn set_plan_mode(&self, session_id: &str, enabled: bool) -> AppResult<serde_json::Value> {
+        if session_id == ASSISTANT_SESSION_ID || session_id.starts_with("im-") {
+            return Err(AppError::BadRequest("IM 助理会话不支持计划模式".into()));
+        }
+        if !self.store.list()?.iter().any(|m| m.id == session_id) {
+            return Err(AppError::NotFound(format!("session '{session_id}'")));
+        }
+        let permit = {
+            let mut locks = self.session_locks.lock().await;
+            locks
+                .entry(session_id.to_string())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        let _permit = permit.lock().await;
+        // 持锁后重读 meta（若刚才有回合在收尾，此处拿到的是对账后的最终值）。
+        let mut meta = self
+            .store
+            .list()?
+            .into_iter()
+            .find(|m| m.id == session_id)
+            .ok_or_else(|| AppError::NotFound(format!("session '{session_id}'")))?;
+        if meta.plan_mode == enabled {
+            return Ok(serde_json::json!({
+                "session_id": session_id, "plan_mode": enabled, "changed": false,
+            }));
+        }
+        meta.plan_mode = enabled;
+        self.store.put_meta(&meta)?;
+        // Note 事件：审计 + UI 系统行。回合外追加——直接构造事件持久化并经总线广播。
+        // （不走 store.load：全新会话可能尚无 log.jsonl，load 会报 NotFound。）
+        let note = cmx_agent_core::event::SessionEvent {
+            seq: 0, // 落库/展示不依赖 seq（投影按 ts 排序；与回合内 append 的派生方式解耦）
+            ts: chrono::Utc::now(),
+            kind: cmx_agent_core::event::EventKind::Note {
+                text: if enabled {
+                    "计划模式已开启（只读调研档）".to_string()
+                } else {
+                    "计划模式已关闭".to_string()
+                },
+            },
+        };
+        self.store.append_events(session_id, std::slice::from_ref(&note))?;
+        self.event_bus.publish(crate::bus::EventEnvelope {
+            session_id: session_id.to_string(),
+            event: note,
+        });
+        // 有进行中回合时同步翻活 flag（立刻生效；无回合时下回合按 meta 读初值）。
+        if let Some(f) = self
+            .turn_plan_flags
+            .lock()
+            .expect("plan flags lock")
+            .get(session_id)
+        {
+            f.store(enabled, std::sync::atomic::Ordering::Relaxed);
+        }
+        tracing::info!("计划模式切换：session={session_id} enabled={enabled}");
+        Ok(serde_json::json!({
+            "session_id": session_id, "plan_mode": enabled, "changed": true,
+        }))
+    }
+
     fn workspace_registry(&self) -> AppResult<Arc<crate::workspace::WorkspaceRegistry>> {
         self.workspaces
             .clone()
@@ -1651,9 +1927,22 @@ impl AgentApp {
     }
 }
 
+/// 子智能体类型 → 前门 JSON（ListAgents / 设置中心第七分区）。
+fn agent_spec_json(a: &cmx_agent_core::agents::AgentSpec) -> serde_json::Value {
+    serde_json::json!({
+        "name": a.name,
+        "title": a.title,
+        "description": a.description,
+        "tools": a.tools,
+        "model": a.model,
+        "system_prompt": a.system_prompt,
+        "enabled": a.enabled,
+        "builtin": a.builtin,
+    })
+}
+
 /// B2：按 base_url 推断 provider 展示名（模型选择器用）。
-fn provider_label(base_url: &str) -> String {
-    let b = base_url.to_ascii_lowercase();
+fn provider_label(base_url: &str) -> String {    let b = base_url.to_ascii_lowercase();
     if b.contains("mlamp") {
         "MLamp 网关".into()
     } else if b.contains("deepseek") {

@@ -299,3 +299,67 @@ impl Guard for SandboxGuard {
         GuardDecision::Allow
     }
 }
+
+/// 计划模式白名单（方案 §7.2 定稿；23 名逐一核对注册名）。**默认拒绝 + 显式白名单**：
+/// hints 黑名单不可行（MCP 代理工具未调 `.guard()` hints 全默认、git/run_tests 无 writes 标注、
+/// 连接器 6 个写侧工具显式 `writes:false`——翻标注会改 ReadOnly 现网行为），白名单下零 hints 改动
+/// 即可拦住 MCP/git/shell/run_tests/连接器写侧/fs_write 及一切后装工具（新工具默认拒绝，fail-closed）。
+pub const PLAN_READ_TOOLS: &[&str] = &[
+    // 本地只读
+    "fs_read",
+    "grep",
+    "glob",
+    "repo_map",
+    "lsp",
+    "data_describe",
+    "doc_read",
+    // 联网只读（调研需要）
+    "web_fetch",
+    "web_search",
+    "browser_read",
+    // 控制面（user_interactive 工具先过守卫管道再进内核特判——漏列会在计划模式里
+    // 连提问与退出批准一并拦死；task 放行的安全性 = 子回合 task-local 继承只读，§7.5）
+    "update_plan",
+    "ask_user",
+    "exit_plan",
+    "task",
+    // 只读连接器与插件面
+    "enterprise_context",
+    "flow_list_definitions",
+    "onto_list_object_types",
+    "report_list_reports",
+    "plugin_list",
+    "plugin_marketplace",
+    // 演示工具（纯计算）
+    "echo",
+    "clock",
+    "add",
+];
+
+/// 计划模式守卫（阶段二）：[`super::agent::TURN_PLAN_MODE`] 活开关开启时，工具名不在
+/// [`PLAN_READ_TOOLS`] 一律拒绝（§7.2）。装配在 SandboxGuard 之后、HighRiskGuard 之前；
+/// **danger 档不豁免**——守卫不读沙箱/审批旋钮，计划模式是用户意图，比旋钮硬。
+pub struct PlanModeGuard;
+
+impl Guard for PlanModeGuard {
+    fn name(&self) -> &str {
+        "plan_mode"
+    }
+
+    fn phases(&self) -> &[GuardPhase] {
+        &[GuardPhase::PreExecute]
+    }
+
+    fn check(&self, ctx: &GuardCtx<'_>) -> GuardDecision {
+        if !super::agent::plan_mode_active() {
+            return GuardDecision::Allow;
+        }
+        if PLAN_READ_TOOLS.contains(&ctx.spec.name.as_str()) {
+            return GuardDecision::Allow;
+        }
+        GuardDecision::deny(format!(
+            "计划模式：工具「{}」被拒（只读档）。完成调研后调用 exit_plan 提交计划请求用户批准",
+            ctx.spec.name
+        ))
+    }
+}

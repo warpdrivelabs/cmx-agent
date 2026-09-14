@@ -85,7 +85,7 @@ mod tests {
     async fn init_repo() -> (PathBuf, Vec<PathBuf>) {
         let root = crate::testutil::unique_dir("cmx-git");
         let roots = vec![root.clone()];
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
         GitTool.invoke(json!({"subcommand":"init"}), &ctx).await.unwrap();
         // 配置身份，避免 commit 报错（局部配置）
         proc::run("git", &["config".into(),"user.email".into(),"t@t".into()], &root, 5000).await;
@@ -96,7 +96,7 @@ mod tests {
     #[tokio::test]
     async fn status_on_empty_repo() {
         let (root, roots) = init_repo().await;
-        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
         let r = GitTool.invoke(json!({"subcommand":"status","args":["--short"]}), &ctx).await.unwrap();
         assert!(r.ok, "{r:?}");
         assert_eq!(r.output["exit_code"], 0);
@@ -107,7 +107,7 @@ mod tests {
     async fn add_commit_then_log() {
         let (root, roots) = init_repo().await;
         std::fs::write(root.join("a.txt"), "hi").unwrap();
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
         GitTool.invoke(json!({"subcommand":"add","args":["a.txt"]}), &ctx).await.unwrap();
         let c = GitTool.invoke(json!({"subcommand":"commit","args":["-m","first"]}), &ctx).await.unwrap();
         assert_eq!(c.output["exit_code"], 0, "{c:?}");
@@ -119,7 +119,7 @@ mod tests {
     #[tokio::test]
     async fn write_denied_in_readonly() {
         let (root, roots) = init_repo().await;
-        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
         let r = GitTool.invoke(json!({"subcommand":"commit","args":["-m","x"]}), &ctx).await.unwrap();
         assert!(!r.ok);
         std::fs::remove_dir_all(&root).ok();
@@ -128,7 +128,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_subcommand_rejected() {
         let (root, roots) = init_repo().await;
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
         let r = GitTool.invoke(json!({"subcommand":"push"}), &ctx).await.unwrap();
         assert!(!r.ok);
         std::fs::remove_dir_all(&root).ok();

@@ -100,7 +100,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn ctx(roots: &[PathBuf]) -> ToolCtx<'_> {
-        ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: roots }
+        ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: roots, session_id: "test" }
     }
 
     #[tokio::test]

@@ -250,7 +250,7 @@ mod tests {
     #[tokio::test]
     async fn xlsx_write_then_read_roundtrip() {
         let (root, roots) = tmp();
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
         // 写
         let w = XlsxWriteTool.invoke(json!({
             "path": "out.xlsx",
@@ -274,7 +274,7 @@ mod tests {
     async fn read_plain_text() {
         let (root, roots) = tmp();
         std::fs::write(root.join("a.md"), "# 标题\n正文").unwrap();
-        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
         let r = DocReadTool.invoke(json!({"path":"a.md"}), &ctx).await.unwrap();
         assert!(r.ok);
         assert_eq!(r.output["kind"], "text");
@@ -285,7 +285,7 @@ mod tests {
     #[tokio::test]
     async fn missing_file_errors() {
         let (root, roots) = tmp();
-        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
         let r = DocReadTool.invoke(json!({"path":"nope.xlsx"}), &ctx).await.unwrap();
         assert!(!r.ok);
         std::fs::remove_dir_all(&root).ok();

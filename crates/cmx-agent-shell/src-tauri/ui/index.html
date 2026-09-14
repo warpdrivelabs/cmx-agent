@@ -110,6 +110,7 @@
         <button class="settings-item" data-sec="account" data-act="settingsSection"><span class="si-ico">👤</span>账户</button>
         <button class="settings-item" data-sec="models" data-act="settingsSection"><span class="si-ico">🧠</span>模型</button>
         <button class="settings-item" data-sec="im" data-act="settingsSection"><span class="si-ico">💬</span>IM 遥控</button>
+        <button class="settings-item" data-sec="agents" data-act="settingsSection"><span class="si-ico">🤖</span>子智能体</button>
         <div class="settings-group">通用</div>
         <button class="settings-item" data-sec="appearance" data-act="settingsSection"><span class="si-ico">🎨</span>外观</button>
         <button class="settings-item" data-sec="general" data-act="settingsSection"><span class="si-ico">⚙</span>通用</button>
@@ -190,6 +191,56 @@
               <span style="flex:1"></span>
               <button data-act="closeSettings">取消</button>
               <button class="mcfg-save" data-act="mcfgSave">保存</button>
+            </div>
+          </section>
+          <!-- ── 子智能体分区（阶段一，方案 20260914 §6.7）：内置两条 + 自定义增删改，保存热生效 ── -->
+          <section class="settings-sec" id="settings-sec-agents">
+            <div class="mcfg-body">
+              <div class="mcfg-list" id="agents-list"></div>
+              <div class="mcfg-detail">
+                <div class="mcfg-row">
+                  <label>名称（snake_case）</label>
+                  <input id="agents-name" type="text" placeholder="如 code_reviewer">
+                </div>
+                <div class="mcfg-row">
+                  <label>显示名</label>
+                  <input id="agents-title" type="text" placeholder="如 代码评审员">
+                </div>
+                <div class="mcfg-row">
+                  <label>描述（给模型的选型说明）</label>
+                  <input id="agents-desc" type="text" placeholder="何时派给这个子智能体（进 task 工具枚举说明）">
+                </div>
+                <div class="mcfg-row">
+                  <label>工具</label>
+                  <select id="agents-tools-mode" onchange="void 0">
+                    <option value="all">全部工具</option>
+                    <option value="allow">白名单（多选）</option>
+                  </select>
+                </div>
+                <div class="mcfg-row" id="agents-tools-row" style="display:none">
+                  <label>工具白名单</label>
+                  <div id="agents-tools-box" class="ag-tools-box"></div>
+                </div>
+                <div class="mcfg-row">
+                  <label>模型</label>
+                  <select id="agents-model"></select>
+                </div>
+                <div class="mcfg-row">
+                  <label>系统提示词（留空用默认）</label>
+                  <textarea id="agents-prompt" rows="5" placeholder="如：你是严格的代码评审员。"></textarea>
+                </div>
+                <div class="mcfg-row">
+                  <label>启用</label>
+                  <input type="checkbox" id="agents-enabled" checked>
+                </div>
+                <div class="mcfg-hint" id="agents-hint"></div>
+              </div>
+            </div>
+            <div class="mcfg-actions">
+              <button data-act="agentsDelete" id="agents-del-btn" class="mcfg-danger">删除</button>
+              <span style="flex:1"></span>
+              <button data-act="closeSettings">取消</button>
+              <button class="mcfg-save" data-act="agentsSave">保存</button>
             </div>
           </section>
           <!-- ── IM 遥控分区（原设置面板 DOM 平移，scfg-* id 全保留，js/im.js 零逻辑改动）── -->
@@ -490,6 +541,7 @@
               <button class="tool-ic" title="附件（占位）"><span>＋</span></button>
               <button class="tool-ic" title="引用文件（@ 搜索工作空间文件）"><span>@</span></button>
               <button class="tool-ic" title="调用技能（/ 唤起技能菜单）"><span>/</span></button>
+              <button class="plan-chip" data-act="togglePlanMode" title="计划模式：只读调研，exit_plan 提交计划批准后才能写">📋 计划</button>
               <div class="sp"></div>
               <button class="model" data-act="openModelMenu" title="模型选择"><span class="mdot">◎</span> <span class="mlabel">未配置</span> ▾</button>
               <button class="tool-ic voice" data-act="toggleVoice" title="语音输入（占位）"><span>🎙</span></button>
@@ -604,6 +656,7 @@
 <script src="js/im.js" defer></script>
 <script src="js/login.js" defer></script>
 <script src="js/update.js" defer></script>
+<script src="js/agents.js" defer></script>
 <script src="js/settings.js" defer></script>
 <script src="js/platform.js" defer></script>
 <script src="js/main.js" defer></script>

@@ -113,7 +113,7 @@ mod tests {
     #[tokio::test]
     async fn custom_command_runs() {
         let (root, roots) = tmp();
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
         let r = RunTestsTool
             .invoke(json!({"command":"echo tests-ok"}), &ctx)
             .await
@@ -127,7 +127,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_framework_errors() {
         let (root, roots) = tmp();
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
         let r = RunTestsTool.invoke(json!({}), &ctx).await.unwrap();
         assert!(!r.ok);
         std::fs::remove_dir_all(&root).ok();

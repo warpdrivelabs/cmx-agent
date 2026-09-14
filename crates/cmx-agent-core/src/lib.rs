@@ -7,8 +7,10 @@
 //! 真实模型、真实沙箱、cmx-* 工具、持久化都以 trait 注入，在上层 crate 提供实现。
 
 pub mod agent;
+pub mod agents;
 pub mod error;
 pub mod event;
+pub mod exit_plan;
 pub mod guard;
 pub mod model;
 pub mod question;
@@ -16,14 +18,17 @@ pub mod session;
 pub mod tool;
 
 pub use agent::{
-    call_summary, Agent, AgentBuilder, ApprovalPolicy, Approver, AutoApprover, Policy, TurnCancel,
-    TurnOutcome, TurnPolicyOverride, SUBAGENT_TURN, TURN_POLICY_OVERRIDE, TURN_SUBJECT,
+    call_summary, deactivate_plan_mode, plan_mode_active, Agent, AgentBuilder, ApprovalPolicy,
+    Approver, AutoApprover, Policy, TurnCancel, TurnOutcome, TurnPolicyOverride, SUBAGENT_TURN,
+    TURN_PLAN_MODE, TURN_POLICY_OVERRIDE, TURN_SUBJECT,
 };
+pub use agents::{builtin_specs, AgentSpec, ModelResolver, ToolSelection, EXPLORE, GENERAL_PURPOSE};
 pub use error::{AgentError, AgentResult};
 pub use event::{EventKind, EventSink, SessionEvent, SessionLog, StopReason};
+pub use exit_plan::{ExitPlanTool, EXIT_PLAN_TOOL_NAME};
 pub use guard::{
     ApprovalGuard, AuthGuard, Guard, GuardCtx, GuardDecision, GuardPhase, GuardPipeline,
-    HighRiskGuard, SandboxGuard, SandboxMode, Subject,
+    HighRiskGuard, PlanModeGuard, PLAN_READ_TOOLS, SandboxGuard, SandboxMode, Subject,
 };
 pub use model::{
     MockModel, ModelContext, ModelError, ModelMessage, ModelResponse, ModelSeam, TurnObserver,

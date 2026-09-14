@@ -8,6 +8,7 @@ const SETTINGS_SECTIONS = {
   account:    { title: "账户",     desc: "登录账号、密码与退出" },
   models:     { title: "模型",     desc: "模型服务（Provider）管理：内置预设 + 自定义" },
   im:         { title: "IM 遥控",  desc: "飞书 / QQ / 微信 机器人接入，保存热重载即时生效" },
+  agents:     { title: "子智能体", desc: "子智能体类型管理：内置 + 自定义（工具白名单 / 提示词 / 专属模型），保存热生效" },
   appearance: { title: "外观",     desc: "主题外观" },
   general:    { title: "通用",     desc: "数据目录" },
   about:      { title: "关于",     desc: "版本与更新" },
@@ -53,6 +54,8 @@ async function openSettings(sec){
     if(_settingsSection==="models" && typeof mcfgOpen==="function") await mcfgOpen();
     // IM 分区打开时按需装配（原 menuSettings 的读取回显逻辑）
     if(_settingsSection==="im" && typeof scfgOpen==="function") await scfgOpen();
+    // 子智能体分区打开时按需装配（阶段一）
+    if(_settingsSection==="agents" && typeof agentsOpen==="function") await agentsOpen();
     overlay.classList.remove("hidden");
   } else if(sec){
     showSettingsSection(sec);
@@ -73,6 +76,7 @@ function settingsSection(el){
   showSettingsSection(sec);
   if(sec==="models" && typeof mcfgOpen==="function") mcfgOpen();
   if(sec==="im" && typeof scfgOpen==="function") scfgOpen();
+  if(sec==="agents" && typeof agentsOpen==="function") agentsOpen();
 }
 // 模型弹层/其它入口的分区直达（data-act="openSettingsSection" data-section="…"）
 function openSettingsSection(el){

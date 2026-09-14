@@ -48,7 +48,7 @@ return;
     assert_eq!(tools[0].spec().name, "say_hi");
 
     let roots = ctx_roots();
-    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
     let r = tools[0].invoke(json!({"who":"world"}), &ctx).await.unwrap();
     assert!(r.ok, "{r:?}");
     let stdout = r.output["stdout"].as_str().unwrap_or_default().trim();
@@ -85,7 +85,7 @@ httpd=socketserver.TCPServer(("127.0.0.1",0),H); print(httpd.server_address[1]);
 
     let (tools, _) = load_plugins(&dir);
     let roots = ctx_roots();
-    let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots };
+    let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
     let r = tools[0].invoke(json!({"city":"BJ"}), &ctx).await.unwrap();
     let _ = child.kill(); let _ = child.wait();
     assert!(r.ok, "{r:?}");
@@ -100,7 +100,7 @@ async fn plugin_install_then_list_roundtrip() {
     let tools = build_plugin_tools(&dir); // 空目录 → 仅 list + install
     let install: Arc<dyn Tool> = tools.iter().find(|t| t.spec().name == "plugin_install").unwrap().clone();
     let roots = ctx_roots();
-    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
     let r = install.invoke(json!({"manifest":{"name":"echo_p","kind":"command","command":"echo","args":["x"]}}), &ctx).await.unwrap();
     assert!(r.ok, "{r:?}");
     assert_eq!(r.output["installed"], true);
@@ -148,7 +148,7 @@ async fn wasm_plugin_invokes_module() {
     assert_eq!(tools[0].spec().name, "adder");
 
     let roots = ctx_roots();
-    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
     let r = tools[0].invoke(json!({"a":2,"b":3}), &ctx).await.unwrap();
     assert!(r.ok, "{r:?}");
     assert_eq!(r.output["kind"], "wasm");
@@ -205,7 +205,7 @@ httpd=socketserver.TCPServer(("127.0.0.1",0),H); print(httpd.server_address[1]);
     let market: Arc<dyn Tool> = all.iter().find(|t| t.spec().name == "plugin_marketplace").unwrap().clone();
     let install: Arc<dyn Tool> = all.iter().find(|t| t.spec().name == "plugin_install").unwrap().clone();
     let roots = ctx_roots();
-    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
 
     // ① 浏览市场：列出 2 个可安装插件
     let r = market.invoke(json!({ "url": url }), &ctx).await.unwrap();

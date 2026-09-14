@@ -73,7 +73,7 @@ async fn all_tools_sweep() {
     assert!(all_names.len() >= 20, "完整注册表应 ≥20 个工具");
 
     let roots = vec![ws.clone()];
-    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots };
+    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
     let mut results: Vec<(String, bool, String)> = Vec::new();
 
     // —— ① 真实样例：核心链路端到端 ——

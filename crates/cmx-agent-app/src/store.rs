@@ -28,6 +28,10 @@ pub struct SessionMeta {
     /// 创建会话时选中的工作空间；None = 不使用工作空间的普通任务。
     #[serde(default)]
     pub workspace_id: Option<String>,
+    /// 计划模式（阶段二）：true = 该会话处于只读调研档（白名单守卫 + exit_plan 退出批准）。
+    /// serde default 兼容旧 meta.json（缺字段 = false）。
+    #[serde(default)]
+    pub plan_mode: bool,
 }
 
 /// 事件窗口：只含日志的一段（大会话分页 / 尾加载用，避免一次解析、传输、渲染全量事件）。
@@ -239,6 +243,11 @@ impl SessionStore for FileSessionStore {
                 continue;
             }
             let id = entry.file_name().to_string_lossy().to_string();
+            // 子智能体会话不进列表（§10）：现网 subtask 不写 meta 本就不显示，此处前缀过滤
+            // 省掉对它们的 meta 探测（每回合 list() 全目录扫描两次），也为子会话挂总线后防误显示兜底。
+            if id.starts_with("subtask-") {
+                continue;
+            }
             if let Some(meta) = read_meta(&self.meta_path(&id)?)? {
                 out.push(meta);
             }

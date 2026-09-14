@@ -24,10 +24,12 @@ function updateAssistantNav(){
 // 互相清空/重复 append（曾表现为「右键全部关闭后侧栏空间/任务组整份重复」）——任一 await 后
 // 发现已有更新的请求接手，本次直接放弃；清空重画挪到数据拿齐且仍是最新请求之后。
 let _rtGen = 0;
+let _SESSION_META = {};   // id → meta（计划模式 chip 状态来源；refreshTasks 刷新）
 async function refreshTasks(){
   const gen = ++_rtGen;
   const resp = await call({cmd:"list_sessions"});
   if(gen !== _rtGen) return;
+  ((resp.ok && resp.data.sessions) || []).forEach(m=>{ _SESSION_META[m.id]=m; });
   // IM 会话（统一助理会话 im-assistant + 历史散会话 im-<kind>-*）走「助理」入口，不进空间/任务分组；
   // 过滤须在空态判断之前（只剩 IM 会话时按"无任务"处理）。
   const list = ((resp.ok && resp.data.sessions) || []).filter(m=>!/^im-/.test(m.id));
@@ -372,6 +374,21 @@ async function answerQuestion(btn){
   }
 }
 
+// ── 计划模式 chip（阶段二，方案 §7.1）：用户独占切换 → set_plan_mode；im-* 会话后端拒绝 ──
+async function togglePlanMode(btn){
+  const sid=CURRENT;
+  if(!sid){ showToast("请先进入一个会话"); return; }
+  if(/^im-/.test(sid)){ showToast("IM 助理会话不支持计划模式"); return; }
+  const on=!btn.classList.contains("on");
+  try{
+    const r=await call({cmd:"set_plan_mode", session_id:sid, enabled:on});
+    if(!r||r.ok===false) throw new Error((r&&r.error&&r.error.message)||"切换失败");
+    btn.classList.toggle("on",on);
+    if(_SESSION_META[sid]) _SESSION_META[sid].plan_mode=on;
+    showToast(on?"已进入计划模式（只读调研，exit_plan 批准后实施）":"已退出计划模式");
+  }catch(e){ showToast("切换计划模式失败："+(e&&e.message||e)); }
+}
+
 // ── 在途提问恢复（刷新/重开窗口主路径）：挂起中的提问不在落库事件里（回合末才落库），
 // 只能查进程内 pending 补画。历史里已有同 rid 的待答卡（在交互槽）则跳过。──
 async function restorePendingQuestions(t){
@@ -514,6 +531,13 @@ async function openSession(sessionId, autoPrompt){
     // 在途提问恢复（主路径）：挂起中的提问不在落库事件里，查进程内 pending 补渲染待答卡。
     restorePendingQuestions(t);
     restorePendingApprovals(t);
+  }
+  // 计划模式 chip（阶段二）：状态 = meta.plan_mode；im-* 会话隐藏（后端拒绝进计划模式）
+  const _chip=t.view.querySelector(".plan-chip");
+  if(_chip){
+    const meta=_SESSION_META[sessionId];
+    _chip.classList.toggle("on", !!(meta&&meta.plan_mode));
+    _chip.style.display = /^im-/.test(sessionId) ? "none" : "";
   }
   activateTab(tabId);
   // 打开会话后自动滚到最新消息（底部）：历史是在 tab 隐藏时渲染的，激活后才完成布局，
