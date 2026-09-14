@@ -13,6 +13,7 @@ use crate::error::{AgentError, AgentResult};
 use crate::event::{EventKind, StopReason};
 use crate::guard::{GuardCtx, GuardDecision, GuardPhase, GuardPipeline, SandboxMode, Subject};
 use crate::model::{ModelResponse, ModelSeam};
+use crate::question::{normalize_ask_input, QuestionOutcome, QuestionService};
 use crate::session::Session;
 use crate::tool::{Approval, Tool, ToolCall, ToolCtx, ToolRegistry, ToolResult, ToolSpec};
 use serde::{Deserialize, Serialize};
@@ -23,6 +24,10 @@ tokio::task_local! {
     /// 经 `TURN_SUBJECT.try_with(|s| s.clone()).ok().flatten()` 读取（作用域外为 None），
     /// 并显式传给子回合——子智能体不再回落桌面 `policy.subject` 过守卫。
     pub static TURN_SUBJECT: Option<Subject>;
+    /// 子智能体回合标记：task 工具跑子回合时置 true（作用域外为 false）。交互提问工具
+    /// （ask_user）据此门控——子回合不可取消（TurnCancel 旗标在子回合内不可达）、事件不
+    /// 实时外送、`cancel_session(父id)` 够不到子会话的 pending，挂起即失控，直接降级 dismissed。
+    pub static SUBAGENT_TURN: bool;
 }
 
 /// 审批策略（两旋钮之「许可」——何时问你）。对齐 codex `approval_policy`。
@@ -84,6 +89,19 @@ pub trait Approver: Send + Sync {
         reason: &str,
     ) -> (bool, String) {
         self.resolve(call, reason).await
+    }
+
+    /// 按会话等待审批并带回**用户附言**（ZCode 式「告诉模型接下来应该怎么做」）：
+    /// 拒绝时附言回灌给模型帮其自愈；三元组为 (是否批准, 审批人标识, 附言)。
+    /// 默认退化为不带附言的 [`Approver::resolve_for_session`]——旧实现零波及。
+    async fn resolve_for_session_with_note(
+        &self,
+        session_id: &str,
+        call: &ToolCall,
+        reason: &str,
+    ) -> (bool, String, Option<String>) {
+        let (ok, by) = self.resolve_for_session(session_id, call, reason).await;
+        (ok, by, None)
     }
 
     /// 中断会话时拒绝其全部待决审批，避免回合卡在审批等待。默认无待决可撤。
@@ -177,6 +195,10 @@ pub struct Agent {
     tools: ToolRegistry,
     guards: GuardPipeline,
     approver: Arc<dyn Approver>,
+    /// 交互提问服务（ask_user 的挂起-裁决端）。装配侧决定真服务（桌面双壳）或降级实例
+    /// （CLI/e2e）——内核只认 `enabled()` 门控；非交互来源（IM/无人值守/子回合）在 pre 相
+    /// 直接回灌 dismissed，不发生挂起。
+    questions: Arc<QuestionService>,
     /// 策略（两旋钮等）。RwLock：`Agent` 经 Arc 共享，两旋钮须运行时可切（前门 `set_policy`）；
     /// 回合内按快照读取（clone），写入方仅 set_policy。
     policy: std::sync::RwLock<Policy>,
@@ -211,6 +233,11 @@ impl Agent {
 
     pub fn tools(&self) -> &ToolRegistry {
         &self.tools
+    }
+
+    /// 交互提问服务句柄（app 层前门命令 answer/dismiss/list 与内核共享同一 Arc）。
+    pub fn questions(&self) -> Arc<QuestionService> {
+        self.questions.clone()
     }
 
     /// 跑一个回合：喂入用户输入，循环 Step 直至停机。全过程写 `session.log`。
@@ -419,6 +446,8 @@ impl Agent {
             call: &'c ToolCall,
             tool: Arc<dyn Tool>,
             spec: ToolSpec,
+            /// 交互提问票据（user_interactive 且过门控时 Some）：执行段 take 走。
+            question: Option<QuestionTicket>,
         }
 
         // 本批工具调用的策略快照（两旋钮运行时可切；一批内取一致值；回合级覆盖优先）。
@@ -472,14 +501,20 @@ impl Agent {
                     self.push_result(
                         session,
                         &call.id,
-                        ToolResult::err(format!("denied: {reason}")),
+                        ToolResult::err(format!("denied: {reason}；{NO_DETOUR}")),
                     );
                     continue;
                 }
                 GuardDecision::NeedApproval { reason } => {
                     // 审批闸门（可交互挂起等待用户）——串行，避免多卡片竞态。
-                    if !self.resolve_approval(session, call, &spec.name, &reason).await {
-                        self.push_result(session, &call.id, ToolResult::err("approval rejected"));
+                    let (ok, note) =
+                        self.resolve_approval(session, call, &spec.name, &reason).await;
+                    if !ok {
+                        self.push_result(
+                            session,
+                            &call.id,
+                            ToolResult::err(approval_rejected_text(note)),
+                        );
                         continue;
                     }
                 }
@@ -489,7 +524,7 @@ impl Agent {
                         && spec.guard.requires_approval == Approval::Never
                         && !spec.guard.idempotent
                     {
-                        let ok = self
+                        let (ok, note) = self
                             .resolve_approval(
                                 session,
                                 call,
@@ -501,14 +536,69 @@ impl Agent {
                             self.push_result(
                                 session,
                                 &call.id,
-                                ToolResult::err("approval rejected"),
+                                ToolResult::err(approval_rejected_text(note)),
                             );
                             continue;
                         }
                     }
                 }
             }
-            pending.push(Pending { call, tool, spec });
+            // 交互提问工具（ask_user）内核托管：门控 → 规范化 → 登记 → 落 QuestionAsked。
+            // 工具不触碰 SessionLog，事件只从内核写入（方案 20260914 §4.3 不变量）。
+            let mut question = None;
+            if spec.user_interactive {
+                // 门控矩阵：提问挂起只允许发生在"用户看得见、答得了"的桌面交互回合。
+                // - 服务降级（CLI/e2e 装配）：fail-open，直接 dismissed；
+                // - policy=Never（无人值守档，含 IM FULL_ACCESS 覆盖）：对齐"宁拒不挂"语义，
+                //   IM tick 串行内联 await 回合，挂起会冻死整条 IM 通道；
+                // - task 子回合：TurnCancel 旗标在子回合内不可达、事件不实时外送，挂起即失控。
+                let subagent = SUBAGENT_TURN.try_with(|s| *s).unwrap_or(false);
+                if !self.questions.enabled()
+                    || policy.approval == ApprovalPolicy::Never
+                    || subagent
+                {
+                    self.push_result(
+                        session,
+                        &call.id,
+                        question_dismissed_result("非交互回合，提问不可用（已自动忽略）"),
+                    );
+                    continue;
+                }
+                // 同会话串行化：已有待答提问时拒绝新问（审批闸门刻意串行的同款考量，
+                // join_all 下两个 ask_user 会并发弹双卡）。
+                if self.questions.has_pending(&session.id) {
+                    self.push_result(
+                        session,
+                        &call.id,
+                        ToolResult::err("已有待答提问，请等待用户回答当前问题后再发起新提问"),
+                    );
+                    continue;
+                }
+                match normalize_ask_input(&call.input) {
+                    Ok(questions) => {
+                        let (request_id, rx) = self.questions.register(&session.id, questions.clone());
+                        session.log.append(EventKind::QuestionAsked {
+                            request_id: request_id.clone(),
+                            questions,
+                        });
+                        question = Some(QuestionTicket { request_id, rx });
+                    }
+                    Err(e) => {
+                        self.push_result(
+                            session,
+                            &call.id,
+                            ToolResult::err(format!("ask_user 参数无效：{e}")),
+                        );
+                        continue;
+                    }
+                }
+            }
+            pending.push(Pending {
+                call,
+                tool,
+                spec,
+                question,
+            });
         }
 
         if pending.is_empty() {
@@ -523,22 +613,37 @@ impl Agent {
             // 旧实现直接读共享 policy.allowed_roots——两会话并发回合互相覆盖对方的工作空间根（lost update）。
             allowed_roots: roots.unwrap_or(&policy.allowed_roots),
         };
-        let results: Vec<ToolResult> =
-            futures_util::future::join_all(pending.iter().map(|p| {
+        // 提问票据先 take 出来（oneshot await 需独占所有权；闭包按索引取走，None = 普通工具）。
+        let mut waiters: Vec<Option<QuestionTicket>> = Vec::with_capacity(pending.len());
+        for p in pending.iter_mut() {
+            waiters.push(p.question.take());
+        }
+        let results: Vec<CallOutcome> =
+            futures_util::future::join_all(pending.iter().enumerate().map(|(i, p)| {
                 let tool = p.tool.clone();
                 let input = p.call.input.clone();
                 let tctx = &tctx;
+                // take 在闭包体内、async move 之外：oneshot 等待端需独占所有权，
+                // 而 async move 会整体捕获捕获变量（不能把 &mut waiters 带进 future）。
+                let ticket = waiters[i].take();
                 async move {
-                    match tool.invoke(input, tctx).await {
-                        Ok(r) => r,
-                        Err(e) => ToolResult::err(e.0),
+                    if let Some(ticket) = ticket {
+                        return self.resolve_question_ticket(ticket).await;
+                    }
+                    CallOutcome {
+                        result: match tool.invoke(input, tctx).await {
+                            Ok(r) => r,
+                            Err(e) => ToolResult::err(e.0),
+                        },
+                        question_verdict: None,
                     }
                 }
             }))
             .await; // join_all 保序：results[i] 对应 pending[i]
 
         // —— ⑥ 观察回灌 + post 守卫(串行, 按调用序保序落库) ——
-        for (p, result) in pending.iter().zip(results) {
+        for (p, outcome) in pending.iter().zip(results) {
+            let result = outcome.result;
             let (post_guard, post_decision) = {
                 let gctx = GuardCtx {
                     phase: GuardPhase::PostExecute,
@@ -557,35 +662,94 @@ impl Agent {
                     guard: post_guard,
                     decision: GuardDecision::deny(reason.clone()),
                 });
-                ToolResult::err(format!("post-guard denied: {reason}"))
+                ToolResult::err(format!("post-guard denied: {reason}；{NO_DETOUR}"))
             } else {
                 result
             };
             self.push_result(session, &p.call.id, final_result);
+            // 提问解决事件（UI 把答题卡替换为结果态；审计/重放锚点；答案随事件落库供 UI 还原 Q/A）。
+            if let Some(v) = outcome.question_verdict {
+                session.log.append(EventKind::QuestionResolved {
+                    request_id: v.request_id,
+                    answered: v.answered,
+                    by: v.by.to_string(),
+                    answers: v.answers,
+                });
+            }
         }
     }
 
-    /// 触发并记录一次人在环审批，返回是否批准。
+    /// 等待一个提问的结局并组装 tool result（内核托管挂起点）。
+    ///
+    /// 兜底超时（服务装配决定，默认 30min）：挂起回合在 Tauri 壳钉死 blocking 线程、同会话
+    /// 后续请求在 session_lock 排队，无限挂起可饿死线程池。超时/清理唤醒都按 dismissed 回灌
+    /// （`dismissed:true` 让模型自行降级继续，不中止回合——对齐审批拒绝后回合继续的现状）。
+    async fn resolve_question_ticket(&self, ticket: QuestionTicket) -> CallOutcome {
+        let request_id = ticket.request_id.clone();
+        let wait = ticket.rx;
+        let outcome = match self.questions.timeout() {
+            Some(d) => match tokio::time::timeout(d, wait).await {
+                Ok(Ok(o)) => o,
+                // 发送端被丢弃（清理路径/幽灵摘除）→ 按取消忽略。
+                Ok(Err(_)) => QuestionOutcome::Dismissed("canceled"),
+                Err(_elapsed) => {
+                    self.questions.expire(&request_id);
+                    QuestionOutcome::Dismissed("timeout")
+                }
+            },
+            None => wait.await.unwrap_or(QuestionOutcome::Dismissed("canceled")),
+        };
+        let (result, verdict) = match outcome {
+            QuestionOutcome::Answered(map) => {
+                let answers = map.clone(); // 事件要带一份给 UI 还原 Q/A；json! 按值消费原 map
+                (
+                    ToolResult::ok(serde_json::json!({ "answers": map })),
+                    QuestionVerdict { request_id, answered: true, by: "user", answers },
+                )
+            }
+            QuestionOutcome::Dismissed(by) => (
+                ToolResult::ok(serde_json::json!({
+                    "answers": {},
+                    "dismissed": true,
+                    "note": format!("用户未回答（{by}），请自行选择合理默认继续，不要反复追问")
+                })),
+                QuestionVerdict {
+                    request_id,
+                    answered: false,
+                    by,
+                    answers: serde_json::Map::new(),
+                },
+            ),
+        };
+        CallOutcome {
+            result,
+            question_verdict: Some(verdict),
+        }
+    }
+
+    /// 触发并记录一次人在环审批，返回 (是否批准, 用户附言——拒绝时给模型的自愈提示)。
     async fn resolve_approval(
         &self,
         session: &mut Session,
         call: &ToolCall,
         tool: &str,
         reason: &str,
-    ) -> bool {
+    ) -> (bool, Option<String>) {
+        let summary = call_summary(call);
         if self.effective_policy().approval == ApprovalPolicy::Never {
             // 不打断策略：视 NeedApproval 为拒绝
             session.log.append(EventKind::ApprovalRequested {
                 call_id: call.id.clone(),
                 tool: tool.to_string(),
                 reason: reason.to_string(),
+                summary,
             });
             session.log.append(EventKind::ApprovalResolved {
                 call_id: call.id.clone(),
                 approved: false,
                 by: "policy:never".into(),
             });
-            return false;
+            return (false, None);
         }
         // 本对话已授予「全部允许」→ 自动放行（留审计事件，不再弹审批卡）。
         if self.approver.is_preapproved(&session.id) {
@@ -594,23 +758,24 @@ impl Agent {
                 approved: true,
                 by: "auto:approve-all".into(),
             });
-            return true;
+            return (true, None);
         }
         session.log.append(EventKind::ApprovalRequested {
             call_id: call.id.clone(),
             tool: tool.to_string(),
             reason: reason.to_string(),
+            summary,
         });
-        let (approved, by) = self
+        let (approved, by, note) = self
             .approver
-            .resolve_for_session(&session.id, call, reason)
+            .resolve_for_session_with_note(&session.id, call, reason)
             .await;
         session.log.append(EventKind::ApprovalResolved {
             call_id: call.id.clone(),
             approved,
             by,
         });
-        approved
+        (approved, note.filter(|_| !approved))
     }
 
     fn push_result(&self, session: &mut Session, call_id: &str, result: ToolResult) {
@@ -622,6 +787,79 @@ impl Agent {
     }
 }
 
+/// 一次提问挂起的票据：执行段据 rx 等待结局，回灌段据 request_id/by 落解决事件。
+struct QuestionTicket {
+    request_id: String,
+    rx: tokio::sync::oneshot::Receiver<QuestionOutcome>,
+}
+
+/// 工具调用参数的单行摘要（审批卡 `$ …` 展示 + 待决恢复用）：
+/// 单字符串字段直接取值（如 shell 的 cmd / write 的 path），其余取紧凑 JSON，超长截断。
+pub fn call_summary(call: &ToolCall) -> String {
+    const MAX: usize = 240;
+    let text = match call.input.as_object() {
+        Some(map) if map.len() == 1 => match map.values().next() {
+            Some(serde_json::Value::String(s)) => s.clone(),
+            Some(v) => v.to_string(),
+            None => String::new(),
+        },
+        _ => call.input.to_string(),
+    };
+    let mut out: String = text.chars().take(MAX).collect();
+    if text.chars().count() > MAX {
+        out.push('…');
+    }
+    out
+}
+
+/// 守卫拦截回灌的统一「勿绕道」尾巴（与 approval_rejected_text 同语义）：拦截针对的是这件事本身，
+/// 不是只拦这一把工具——不讲清模型就会换工具变通绕过闸门。
+const NO_DETOUR: &str =
+    "请勿换用其它工具或变通手段达成同一目的，也不要原样重试；请简要说明情况后停下，等待用户的进一步指示。";
+
+/// 拒绝回灌文本：把「拒绝」的语义讲全——用户拒的是**这件事本身**，不是只拒这一把工具调用。
+/// 不讲清模型就会绕道换工具变相执行（实测：shell 被拒后改用内置 echo 免审批完成同一操作）。
+/// 用户附言（ZCode 式「告诉模型接下来该怎么做」）优先：附言即用户的明确去向，按附言办。
+fn approval_rejected_text(note: Option<String>) -> String {
+    match note {
+        Some(n) if !n.trim().is_empty() => format!(
+            "denied: 用户拒绝了这次操作，附言指示：「{}」。附言优先：按附言执行；\
+             若附言未另行安排，请勿换用其它工具或变通手段达成被拒的原目的，也不要原样重试。",
+            n.trim()
+        ),
+        _ => String::from(
+            "denied: 用户拒绝了这次操作。拒绝针对的是这件事本身，不是只针对当前工具：\
+             请勿换用其它工具或变通手段达成同一目的，也不要原样重试；\
+             请简要说明情况，然后停下等待用户的进一步指示。",
+        ),
+    }
+}
+
+/// 执行段的每个调用产出：工具结果 + 提问裁决（供回灌段落 QuestionResolved）。
+struct CallOutcome {
+    result: ToolResult,
+    question_verdict: Option<QuestionVerdict>,
+}
+
+/// 提问裁决：answered + 放弃方（Answered 时 by="user"）+ 答案（随 QuestionResolved 落库，
+/// UI 轨迹行展开还原 Q/A；未答为空表）。
+struct QuestionVerdict {
+    request_id: String,
+    answered: bool,
+    by: &'static str,
+    answers: serde_json::Map<String, serde_json::Value>,
+}
+
+/// 门控降级（非交互回合/降级服务）时的提问结果：`dismissed:true` 让模型自行降级继续，
+/// 不中止回合——无人值守拿空答案好过永久挂死。
+fn question_dismissed_result(note: impl Into<String>) -> ToolResult {
+    ToolResult::ok(serde_json::json!({
+        "answers": {},
+        "dismissed": true,
+        "note": note.into()
+    }))
+}
+
 /// 内核装配器。
 #[derive(Default)]
 pub struct AgentBuilder {
@@ -629,6 +867,7 @@ pub struct AgentBuilder {
     tools: ToolRegistry,
     guards: GuardPipeline,
     approver: Option<Arc<dyn Approver>>,
+    questions: Option<Arc<QuestionService>>,
     policy: Policy,
 }
 
@@ -653,12 +892,19 @@ impl AgentBuilder {
         self
     }
 
+    /// 交互提问服务（桌面双壳传真服务；不传 = 降级实例，ask_user 直接 dismissed）。
+    pub fn questions(mut self, q: Arc<QuestionService>) -> Self {
+        self.questions = Some(q);
+        self
+    }
+
     pub fn policy(mut self, p: Policy) -> Self {
         self.policy = p;
         self
     }
 
-    /// 装配。缺模型缝 → `NotConfigured`。审批者缺省为"自动拒绝"（最安全默认）。
+    /// 装配。缺模型缝 → `NotConfigured`。审批者缺省为"自动拒绝"（最安全默认）；
+    /// 提问服务缺省为降级实例（不挂起，fail-open）。
     pub fn build(self) -> AgentResult<Agent> {
         let model = self
             .model
@@ -670,6 +916,9 @@ impl AgentBuilder {
             approver: self
                 .approver
                 .unwrap_or_else(|| Arc::new(AutoApprover::reject())),
+            questions: self
+                .questions
+                .unwrap_or_else(|| Arc::new(QuestionService::disabled())),
             policy: std::sync::RwLock::new(self.policy),
         })
     }

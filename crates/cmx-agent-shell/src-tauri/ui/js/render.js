@@ -55,7 +55,41 @@ function toolArgChips(input){
 
 // ── 工具卡（opencode BasicTool）：一行 trigger（状态点 + 工具名 + 副标题 + 参数 chips），
 // 点击展开详情，运行中禁止展开；无 chevron、无操作按钮（ZCode 式：执行细节行保持素净）──
+// fs_write（写入）例外（ZCode diff 卡）：trigger 展示 文件名 + 目录 + +N 行，内容体带行号
+// 建卡即渲染并默认展开——写入的正文就是这条卡片的记录，无需等结果，点 trigger 可收起。
+function writeContentHtml(c){
+  const lines=(c||"").split("\n");
+  if(lines.length>1 && lines[lines.length-1]==="") lines.pop();   // 尾随换行不算一行
+  return `<div class="tdiff">${lines.map((l,i)=>
+    `<span class="dl add"><i class="ln">${i+1}</i>${esc(l)||" "}</span>`).join("")}</div>`;
+}
 function toolCardHtml(call){
+  const c=call&&call.input&&call.input.content;
+  if(call&&call.name==="ask_user"){
+    // ZCode 式问句行：行本身即折叠组（无工具名/参数 chips）。运行中「正在询问」不可展开，
+    // 答完由 tool_result 原地落「已询问 N 个问题」+ Q/A 体（settleAskCard）。
+    return `<button class="tc-trig" type="button">`
+      +`<span class="tc-st run" title="运行中"><span class="tc-spin"></span></span>`
+      +`<span class="tc-g iq-g">?</span>`
+      +`<span class="tc-name">正在询问</span>`
+      +`<span class="tc-chev">▾</span></button>`
+      +`<div class="tc-body" hidden></div>`;
+  }
+  if(call&&call.name==="fs_write" && typeof c==="string"){
+    const p=String(call.input.path||"").replace(/\\/g,"/");
+    const i=p.lastIndexOf("/");
+    const file=i>=0?p.slice(i+1):p, dir=i>=0?p.slice(0,i+1):"";
+    const n=c?(c.endsWith("\n")?c.slice(0,-1):c).split("\n").length:0;
+    return `<button class="tc-trig" type="button">`
+      +`<span class="tc-st run" title="运行中"><span class="tc-spin"></span></span>`
+      +`<span class="tc-g">${esc(toolGlyph("fs_write"))}</span>`
+      +`<span class="tc-name" title="fs_write">写入</span>`
+      +(file?`<span class="tc-file">${esc(file)}</span>`:"")
+      +(dir?`<span class="tc-dir">${esc(dir)}</span>`:"")
+      +`<span class="tc-plus" title="写入 ${n} 行">+${n}</span>`
+      +`<span class="tc-chev">▾</span></button>`
+      +`<div class="tc-body" hidden>${writeContentHtml(c)}</div>`;
+  }
   const sub=toolSubtitle(call.input);
   const args=toolArgChips(call.input);
   return `<button class="tc-trig" type="button">`
@@ -95,10 +129,16 @@ function ensureToolCard(log, call){
   card=el("tool tcard run");
   if(id) card.dataset.callid=id;
   card.dataset.tool=(call&&call.name)||"";
+  if(card.dataset.tool==="ask_user") card.classList.add("iq");
+  card._input=call&&call.input;
   card.innerHTML=toolCardHtml(call||{});
   bindToolCard(card);
   if(id){ log._tools=log._tools||new Map(); log._tools.set(id,card); }
   ensureTurn(log).append(card);
+  // fs_write 内容体建卡即展开（ZCode 式：写入内容直接可见；点 trigger 可收起）
+  if(card.dataset.tool==="fs_write" && card._input && typeof card._input.content==="string"){
+    const b=card.querySelector(".tc-body"); if(b){ b.hidden=false; card.classList.add("open"); }
+  }
   return card;
 }
 // tool_result：按 call_id 配对回填；上下文工具折叠入组；找不到卡（分页边界）走旧式独立结果卡
@@ -115,9 +155,43 @@ function completeToolCard(log, ev){
   card.classList.remove("run");
   card.classList.add(ev.ok?"done":"fail");
   setToolStatus(card, ev.ok?"ok":"bad", ev.ok?"完成":"失败 / 被拦截");
-  card.querySelector(".tc-body").innerHTML=toolBodyHtml(ev);
+  // fs_write 成功时内容体已在建卡时渲染（正文即记录），不回退成结果 JSON；失败照常展示被拦截原因
+  const isWrite = card.dataset.tool==="fs_write" && card._input && typeof card._input.content==="string";
+  // ask_user 成功：问句行原地落「已询问 N 个问题」+ Q/A 体（trigger 一并重写，状态点让位给 ? 图标）
+  if(card.dataset.tool==="ask_user" && ev.ok){ settleAskCard(card, ev.output); }
+  else if(!(isWrite && ev.ok)) card.querySelector(".tc-body").innerHTML=toolBodyHtml(ev);
   if(CONTEXT_GROUP_TOOLS.has(card.dataset.tool)){ foldIntoCtxGroup(log, card, !!ev.ok); return; }   // 失败也入组：满屏红叉比静默失败更吵（opencode 降噪）
   closeCtxGroup(log);                      // 非只读结果落卡后，引用组定格（后续只读工具另起一组）
+}
+// 问句行落定（ZCode r8e 对齐）：trigger 重写为「? 已询问 + N 个问题」，体为逐问 Q/A（问句墨色、答案弱化）。
+// 答案取 tool_result output（{answers:{qid:[...]}}）；忽略/超时（dismissed）落「未回答，已自动继续」，
+// 单问无答落「未提供回答」。不显示 ✓/✕、不显示工具名——问句行不是普通工具，? 图标即状态。
+function settleAskCard(card, output){
+  const o=(output&&typeof output==="object")?output:{};
+  const ans=(o.answers&&typeof o.answers==="object")?o.answers:{};
+  const qs=(card._input&&card._input.questions)||[];
+  const trig=card.querySelector(".tc-trig"); if(!trig) return;
+  const sub=Object.keys(ans).length===0
+    ?(o.dismissed?"未回答，已自动继续":"未提供回答")
+    :(qs.length?`${qs.length} 个问题`:"");
+  trig.innerHTML=`<span class="tc-g iq-g">?</span>`
+    +`<span class="tc-name">已询问</span>`
+    +(sub?`<span class="tc-sub">${esc(sub)}</span>`:"")
+    +`<span class="tc-chev">▾</span>`;
+  const body=card.querySelector(".tc-body");
+  if(body){
+    // answers 的 key（q1/q2/…）由内核 ask 阶段分配，tool_invoked 的 questions 不带 id——
+    // id 精确匹配优先，缺 id 时按自然序位置对齐。
+    const ids=Object.keys(ans).sort(new Intl.Collator(undefined,{numeric:true}).compare);
+    const pick=(q,i)=>(q.id!=null&&ans[q.id]!=null)?ans[q.id]:(ids.length===qs.length?ans[ids[i]]:undefined);
+    const rows=qs.map((q,i)=>{
+      const items=(Array.isArray(pick(q,i))?pick(q,i):[pick(q,i)]).filter(v=>v!=null&&v!=="")
+        .map(v=>String(v).replace(/^user_note:\s*/,""));   // 自由输入的存储前缀不上屏
+      const atext=items.length?items.join("、"):"未提供回答";
+      return `<div class="iqrow"><div class="iqq">${esc(q.question||"")}</div><div class="iqa">${esc(atext)}</div></div>`;
+    }).join("");
+    body.innerHTML=`<div class="iqwrap">${rows||`<div class="iqa">${esc(sub||"未提供回答")}</div>`}</div>`;
+  }
 }
 // 上下文组：连续只读工具折成一行「已引用 N 处」，点击展开逐条；条目点击再看完整结果
 function foldIntoCtxGroup(log, card, ok){
@@ -158,15 +232,28 @@ function foldIntoCtxGroup(log, card, ok){
   g.wrap.querySelector(".cg-list").append(item);
 }
 function closeCtxGroup(log){ log._ctx=null; }
-// 历史回放收敛：仍处 pending 的工具卡（中断/分页截断无回执）标记为「无回执」而非永久转圈
+// 历史回放收敛：仍处 pending 的工具卡（中断/分页截断无回执）标记为「无回执」而非永久转圈；
+// 提问/审批轨迹行同理收敛（成对回执的行已在渲染时落终态，剩下的都是被截断的孤立行）
 function settlePendingCards(root){
   root.querySelectorAll(".tool.tcard.run").forEach(card=>{
     card.classList.remove("run");
     card.classList.add("done");
+    if(card.dataset.tool==="ask_user"){   // 孤立问句行：落「已询问+无回执」形，不打✓不转圈
+      const trig=card.querySelector(".tc-trig");
+      if(trig) trig.innerHTML=`<span class="tc-g iq-g">?</span><span class="tc-name">已询问</span>`
+        +`<span class="tc-sub">提问无回执（回合被中断或超出历史分页）</span><span class="tc-chev">▾</span>`;
+      const body=card.querySelector(".tc-body");
+      if(body && !body.childNodes.length) body.innerHTML=`<div class="tcempty">（无回执：回合被中断或超出历史分页）</div>`;
+      return;
+    }
     setToolStatus(card,"ok","无回执（已中断或历史截断）");
     const body=card.querySelector(".tc-body");
     if(body && !body.querySelector(".tterm,.tcode,.tdiff,.tdata,.tcsub,.wsr,.tchartimg"))
       body.innerHTML=`<div class="tcempty">（无回执：回合被中断或超出历史分页）</div>`;
+  });
+  root.querySelectorAll(".iline.ap-wait").forEach(l=>{
+    l.classList.remove("ap-wait"); l.classList.add("no");
+    l.textContent="⏸ 审批无回执（回合被中断或超出历史分页）";
   });
 }
 
@@ -300,12 +387,8 @@ function renderToolResult(ev){
   if(!ev.ok) return `<span class="chip">⛔ 被拦截 <code>${esc(compact(o))}</code></span>`;
   return toolBodyHtml(ev);
 }
-// 操作按钮（复制/赞/踩/分享）只挂每回合**最终回复**：新定稿出现时撤掉本回合旧气泡的操作行，
-// 之前回合的操作行不动（ZCode：每回合末尾一组）。
-function markFinalBubble(log, bub){
-  if(log._turn) log._turn.querySelectorAll(".bubble > .tcacts").forEach(a=>a.remove());
-  addBubbleActions(bub);
-}
+// 操作按钮（复制/赞/踩/分享）的挂载时机在 turn_ended（本回合最后一条回复、回合结束才出），
+// 详见 renderEvent 的 turn_ended 分支；addBubbleActions 定义在 main.js。
 function compact(v){ try{ const s=JSON.stringify(v); return s.length>240?s.slice(0,240)+"…":s; }catch(e){ return String(v); } }
 
 // ── 思考行（opencode Thinking row）：busy 且暂无可见输出时显示 shimmer 行 ──
@@ -316,6 +399,188 @@ function showTyping(log){
   log._typing=t; log.scrollTop=1e9;
 }
 function hideTyping(log){ if(log._typing){ log._typing.remove(); log._typing=null; } }
+
+// ── 交互槽（ZCode 式）：提问/审批卡不进会话时间线——渲染到输入区上方的 .interact 停靠区，答完即撤；
+// 时间线只留轻量轨迹行（.iline）。历史回放（frag/tmp 容器）取不到槽 → 只画轨迹行，
+// 真挂起的卡由 restorePendingQuestions / restorePendingApprovals 查进程内 pending 补画。──
+function interactZone(log){
+  const v=log.closest(".session-view");
+  return v?v.querySelector(".interact"):null;
+}
+function logOfCard(card){ const v=card.closest(".session-view"); return v?v.querySelector(".log"):null; }
+
+// 轨迹行落终态：先按 id 找已有行（含已被 SSE 回执落成终态的——防 POST/回执竞态重复补行），
+// 找不到（如刷新后从交互槽直接提交、会话里没有行）就在时间线末尾补一行。
+function markInteractLine(log, attr, id, text, good){
+  if(!log) return;
+  let line=null;
+  log.querySelectorAll(".iline").forEach(l=>{ if(l.dataset[attr]===id) line=l; });
+  if(!line){ line=el("iline"); line.dataset[attr]=id; ensureTurn(log).append(line); }
+  line.classList.remove("q-wait","ap-wait","ok","no");
+  line.classList.add(good?"ok":"no");
+  line.textContent=text;
+}
+// 撤交互槽里的对应卡片（答完即撤——卡片是「当前待办」，不是会话记录）。
+function removeInteractCard(cardSel, attr, id){
+  document.querySelectorAll(".interact .tool"+cardSel).forEach(c=>{ if(c.dataset[attr]===id) c.remove(); });
+}
+// 撤时间线上的轻量轨迹行（审批放行用：随后的工具卡就是这次操作的完整记录，不留「已允许」行）。
+function removeInteractLine(log, attr, id){
+  if(!log) return;
+  log.querySelectorAll(".iline").forEach(l=>{ if(l.dataset[attr]===id) l.remove(); });
+}
+
+// ── 卡片键盘导航（贴 ZCode：「使用 Tab / 上下键选择，回车或空格选中」）──
+// Tab/↑/↓ 在可见选项间移动高亮（.qsel）；空格/回车按卡型回调执行。
+// 焦点在输入框内时只接管回车，其余键留给打字。点击选项后焦点回卡片，方向键立即可用。
+function bindInteractKeys(card, onEnter, onSpace){
+  const visibleRows=()=>[...card.querySelectorAll(".qopt,.apopt")]
+    .filter(r=>{ const pg=r.closest(".qq"); return !pg||pg.style.display!=="none"; });
+  const hi=()=>card.querySelector(".qsel");
+  const setHi=row=>{ card.querySelectorAll(".qsel").forEach(x=>x.classList.remove("qsel")); if(row) row.classList.add("qsel"); };
+  card.addEventListener("mousemove",e=>{
+    const r=e.target.closest(".qopt,.apopt");
+    if(r&&!r.classList.contains("apcustom")) setHi(r);
+  });
+  card.addEventListener("click",e=>{
+    if(e.target.closest(".qnote")) return;                 // 输入行：焦点留给打字
+    const r=e.target.closest(".qopt,.apopt");
+    if(r&&!r.classList.contains("apcustom")) setHi(r);
+    if(!e.target.closest("button")) card.focus();
+  });
+  card.addEventListener("focus",()=>{
+    if(!hi()){ const rs=visibleRows(); setHi(rs[0]); }
+  });
+  card.addEventListener("keydown",e=>{
+    if(e.target.matches("input,textarea,select")){
+      if(e.key==="Enter"){ e.preventDefault(); onEnter&&onEnter(e.target); }
+      return;
+    }
+    const rs=visibleRows(); if(!rs.length) return;
+    let i=rs.indexOf(hi()); if(i<0) i=0;
+    if(e.key==="ArrowDown"||(e.key==="Tab"&&!e.shiftKey)){ e.preventDefault(); setHi(rs[Math.min(rs.length-1,i+1)]); }
+    else if(e.key==="ArrowUp"||(e.key==="Tab"&&e.shiftKey)){ e.preventDefault(); setHi(rs[Math.max(0,i-1)]); }
+    else if(e.key===" "||e.key==="Spacebar"){ e.preventDefault(); onSpace&&onSpace(hi()); }
+    else if(e.key==="Enter"){ e.preventDefault(); onEnter&&onEnter(); }
+    else if(e.key==="Home"){ e.preventDefault(); setHi(rs[0]); }
+    else if(e.key==="End"){ e.preventDefault(); setHi(rs[rs.length-1]); }
+  });
+}
+function qcardPick(card,row){
+  if(!row) return;
+  const inp=row.querySelector("input[type=checkbox],input[type=radio]");
+  if(inp) inp.checked=true;
+}
+
+// ── 提问卡单页（ZCode 式编号选项行；页头标签/问题文本在卡片头上，切页联动）──
+// 所有模型可控文本（header/question/label/description）一律 esc()——可被 web 抓取的页面内容间接注入。
+function renderQuestionPage(card, q, qi){
+  const multiple=!!q.multiple, name="q_"+ (card.dataset.rid||"") +"_"+qi;
+  let no=0;
+  let opts=(q.options||[]).map(o=>{ no++;
+    return `<label class="qopt"><span class="qno">${no}</span>`
+      +`<input type="${multiple?"checkbox":"radio"}" name="${esc(name)}" value="${esc(String(o.label||""))}">`
+      +`<span class="qlabel">${esc(o.label||"")}</span>`
+      +(o.description?`<span class="qdesc">${esc(o.description)}</span>`:"")+`</label>`;
+  }).join("");
+  opts+=`<label class="qopt qcustom"><span class="qno">${no+1}</span>`
+    +`<input type="${multiple?"checkbox":"radio"}" name="${esc(name)}" value="__custom__">`
+    +`<input type="text" class="qnote" placeholder="输入你的回答…" data-custom="1"></label>`;
+  return `<div class="qq" data-qi="${qi}"><div class="qopts">${opts}</div></div>`;
+}
+
+// ── 提问卡（ZCode 式）：挂交互槽；答完由 question_resolved 撤卡 ──
+// 多问分步提交：非末页主按钮=「继续」（只翻页，答案留在各页表单里），末页才出「提交」整卡提交——
+// 防止答完第 1 问顺手点提交，把后面的问题整组交了白卷。页头标签/问题文本随页联动。
+function qGoPage(t,page){
+  const n=(t._questions||[]).length; if(n<1) return;
+  t._page=Math.min(n-1,Math.max(0,page));
+  t.querySelectorAll(".qq").forEach((qq,i)=>{ qq.style.display=i===t._page?"":"none"; });
+  const q=t._questions[t._page]||{};
+  const gn=t.querySelector(".qpgn"); if(gn) gn.textContent=(t._page+1)+"/"+n;
+  const ht=t.querySelector(".qhtext"); if(ht) ht.textContent=q.question||"";
+  const hg=t.querySelector(".qhtag"); if(hg) hg.textContent=q.header||"提问";
+  const last=t._page>=n-1;
+  const sub=t.querySelector(".qsubmit"), nxt=t.querySelector(".qnext");
+  if(sub) sub.hidden=!last;
+  if(nxt) nxt.hidden=last;
+}
+function renderQuestionCard(zone, ev, sid){
+  const t=el("tool qcard"); t.dataset.rid=ev.request_id||""; t.dataset.sid=sid||"";
+  t._questions=ev.questions||[]; t._page=0; t.tabIndex=-1;
+  const n=t._questions.length, rid=ev.request_id||"";
+  t.innerHTML=`<div class="qchead"><span class="qhtag"></span><b class="qhtext"></b>`
+    +(n>1?`<span class="qpager"><button class="qpg" data-pg="-1" type="button">‹</button><span class="qpgn">1/${n}</span><button class="qpg" data-pg="1" type="button">›</button></span>`:"")
+    +`</div>`
+    + t._questions.map((q,qi)=>renderQuestionPage(t,q,qi)).join("")
+    +`<div class="qcfoot"><span class="qchint">ⓘ 使用 Tab / 上下键选择，回车或空格选中</span>`
+    +`<button class="apbtn reject" data-act="answerQuestion" data-rid="${esc(rid)}" data-dismiss="1">忽略</button>`
+    +(n>1?`<button class="apbtn allow qnext" type="button">继续</button>`:"")
+    +`<button class="apbtn allow qsubmit" data-act="answerQuestion" data-rid="${esc(rid)}" data-dismiss="0">提交</button></div>`;
+  // 分页：‹ › 与「继续」都走 qGoPage（页头标签/问题文本/主按钮联动）；qnext 不带 data-act，翻页不发命令。
+  t.querySelectorAll(".qpg").forEach(btn=>btn.addEventListener("click",()=>qGoPage(t,t._page+(+btn.dataset.pg||0))));
+  const nx=t.querySelector(".qnext"); if(nx) nx.addEventListener("click",()=>qGoPage(t,t._page+1));
+  qGoPage(t,0);
+  // 自由输入聚焦即选中同组「自定义」项（输了文字忘勾选的兜底）；输入框内空格留给打字。
+  t.querySelectorAll(".qnote").forEach(inp=>{
+    inp.addEventListener("focus",()=>{ const box=inp.closest(".qopt"); const c=box&&box.querySelector("input[type=checkbox],input[type=radio]"); if(c) c.checked=true; });
+    inp.addEventListener("keydown",e=>{ if(e.key===" "||e.key==="Spacebar") e.stopPropagation(); });
+  });
+  bindInteractKeys(t,
+    ()=>{ const hi=t.querySelector(".qsel");
+      if(hi&&hi.querySelector(".qnote")){ hi.querySelector(".qnote").focus(); return; }
+      qcardPick(t,hi); },
+    row=>qcardPick(t,row));
+  zone.append(t);
+  // 活跃 tab 且用户没在打字时才接焦点（多 tab 下不打断别处输入）
+  const tv=zone.closest(".tabview"), act=document.activeElement;
+  if(tv&&tv.classList.contains("active")&&!(act&&act.matches&&act.matches("textarea,input"))) t.focus();
+  return t;
+}
+
+// ── 审批卡（ZCode 式）：编号选项（允许 / 本对话全部允许 / 拒绝 / 告诉模型怎么做）+ 确认；
+// 决定经 approveTool 发回（附言=拒绝时给模型的自愈提示），回执 approval_resolved 撤卡。──
+function renderApprovalCard(zone, ev, sid){
+  const t=el("tool approval"); t.dataset.callid=ev.call_id||""; t.dataset.sid=sid||"";
+  t.tabIndex=-1;
+  t.innerHTML=`<div class="qchead"><b class="qhtext">需要权限</b><span class="qhtag">${esc(ev.tool||"")}</span></div>`
+    +`<div class="apwaitline">等待确认…</div>`
+    +(ev.reason?`<div class="apreason">${esc(ev.reason||"")}</div>`:"")
+    +(ev.summary?`<div class="apcmd"><span class="apcmd-p">$</span>${esc(ev.summary)}</div>`:"")
+    +`<div class="qopts">`
+    +`<button type="button" class="apopt"><span class="qno">1</span><span class="qlabel">允许</span><span class="qdesc">仅允许这一次</span></button>`
+    +`<button type="button" class="apopt"><span class="qno">2</span><span class="qlabel">本对话全部允许</span><span class="qdesc">后续需审批的操作不再逐次询问</span></button>`
+    +`<button type="button" class="apopt"><span class="qno">3</span><span class="qlabel">拒绝</span><span class="qdesc">这次先拒绝</span></button>`
+    +`<div class="apopt apcustom"><span class="qno">4</span><input type="text" class="qnote" placeholder="告诉模型接下来应该怎么做…"></div>`
+    +`</div>`
+    +`<div class="qcfoot"><span class="qchint">ⓘ 使用 Tab / 上下键选择，回车确认</span>`
+    +`<button type="button" class="apbtn allow apconfirm">确认</button></div>`;
+  t.querySelector(".apconfirm").addEventListener("click",()=>approvalConfirm(t));
+  // 透传 fromInput：输入框内回车 = 附言意图（拒绝+附言），不能丢 target
+  bindInteractKeys(t, (from)=>approvalConfirm(t,from), null);
+  zone.append(t);
+  const tv=zone.closest(".tabview"), act=document.activeElement;
+  if(tv&&tv.classList.contains("active")&&!(act&&act.matches&&act.matches("textarea,input"))) t.focus();
+  return t;
+}
+// 执行当前选中项：4=自由输入行——有字=拒绝+附言（回灌给模型），没字=聚焦输入框。
+function approvalConfirm(card, fromInput){
+  // 焦点在「告诉模型」输入框里回车 = 明确的附言意图：有字 = 拒绝+附言，没字不动（防误拒）。
+  if(fromInput&&fromInput.classList&&fromInput.classList.contains("qnote")){
+    const v=(fromInput.value||"").trim();
+    if(v) approveTool(card.dataset.callid,false,false,v);
+    return;
+  }
+  const rows=[...card.querySelectorAll(".apopt")];
+  const i=Math.max(0,rows.indexOf(card.querySelector(".qsel")));
+  if(rows[i]&&rows[i].classList.contains("apcustom")){
+    const inp=rows[i].querySelector(".qnote");
+    if(inp&&inp.value.trim()) approveTool(card.dataset.callid,false,false,inp.value.trim());
+    else if(inp) inp.focus();
+    return;
+  }
+  approveTool(card.dataset.callid, i!==2, i===1, "");
+}
 
 // ── 思考过程卡：流式展开，收尾自动折叠，头部显示「思考 · 持续 N 秒」（贴参考界面）──
 // 多步回合可有多段思考（ZCode 式）：每段各一张卡、按发生顺序 append 到回合末尾；
@@ -363,8 +628,9 @@ function closeReasoning(log){
 }
 
 // ── 回合计时行「已工作 X」（贴参考图）：回合出现第一个内容事件时即插入（用户气泡下方），
-// 进行中每秒实时跳动；turn_ended 定格时长并变成折叠开关（收起思考/工具执行细节）。
-// 历史回放（log._history）不起定时器，直接在 turn_ended 一次性落定。 ──
+// 进行中每秒实时跳动；turn_ended 定格时长并**默认收起**（ZCode 式：折叠思考/工具执行细节，
+// 只留计时行+最终回复），点击计时行可展开/收起。历史回放（log._history）不起定时器，
+// 直接在 turn_ended 一次性落定并同样默认收起。 ──
 function insertWorkDur(turn,row){
   const first=turn.firstElementChild;
   if(first&&first.classList.contains("user-chip")) first.after(row);   // 参考图：计时行在用户气泡下方
@@ -383,7 +649,9 @@ function ensureWorkDur(log){
   log._durTick=setInterval(()=>{                        // 实时跳动（codex StatusTimer 的渲染时现算版）
     if(!log._turnStartTs||!log._durRow) return;
     const t=log._durRow.querySelector(".wd-t");
-    if(t) t.textContent="已工作 "+fmtDur(Math.max(0,Date.now()-log._turnStartTs));
+    if(!t) return;
+    // 提问挂起期文案切「等待回答」（时长照算；question_resolved/turn_ended 复位）
+    t.textContent=(log._qwait?"等待回答 ":"已工作 ")+fmtDur(Math.max(0,Date.now()-log._turnStartTs));
   },1000);
 }
 function stopWorkDurTick(log){
@@ -395,6 +663,8 @@ function finalizeWorkDur(log){
   if(log._durRow){                                      // 实时行 → 定格时长，保留为折叠开关
     const t=log._durRow.querySelector(".wd-t");
     if(t&&log._turnStartTs) t.textContent="已工作 "+fmtDur(Math.max(0,end-log._turnStartTs));
+    const turn=log._durRow.closest(".turn");
+    if(turn) turn.classList.add("folded");              // 回合结束默认收起过程：只留「已工作 N」+ 最终回复
     log._durRow=null;
     return;
   }
@@ -404,6 +674,7 @@ function finalizeWorkDur(log){
   row.innerHTML=`<span class="wd-t">已工作 ${esc(fmtDur(Math.max(0,end-log._turnStartTs)))}</span><span class="chev">▾</span>`;
   row.addEventListener("click",()=>turn.classList.toggle("folded"));
   insertWorkDur(turn,row);
+  turn.classList.add("folded");                         // 回放里的历史回合同样默认收起
 }
 
 // ── 会话事件渲染主入口（历史回放与实时流共用）──
@@ -478,35 +749,46 @@ function renderEvent(log, ev, sid){
   else if(k==="model_message"){
     closeCtxGroup(log);
     if(log._raf){ cancelAnimationFrame(log._raf); log._raf=null; }  // 取消 pending rAF，避免收尾后又渲一次
-    if(log._sb){ log._sb.innerHTML=renderMarkdown(log._raw||ev.text||""); const bub=log._sb; log._sb=null; markFinalBubble(log,bub); }  // 收尾：定稿 markdown
-    else if(ev.text){ closeReasoning(log); const b=el("bubble bare md"); b.innerHTML=renderMarkdown(ev.text); ensureTurn(log).append(b); markFinalBubble(log,b); }
+    if(log._sb){ log._sb.innerHTML=renderMarkdown(log._raw||ev.text||""); log._sb=null; }  // 收尾：定稿 markdown
+    else if(ev.text){ closeReasoning(log); const b=el("bubble bare md"); b.innerHTML=renderMarkdown(ev.text); ensureTurn(log).append(b); }
+    // 操作行不在此挂——loop 中间消息（提问/审批前后）保持素净；turn_ended 时挂到本回合最后一条回复（ZCode 式）
   }
   else if(k==="tool_invoked"){ log._sb=null; closeReasoning(log); ensureToolCard(log, ev.call||{}); }
   else if(k==="tool_result"){ log._sb=null; completeToolCard(log, ev); }
   else if(k==="approval_requested"){ log._sb=null; closeCtxGroup(log);
-    const t=el("tool approval"); t.dataset.callid=ev.call_id||""; t.dataset.sid=sid||"";
-    t.innerHTML=`<div class="tchead">⏸ <b>需要审批</b> <span class="tcpath">${esc(ev.tool||"")}</span></div>`
-      +`<div class="apreason">${esc(ev.reason||"该操作需人工确认")}</div>`
-      +`<div class="aprow">`
-      +`<button class="apbtn reject" data-act="approveTool" data-callid="${esc(ev.call_id||"")}" data-ok="0" data-all="0">✕ 拒绝</button>`
-      +`<button class="apbtn allow" data-act="approveTool" data-callid="${esc(ev.call_id||"")}" data-ok="1" data-all="0">✓ 允许</button>`
-      +`<button class="apbtn allowall" data-act="approveTool" data-callid="${esc(ev.call_id||"")}" data-ok="1" data-all="1" title="本对话后续需审批的操作不再逐次询问">🔓 本对话全部允许</button>`
-      +`</div>`;
-    ensureTurn(log).append(t); }
+    // 轨迹行留在会话里（回执后落终态，审计可循）；卡片本体挂交互槽（ZCode 式），答完即撤。
+    // 历史回放（frag）取不到槽 → 只画轨迹行；真挂起的卡由 restorePendingApprovals 补画。
+    const line=el("iline ap-wait","⏸ 等待确认");
+    line.dataset.callid=ev.call_id||"";
+    ensureTurn(log).append(line);
+    const zone=interactZone(log);
+    if(zone) renderApprovalCard(zone, ev, sid);
+  }
   else if(k==="approval_resolved"){
-    let matched=false;
-    log.querySelectorAll(".tool.approval").forEach(c=>{ if(c.dataset.callid===ev.call_id){ matched=true;
-      const row=c.querySelector(".aprow"); if(row) row.remove();
-      const prev=c.querySelector(".apresolved"); if(prev) prev.remove();
-      const st=el("apresolved "+(ev.approved?"ok":"no"), ev.approved?("✓ 已允许"+(ev.by&&ev.by!=='user'?"（"+esc(ev.by)+"）":"")):"✕ 已拒绝");
-      c.appendChild(st);
-    }});
-    if(!matched && ev.approved && (ev.by||"").indexOf("auto")===0){
-      ensureTurn(log).append(el("meta apauto","🔓 已自动允许（本对话全部允许）"));
+    const ok=!!ev.approved;
+    if(ok){
+      // 放行不留「已允许」行（ZCode 式）：紧随其后的工具卡（写入内容/命令输出）即完整记录。
+      removeInteractLine(log,"callid",ev.call_id||"");
+    } else {
+      // 拒绝没有工具卡跟随，「✕ 已拒绝」是唯一痕迹，保留。
+      markInteractLine(log,"callid",ev.call_id||"","✕ 已拒绝",false);
     }
+    removeInteractCard(".approval","callid",ev.call_id||"");
+  }
+  else if(k==="question_asked"){ log._sb=null; closeCtxGroup(log); hideTyping(log);
+    // 挂起观感：计时行文案切「等待回答」；答题卡本体挂交互槽（ZCode 式弹窗），答完即撤。
+    // 时间线不再另行建行——tool_invoked 建的问句行（「? 正在询问」）就是它的轨迹，
+    // 答完由 tool_result 原地落「已询问 N 个问题」。
+    log._qwait=true;
+    const zone=interactZone(log);
+    if(zone) renderQuestionCard(zone, ev, sid);
+  }
+  else if(k==="question_resolved"){
+    log._qwait=false;                            // 问句行落定由 tool_result 负责（output 即答案）
+    removeInteractCard(".qcard","rid",ev.request_id||"");
   }
   else if(k==="turn_ended"){
-    log._sb=null; hideTyping(log); closeCtxGroup(log); closeReasoning(log);
+    log._sb=null; hideTyping(log); closeCtxGroup(log); closeReasoning(log); log._qwait=false;
     const turn=log._turn;
     if(ev.reason==="stopped"){
       // 用户已手动中断过（分隔条已画）→ 只关回合；否则画「已中断」分隔条（opencode interrupted）
@@ -517,6 +799,21 @@ function renderEvent(log, ev, sid){
     else if(ev.reason==="error"){ ensureTurn(log).append(el("meta note bad","— 回合异常结束 —")); }
     // 回合计时行定格（实时行就地落字；回放补静态行）——贴参考图「已工作 1 分 11 秒」，点击折叠执行细节
     finalizeWorkDur(log);
+    // 操作按钮（复制/赞/踩/分享）在回合**结束**时挂到本回合最后一条回复气泡上（ZCode 式）：
+    // loop 进行中（提问/审批挂起、步骤间输出）任何气泡都不挂——操作行是「整个回合输出完毕」的落款；
+    // 先清本回合旧操作行再挂末尾（幂等），之前回合的操作行不动。
+    if(turn){
+      turn.querySelectorAll(".bubble > .tcacts").forEach(a=>a.remove());
+      const bs=turn.querySelectorAll(".bubble");
+      // 折叠组只留最终回复（ZCode 式）：末条气泡落 .tail 常显（操作行同挂它），之前的文字气泡
+      // 都算过程细节，连同 .iline（✕ 已拒绝）/.meta/.turn-divider 一起由 .folded 的 CSS 收进「已工作」组。
+      bs.forEach(b=>b.classList.remove("tail"));
+      if(bs.length){
+        const last=bs[bs.length-1];
+        last.classList.add("tail");
+        addBubbleActions(last);
+      }
+    }
     log._turnStartTs=null;
     // completed：不留收尾行（参考界面仅以留白分隔，减少噪音）
     log._turn=null;

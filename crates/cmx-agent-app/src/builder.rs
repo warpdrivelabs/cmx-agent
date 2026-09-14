@@ -203,6 +203,16 @@ impl DesktopAppBuilder {
 
         // 工具注册表：内置工具 + 子智能体 task 工具 + （可选）连接器工具。
         let mut registry = default_registry();
+        // 人在环提问（ask_user）：spec 进模型工具清单；执行由内核托管（user_interactive 特判）。
+        // 服务交互性随装配分叉：桌面双壳真挂起（30 分钟兜底超时），CLI/e2e 降级直接 dismissed。
+        let question_service = if self.interactive_approval {
+            Arc::new(cmx_agent_core::QuestionService::interactive(Some(
+                std::time::Duration::from_secs(30 * 60),
+            )))
+        } else {
+            Arc::new(cmx_agent_core::QuestionService::disabled())
+        };
+        registry.register(Arc::new(cmx_agent_core::AskUserTool));
         // U1 子智能体：task 工具持 Weak<Agent> 句柄，构建出 Arc<Agent> 后注入（不成环）。max_depth=2。
         let sub_handle = Arc::new(cmx_agent_tools::SubagentHandle::new(2));
         registry.register(Arc::new(cmx_agent_tools::TaskTool::new(sub_handle.clone())));
@@ -295,6 +305,7 @@ impl DesktopAppBuilder {
             .tools(registry)
             .guards(guards)
             .approver(approver)
+            .questions(question_service)
             .policy(policy)
             .build()?;
 

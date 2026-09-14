@@ -506,3 +506,90 @@ async fn change_password_rejects_same_or_empty_new_password() {
         assert_eq!(v["error"]["code"], "auth_error");
     }
 }
+
+// ── 人在环提问（ask_user）三命令：answer/dismiss/list ──
+
+fn interactive_app_with(tmp: &TempDir, model: MockModel) -> cmx_agent_app::AgentApp {
+    DesktopAppBuilder::new(tmp.path(), tmp.path(), Arc::new(model))
+        .interactive_approval() // 桌面装配：QuestionService 真服务
+        .build()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn question_commands_roundtrip_through_json() {
+    let tmp = TempDir::new("proto-question");
+    let app = interactive_app_with(
+        &tmp,
+        MockModel::new([
+            ModelResponse::calls(vec![ToolCall::with_id(
+                "c1",
+                "ask_user",
+                serde_json::json!({"questions":[{"id":"s","header":"场景","question":"选一个",
+                    "options":[{"label":"甲","description":""},{"label":"乙","description":""}]}]}),
+            )]),
+            ModelResponse::text("按回答继续"),
+        ]),
+    );
+    // 未命中路径：空 session_id / 未知 request_id 一律 resolved:false（信封 ok 恒 true）
+    let r = resp(serde_json::from_str(
+        &dispatch_json(&app, r#"{"cmd":"answer_question","request_id":"nope","answers":[["甲"]],"session_id":"s1"}"#)
+            .await,
+    ).unwrap());
+    assert_eq!(r["ok"], true);
+    assert_eq!(r["data"]["resolved"], false);
+
+    let r = resp(serde_json::from_str(
+        &dispatch_json(&app, r#"{"cmd":"dismiss_question","request_id":"nope","session_id":"s1"}"#).await,
+    ).unwrap());
+    assert_eq!(r["data"]["resolved"], false);
+
+    let r = resp(serde_json::from_str(
+        &dispatch_json(&app, r#"{"cmd":"list_pending_questions","session_id":"s1"}"#).await,
+    ).unwrap());
+    assert_eq!(r["data"]["pending"].as_array().unwrap().len(), 0);
+
+    // 命中路径：send 挂起在提问上 → 后台任务经命令协议作答 → send 返回且答案回灌。
+    let app = Arc::new(app);
+    let send_app = app.clone();
+    let send_task = tokio::spawn(async move {
+        dispatch_json(
+            &send_app,
+            r#"{"cmd":"send","session_id":"qs1","text":"问我一个问题"}"#,
+        )
+        .await
+    });
+    // 等待挂起出现（轮询进程内 pending——与前端在途恢复同口径）
+    let mut request_id = String::new();
+    for _ in 0..100 {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let r = resp(serde_json::from_str(
+            &dispatch_json(&app, r#"{"cmd":"list_pending_questions","session_id":"qs1"}"#).await,
+        ).unwrap());
+        let pend = r["data"]["pending"].as_array().unwrap();
+        if let Some(p) = pend.first() {
+            request_id = p["request_id"].as_str().unwrap().to_string();
+            break;
+        }
+    }
+    assert!(!request_id.is_empty(), "提问应挂起并可通过协议查到");
+    let body = format!(
+        r#"{{"cmd":"answer_question","request_id":"{request_id}","answers":[["甲"]],"session_id":"qs1"}}"#
+    );
+    let r = resp(serde_json::from_str(&dispatch_json(&app, &body).await).unwrap());
+    assert_eq!(r["data"]["resolved"], true, "命中待决提问");
+
+    let out = send_task.await.unwrap();
+    let v = resp(serde_json::from_str(&out).unwrap());
+    assert_eq!(v["ok"], true);
+    // 答案以 tool result 回灌（new_events 含 answers.s=["甲"]）
+    let answered = v["data"]["new_events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| {
+            e["kind"] == "tool_result"
+                && e["output"]["answers"]["s"] == serde_json::json!(["甲"])
+        });
+    assert!(answered, "答案必须以 tool result 回灌: {v:?}");
+}

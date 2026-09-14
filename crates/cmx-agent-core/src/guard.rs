@@ -198,7 +198,7 @@ impl Guard for AuthGuard {
                     GuardDecision::Allow
                 } else {
                     GuardDecision::deny(format!(
-                        "subject '{}' lacks permission '{}'",
+                        "用户「{}」缺少权限「{}」",
                         ctx.subject.user, perm
                     ))
                 }
@@ -233,7 +233,7 @@ impl Guard for ApprovalGuard {
         match ctx.spec.guard.requires_approval {
             Approval::Never => GuardDecision::Allow,
             Approval::Conditional | Approval::Always => GuardDecision::NeedApproval {
-                reason: format!("tool '{}' requires human approval", ctx.spec.name),
+                reason: format!("工具「{}」需要人工审批", ctx.spec.name),
             },
         }
     }
@@ -253,9 +253,14 @@ impl Guard for HighRiskGuard {
 
     fn check(&self, ctx: &GuardCtx<'_>) -> GuardDecision {
         if ctx.spec.guard.high_risk && !ctx.sandbox.allows_high_risk() {
+            let mode = match ctx.sandbox {
+                SandboxMode::ReadOnly => "只读",
+                SandboxMode::WorkspaceWrite => "工作区可写",
+                SandboxMode::DangerFullAccess => "完全访问",
+            };
             GuardDecision::deny(format!(
-                "tool '{}' is high-risk and blocked under sandbox {:?}",
-                ctx.spec.name, ctx.sandbox
+                "工具「{}」属于高危操作，沙箱「{}」模式下不允许执行",
+                ctx.spec.name, mode
             ))
         } else {
             GuardDecision::Allow

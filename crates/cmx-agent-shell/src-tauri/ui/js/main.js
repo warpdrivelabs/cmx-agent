@@ -67,7 +67,7 @@ async function logoutConfirm(){
 }
 
 // ── 结果操作按钮（复制/分享/点赞/差评）：仅图标 + 原生 tooltip（title）。
-// 只挂每回合最终回复的气泡底部（markFinalBubble）；工具执行行保持素净，不再注入按钮。──
+// 挂在回合最终回复的气泡底部——挂载时机在 turn_ended（render.js），工具执行行保持素净，不再注入按钮。──
 const TOOL_ACT_BTNS =
   `<button class="tcact" data-act="toolCopy" title="复制" aria-label="复制"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>`+
   `<button class="tcact" data-act="toolShare" title="分享" aria-label="分享"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg></button>`+
@@ -134,6 +134,8 @@ document.addEventListener("click", e=>{
     runConnectorTool(el.dataset.tool, el.dataset.online === "1");
   } else if(act === "approveTool"){
     approveTool(el.dataset.callid, el.dataset.ok === "1", el.dataset.all === "1");
+  } else if(act === "answerQuestion"){
+    answerQuestion(el);
   } else if(act === "toolCopy"){ toolCopy(el);
   } else if(act === "toolShare"){ toolShare(el);
   } else if(act === "toolLike"){ toolLike(el);

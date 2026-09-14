@@ -11,12 +11,13 @@ pub mod error;
 pub mod event;
 pub mod guard;
 pub mod model;
+pub mod question;
 pub mod session;
 pub mod tool;
 
 pub use agent::{
-    Agent, AgentBuilder, ApprovalPolicy, Approver, AutoApprover, Policy, TurnCancel, TurnOutcome,
-    TurnPolicyOverride, TURN_POLICY_OVERRIDE, TURN_SUBJECT,
+    call_summary, Agent, AgentBuilder, ApprovalPolicy, Approver, AutoApprover, Policy, TurnCancel,
+    TurnOutcome, TurnPolicyOverride, SUBAGENT_TURN, TURN_POLICY_OVERRIDE, TURN_SUBJECT,
 };
 pub use error::{AgentError, AgentResult};
 pub use event::{EventKind, EventSink, SessionEvent, SessionLog, StopReason};
@@ -26,6 +27,10 @@ pub use guard::{
 };
 pub use model::{
     MockModel, ModelContext, ModelError, ModelMessage, ModelResponse, ModelSeam, TurnObserver,
+};
+pub use question::{
+    normalize_ask_input, AskOption, AskQuestion, AskUserTool, PendingQuestionInfo, QuestionOutcome,
+    QuestionService, QUESTION_TOOL_NAME,
 };
 pub use session::Session;
 pub use tool::{

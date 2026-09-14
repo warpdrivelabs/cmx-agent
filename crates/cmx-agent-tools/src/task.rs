@@ -129,10 +129,20 @@ impl Tool for TaskTool {
         let turn_subject = cmx_agent_core::TURN_SUBJECT.try_with(|s| s.clone()).ok().flatten();
         // 子回合整体在 depth+1 的 task-local 作用域内运行：其内部若再 fan-out，
         // 会读到 depth+1 并据此判断/再嵌套，形成正确的递归层级传播。
+        // 同时置 SUBAGENT_TURN=true：内核据此把交互提问工具（ask_user）门控为直接 dismissed——
+        // 子回合不可取消（TurnCancel 旗标在子回合内不可达）、事件不实时外送，挂起即失控。
         // （两个分支是不同 future 类型，不能同 match 存一个变量——分别在 scope 内 await。）
         let outcome = match &turn_subject {
-            Some(subj) => SUBAGENT_DEPTH.scope(depth + 1, agent.run_turn_as(&mut sub, prompt, subj)).await,
-            None => SUBAGENT_DEPTH.scope(depth + 1, agent.run_turn(&mut sub, prompt)).await,
+            Some(subj) => {
+                cmx_agent_core::SUBAGENT_TURN
+                    .scope(true, SUBAGENT_DEPTH.scope(depth + 1, agent.run_turn_as(&mut sub, prompt, subj)))
+                    .await
+            }
+            None => {
+                cmx_agent_core::SUBAGENT_TURN
+                    .scope(true, SUBAGENT_DEPTH.scope(depth + 1, agent.run_turn(&mut sub, prompt)))
+                    .await
+            }
         };
 
         // 子会话日志落库（审计）：子回合此前只存内存、返回即丢。落库失败不致命（warn 即可），

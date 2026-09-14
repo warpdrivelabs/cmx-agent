@@ -10,14 +10,32 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use cmx_agent_core::{Approver, ToolCall};
+use cmx_agent_core::{call_summary, Approver, ToolCall};
+use serde::Serialize;
 use tokio::sync::oneshot;
+
+/// 前端送回的审批决定：是否批准 + 可选附言（「告诉模型接下来应该怎么做」，拒绝时回灌给模型）。
+#[derive(Debug, Clone)]
+pub struct ApprovalReply {
+    pub approved: bool,
+    pub note: String,
+}
+
+/// 一条待决审批的展示信息（刷新后在途恢复：重画审批卡用）。
+#[derive(Debug, Clone, Serialize)]
+pub struct PendingApprovalInfo {
+    pub call_id: String,
+    pub session_id: String,
+    pub tool: String,
+    pub reason: String,
+    pub summary: String,
+}
 
 /// 交互式审批者。待决审批以 `call_id` → oneshot 发送端登记。
 pub struct InteractiveApprover {
-    pending: Mutex<HashMap<String, oneshot::Sender<bool>>>,
-    /// call_id → session_id：会话中断时需精准拒绝该会话的所有待决审批。
-    pending_sessions: Mutex<HashMap<String, String>>,
+    pending: Mutex<HashMap<String, oneshot::Sender<ApprovalReply>>>,
+    /// call_id → 展示信息：会话中断时需精准拒绝该会话的所有待决审批；刷新后恢复卡面也要查它。
+    pending_info: Mutex<HashMap<String, PendingApprovalInfo>>,
     /// 已授予「本对话全部允许」的会话 id 集合——命中则内核跳过审批直接放行（不弹卡）。
     /// 进程内内存态：App 重启即清空（重启后不应静默沿用旧授权，需重新确认）。
     allow_all: Mutex<HashSet<String>>,
@@ -34,7 +52,7 @@ impl InteractiveApprover {
     pub fn new(timeout: Duration) -> Self {
         Self {
             pending: Mutex::new(HashMap::new()),
-            pending_sessions: Mutex::new(HashMap::new()),
+            pending_info: Mutex::new(HashMap::new()),
             allow_all: Mutex::new(HashSet::new()),
             timeout,
         }
@@ -43,13 +61,13 @@ impl InteractiveApprover {
     /// 前端送回决定：弹出该 `call_id` 的等待端并唤醒（同步，不需运行时）。返回是否命中一个待决审批。
     /// `session_hint` 非空时校验会话绑定——call_id 由模型自报、跨会话可能重号，
     /// B 会话的决定不得作用于 A 会话挂起的审批（防跨会话误批/误拒）。
-    pub fn decide(&self, call_id: &str, approved: bool, session_hint: &str) -> bool {
+    pub fn decide(&self, call_id: &str, approved: bool, session_hint: &str, note: &str) -> bool {
         let bound = self
-            .pending_sessions
+            .pending_info
             .lock()
-            .expect("pending sessions lock")
+            .expect("pending info lock")
             .get(call_id)
-            .cloned();
+            .map(|i| i.session_id.clone());
         if !session_hint.is_empty() && bound.as_deref().is_some_and(|sid| sid != session_hint) {
             eprintln!(
                 "[approval] 审批 {call_id} 属于会话 {:?}，拒绝来自会话 {session_hint:?} 的决定",
@@ -58,9 +76,11 @@ impl InteractiveApprover {
             return false;
         }
         let tx = self.pending.lock().expect("pending lock").remove(call_id);
-        self.pending_sessions.lock().expect("pending sessions lock").remove(call_id);
+        self.pending_info.lock().expect("pending info lock").remove(call_id);
         match tx {
-            Some(tx) => tx.send(approved).is_ok(),
+            Some(tx) => tx
+                .send(ApprovalReply { approved, note: note.to_string() })
+                .is_ok(),
             None => false,
         }
     }
@@ -76,7 +96,7 @@ impl InteractiveApprover {
             .cloned()
             .collect();
         for id in ids {
-            let _ = self.decide(&id, false, "");
+            let _ = self.decide(&id, false, "", "");
         }
         self.allow_all.lock().expect("allow_all lock").clear();
     }
@@ -94,6 +114,17 @@ impl InteractiveApprover {
         self.allow_all.lock().expect("allow_all lock").remove(session_id);
     }
 
+    /// 某会话当前待决审批的展示信息（刷新后在途恢复：前端重画审批卡）。
+    pub fn pending_in_session(&self, session_id: &str) -> Vec<PendingApprovalInfo> {
+        self.pending_info
+            .lock()
+            .expect("pending info lock")
+            .values()
+            .filter(|i| i.session_id == session_id)
+            .cloned()
+            .collect()
+    }
+
     /// 当前待决审批的 call_id 列表（调试/兜底用）。
     pub fn pending_ids(&self) -> Vec<String> {
         self.pending.lock().expect("pending lock").keys().cloned().collect()
@@ -102,40 +133,61 @@ impl InteractiveApprover {
 
 #[async_trait]
 impl Approver for InteractiveApprover {
-    async fn resolve(&self, call: &ToolCall, _reason: &str) -> (bool, String) {
-        self.resolve_for_session("", call, _reason).await
+    async fn resolve(&self, call: &ToolCall, reason: &str) -> (bool, String) {
+        let (ok, by, _) = self.resolve_for_session_with_note("", call, reason).await;
+        (ok, by)
     }
 
     async fn resolve_for_session(
         &self,
         session_id: &str,
         call: &ToolCall,
-        _reason: &str,
+        reason: &str,
     ) -> (bool, String) {
-        let (tx, rx) = oneshot::channel::<bool>();
+        let (ok, by, _) = self.resolve_for_session_with_note(session_id, call, reason).await;
+        (ok, by)
+    }
+
+    async fn resolve_for_session_with_note(
+        &self,
+        session_id: &str,
+        call: &ToolCall,
+        reason: &str,
+    ) -> (bool, String, Option<String>) {
+        let (tx, rx) = oneshot::channel::<ApprovalReply>();
         {
             let mut p = self.pending.lock().expect("pending lock");
             // 同一 call_id 若已有待决（不应发生），丢弃旧的（其接收端会得到 Err → 视为拒绝）。
             p.insert(call.id.clone(), tx);
         }
-        self.pending_sessions
-            .lock()
-            .expect("pending sessions lock")
-            .insert(call.id.clone(), session_id.to_string());
-        // 挂起等前端决定；超时按拒绝。
-        match tokio::time::timeout(self.timeout, rx).await {
-            Ok(Ok(approved)) => (approved, "user".into()),
+        self.pending_info.lock().expect("pending info lock").insert(
+            call.id.clone(),
+            PendingApprovalInfo {
+                call_id: call.id.clone(),
+                session_id: session_id.to_string(),
+                tool: call.name.clone(),
+                reason: reason.to_string(),
+                summary: call_summary(call),
+            },
+        );
+        // 挂起等前端决定；超时 / 发送端被覆盖（同 id 重登记）按拒绝，by 区分留审计。
+        let (reply, by) = match tokio::time::timeout(self.timeout, rx).await {
+            Ok(Ok(reply)) => (Some(reply), "user"),
             Ok(Err(_canceled)) => {
-                // 发送端被丢弃（如被同 id 覆盖）→ 拒绝
                 self.pending.lock().expect("pending lock").remove(&call.id);
-                self.pending_sessions.lock().expect("pending sessions lock").remove(&call.id);
-                (false, "canceled".into())
+                (None, "canceled")
             }
             Err(_timeout) => {
                 self.pending.lock().expect("pending lock").remove(&call.id);
-                self.pending_sessions.lock().expect("pending sessions lock").remove(&call.id);
-                (false, "timeout".into())
+                (None, "timeout")
             }
+        };
+        self.pending_info.lock().expect("pending info lock").remove(&call.id);
+        match reply {
+            // 决定来自 decide（user 主动点按/中断清理走 decide 发送）
+            Some(r) if r.approved => (true, "user".into(), None),
+            Some(r) => (false, "user".into(), (!r.note.trim().is_empty()).then_some(r.note)),
+            None => (false, by.into(), None),
         }
     }
 
@@ -146,15 +198,15 @@ impl Approver for InteractiveApprover {
 
     fn cancel_session(&self, session_id: &str) {
         let ids: Vec<String> = self
-            .pending_sessions
+            .pending_info
             .lock()
-            .expect("pending sessions lock")
-            .iter()
-            .filter(|(_, sid)| *sid == session_id)
-            .map(|(call_id, _)| call_id.clone())
+            .expect("pending info lock")
+            .values()
+            .filter(|i| i.session_id == session_id)
+            .map(|i| i.call_id.clone())
             .collect();
         for call_id in ids {
-            let _ = self.decide(&call_id, false, "");
+            let _ = self.decide(&call_id, false, "", "");
         }
     }
 }
@@ -174,7 +226,7 @@ mod tests {
         // 让 resolve 先登记
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(approver.pending_ids(), vec!["c1".to_string()]);
-        assert!(approver.decide("c1", true, ""));
+        assert!(approver.decide("c1", true, "", ""));
         let (ok, by) = h.await.unwrap();
         assert!(ok);
         assert_eq!(by, "user");
@@ -182,15 +234,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn decide_rejects_pending() {
+    async fn decide_rejects_pending_with_note() {
         let approver = std::sync::Arc::new(InteractiveApprover::new(Duration::from_secs(5)));
         let call = ToolCall::with_id("c2", "shell", json!({}));
         let a2 = approver.clone();
-        let h = tokio::spawn(async move { a2.resolve(&call, "x").await });
+        let h = tokio::spawn(async move { a2.resolve_for_session_with_note("s1", &call, "x").await });
         tokio::time::sleep(Duration::from_millis(50)).await;
-        assert!(approver.decide("c2", false, ""));
-        let (ok, _) = h.await.unwrap();
+        // 拒绝并附言：附言应原样带回（「告诉模型接下来应该怎么做」）
+        assert!(approver.decide("c2", false, "", "改用 echo 写入"));
+        let (ok, by, note) = h.await.unwrap();
         assert!(!ok);
+        assert_eq!(by, "user");
+        assert_eq!(note.as_deref(), Some("改用 echo 写入"));
+        // 待决展示信息（刷新恢复用）：应含会话/工具/摘要
+        assert!(approver.pending_in_session("s1").is_empty());
+    }
+
+    #[tokio::test]
+    async fn pending_in_session_lists_suspended_approval() {
+        let approver = std::sync::Arc::new(InteractiveApprover::new(Duration::from_secs(5)));
+        let call = ToolCall::with_id("c4", "shell", json!({"cmd":"touch a.txt"}));
+        let a2 = approver.clone();
+        let h = tokio::spawn(async move { a2.resolve_for_session("s9", &call, "需审批").await });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let list = approver.pending_in_session("s9");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].call_id, "c4");
+        assert_eq!(list[0].tool, "shell");
+        assert_eq!(list[0].summary, "touch a.txt", "单字符串字段应直接取值");
+        assert!(approver.pending_in_session("other").is_empty(), "按会话过滤");
+        assert!(approver.decide("c4", true, "s9", ""));
+        let _ = h.await.unwrap();
     }
 
     #[tokio::test]
@@ -205,7 +279,7 @@ mod tests {
     #[test]
     fn decide_unknown_id_is_noop() {
         let approver = InteractiveApprover::default();
-        assert!(!approver.decide("nope", true, ""));
+        assert!(!approver.decide("nope", true, "", ""));
     }
 
     #[test]

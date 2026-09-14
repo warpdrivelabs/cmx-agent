@@ -204,7 +204,7 @@ async fn approval_required_and_rejected_blocks_tool() {
         output["error"]
             .as_str()
             .unwrap()
-            .contains("approval rejected")
+            .contains("用户拒绝了这次操作")
     );
 }
 
@@ -237,7 +237,7 @@ async fn high_risk_blocked_under_workspace_write() {
         !ok,
         "high-risk tool must be blocked outside danger-full-access"
     );
-    assert!(output["error"].as_str().unwrap().contains("high-risk"));
+    assert!(output["error"].as_str().unwrap().contains("高危"));
 }
 
 #[tokio::test]

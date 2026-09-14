@@ -137,11 +137,40 @@ pub enum AppRequest {
     Logout,
     /// 人在环审批决定（X4）：前端在审批卡片点「允许/拒绝」后发来，唤醒挂起的回合。
     /// `all=true`（「本对话全部允许」）时，把 `session_id` 会话标记为全部允许，后续不再弹卡。
+    /// `note` 为用户附言（ZCode 式「告诉模型接下来应该怎么做」），拒绝时回灌给模型帮其自愈。
     Approve {
         call_id: String,
         approved: bool,
         #[serde(default)]
         all: bool,
+        #[serde(default)]
+        session_id: String,
+        #[serde(default)]
+        note: String,
+    },
+    /// 人在环提问答复：前端在答题卡点「提交」后发来，唤醒挂起的回合。
+    /// `answers` 按问题顺序，每问一个字符串数组（多选 = 多个 label；自由输入 = 一条
+    /// `"user_note: …"`）。未命中待决提问时响应 `resolved:false`（前端降级为已失效态）。
+    AnswerQuestion {
+        request_id: String,
+        answers: Vec<Vec<String>>,
+        #[serde(default)]
+        session_id: String,
+    },
+    /// 人在环提问忽略：前端在答题卡点「忽略」后发来，回合以 dismissed 继续不中止。
+    DismissQuestion {
+        request_id: String,
+        #[serde(default)]
+        session_id: String,
+    },
+    /// 列待决提问（前端在途恢复主路径：刷新/重开窗口后挂起中的提问不在落库事件里，
+    /// 只能查进程内 pending）。`session_id` 缺省列全部会话的待决提问。
+    ListPendingQuestions {
+        #[serde(default)]
+        session_id: Option<String>,
+    },
+    /// 列某会话待决审批（前端在途恢复：刷新后重画审批卡）。`session_id` 为空时返回空列表。
+    ListPendingApprovals {
         #[serde(default)]
         session_id: String,
     },
@@ -354,11 +383,31 @@ async fn dispatch_inner(app: &AgentApp, req: AppRequest) -> Result<AppResponse, 
             app.logout();
             Ok(AppResponse::ok(serde_json::json!({ "ok": true })))
         }
-        AppRequest::Approve { call_id, approved, all, session_id } => {
-            let hit = app.resolve_approval_decision(&call_id, approved, all, &session_id);
+        AppRequest::Approve { call_id, approved, all, session_id, note } => {
+            let hit = app.resolve_approval_decision(&call_id, approved, all, &session_id, &note);
             Ok(AppResponse::ok(
                 serde_json::json!({ "resolved": hit, "call_id": call_id, "approved": approved, "all": all }),
             ))
+        }
+        AppRequest::AnswerQuestion { request_id, answers, session_id } => {
+            let hit = app.answer_question(&request_id, answers, &session_id);
+            Ok(AppResponse::ok(
+                serde_json::json!({ "resolved": hit, "request_id": request_id }),
+            ))
+        }
+        AppRequest::DismissQuestion { request_id, session_id } => {
+            let hit = app.dismiss_question(&request_id, &session_id);
+            Ok(AppResponse::ok(
+                serde_json::json!({ "resolved": hit, "request_id": request_id }),
+            ))
+        }
+        AppRequest::ListPendingQuestions { session_id } => {
+            let pending = app.list_pending_questions(session_id.as_deref());
+            Ok(AppResponse::ok(serde_json::json!({ "pending": pending })))
+        }
+        AppRequest::ListPendingApprovals { session_id } => {
+            let pending = app.list_pending_approvals(&session_id);
+            Ok(AppResponse::ok(serde_json::json!({ "pending": pending })))
         }
         AppRequest::ImBindGenCode => Ok(AppResponse::ok(app.im_bind_gen_code().await?)),
         AppRequest::ImListBindings => Ok(AppResponse::ok(app.im_list_bindings().await?)),

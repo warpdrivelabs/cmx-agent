@@ -214,9 +214,13 @@ impl CmxServiceClient {
             Ok(v) => Ok(v),
             Err(e) => {
                 if status.is_success() {
-                    Err(e)
-                } else {
-                    Err(ClientError::Http(status.as_u16()))
+                    return Err(e);
+                }
+                // 非 2xx 也可能带业务信封（如网关限流 429「请求过于频繁。请在 N 秒后重试」）——
+                // 有中文提示时透出信封，比裸 Http(status) 可懂（同 post_data_bearer 的取信）。
+                match e {
+                    ClientError::Envelope { ref msg, .. } if !msg.trim().is_empty() => Err(e),
+                    _ => Err(ClientError::Http(status.as_u16())),
                 }
             }
         }
@@ -345,5 +349,55 @@ mod tests {
         assert_eq!(c.base_url, "http://127.0.0.1:8091");
         assert_eq!(c.tenant, "default");
         assert_eq!(c.user, "admin");
+    }
+
+    // 门户限流真形态：HTTP 429 + 业务信封体。回归：post_data（登录路径）必须透出信封
+    // 中文 msg（含重试秒数），而不是把人看不懂的裸「HTTP 429」抛给登录页。
+    #[tokio::test]
+    async fn post_data_surfaces_envelope_msg_on_http_429() {
+        let body = r#"{"code":429,"msg":"请求过于频繁。请在 580 秒后重试。限制: 5 请求/900 秒"}"#;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let responder = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = Vec::new();
+            let mut tmp = [0u8; 2048];
+            loop {
+                let n = sock.read(&mut tmp).unwrap();
+                buf.extend_from_slice(&tmp[..n]);
+                if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let head = String::from_utf8_lossy(&buf[..pos]).to_ascii_lowercase();
+                    let clen: usize = head
+                        .lines()
+                        .find_map(|l| l.strip_prefix("content-length:"))
+                        .and_then(|v| v.trim().parse().ok())
+                        .unwrap_or(0);
+                    if buf.len() >= pos + 4 + clen {
+                        break;
+                    }
+                }
+            }
+            let resp = format!(
+                "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = sock.write_all(resp.as_bytes());
+        });
+        let c = CmxServiceClient::new(format!("http://{addr}"));
+        let err = c
+            .post_data("/api/auth/login", json!({"username": "u", "password": "p"}))
+            .await
+            .unwrap_err();
+        responder.join().unwrap();
+        match err {
+            ClientError::Envelope { code, msg } => {
+                assert_eq!(code, 429);
+                assert!(msg.contains("请求过于频繁"), "实际 msg: {msg}");
+                assert!(msg.contains("580"), "应带重试秒数，实际 msg: {msg}");
+            }
+            other => panic!("应透出信封中文提示而非裸状态码，实际: {other:?}"),
+        }
     }
 }

@@ -264,26 +264,160 @@ async function runConnectorTool(tool, online){
   await openSession(id, prompt);
 }
 
-// ── 人在环审批（X4）：卡片点「允许/拒绝/本对话全部允许」→ 发 approve 命令唤醒挂起的回合 ──
-async function approveTool(callId, approved, all){
+// ── 人在环审批（X4）：交互槽审批卡 → 发 approve 命令唤醒挂起的回合。
+// note=用户附言（ZCode 式「告诉模型接下来应该怎么做」），拒绝时随决定回灌给模型帮其自愈。──
+async function approveTool(callId, approved, all, note){
   if(!callId) return;
   // 取该卡片所属会话 id（「本对话全部允许」需按会话授权）；兜底用当前 active 会话。
   const card=[...document.querySelectorAll(".tool.approval")].find(c=>c.dataset.callid===callId);
   const sid=(card&&card.dataset.sid)||CURRENT||"";
-  // 立即禁用按钮 + 置「处理中」，避免重复点击
-  document.querySelectorAll(".tool.approval").forEach(c=>{ if(c.dataset.callid===callId){
-    const row=c.querySelector(".aprow"); if(row) row.innerHTML='<span class="appending">'+(all?'已允许，本对话后续不再询问…':'已提交，处理中…')+'</span>';
-  }});
+  const t=TABS.find(x=>x.sessionId===sid&&(!card||x.view.contains(card)));
+  const noStream=t&&!t._busy;                    // 刷新恢复卡：没有流跟随，回合收尾靠轮询
+  const base=noStream?await eventsTotal(sid):null;
+  if(noStream) watchRemoteTurn(t,base);
+  setApprovalCardBusy(card,true,"已提交，处理中…");
+  const log=card?logOfCard(card):null;
   try{
-    const r=await call({cmd:"approve", call_id:callId, approved, all:!!all, session_id:sid});
+    const r=await call({cmd:"approve", call_id:callId, approved, all:!!all, note:note||"", session_id:sid});
     if(!r||r.ok===false) throw new Error((r&&r.error&&r.error.message)||"未知错误");
+    // 成功即撤卡（SSE approval_resolved 也会做，幂等——刷新恢复路径只有这条）。
+    // 放行 → 撤「⏸ 等待确认」行：随后的工具卡即完整记录；拒绝 → 行落「✕ 已拒绝」（唯一痕迹）。
+    if(card) card.remove();
+    if(approved) removeInteractLine(log,"callid",callId);
+    else markInteractLine(log,"callid",callId,"✕ 已拒绝",false);
   }catch(e){
     // 失败必须可见且恢复可点：旧实现空 catch，按钮永卡「处理中」。
     showToast("审批提交失败："+(e&&e.message||e));
-    document.querySelectorAll(".tool.approval").forEach(c=>{ if(c.dataset.callid===callId){
-      const row=c.querySelector(".aprow"); if(row) row.innerHTML='<span class="appending">⚠ 提交失败：'+esc(String(e&&e.message||e))+'</span>';
+    setApprovalCardBusy(card,false,"⚠ 提交失败："+(e&&e.message||e));
+  }
+}
+// 审批卡忙碌态：禁用全部选项/按钮 + 状态行文案；失败时恢复可点。
+function setApprovalCardBusy(card,busy,msg){
+  if(!card) return;
+  card.querySelectorAll(".apopt,.apbtn").forEach(b=>{ b.disabled=busy; });
+  const w=card.querySelector(".apwaitline"); if(w) w.textContent=msg||(busy?"已提交，处理中…":"等待确认…");
+}
+
+// ── 人在环提问：卡片点「提交」（多问时非末页是「继续」，仅翻页不进这里）或「忽略」→ 发 answer/dismiss 命令唤醒挂起的回合 ──
+// 收集一张答题卡的答案：每问一组勾选 label；自由输入并入 "user_note: …"（codex notes 语义）。
+function collectQuestionAnswers(card){
+  const qs=card._questions||[], rid=card.dataset.rid||"", answers=[];
+  qs.forEach((q,qi)=>{
+    const name="q_"+rid+"_"+qi;
+    const picks=[...card.querySelectorAll(`input[name="${CSS.escape(name)}"]:checked`)].map(i=>i.value);
+    const out=[];
+    const noteEl=card.querySelector(`.qq[data-qi="${qi}"] .qnote`);
+    const note=(noteEl&&noteEl.value.trim())||"";
+    picks.forEach(v=>{ if(v==="__custom__"){ if(note) out.push("user_note: "+note); } else if(v) out.push(v); });
+    // 输了文字但没勾自定义项 → 也并入答案（宽容兜底）
+    if(!picks.includes("__custom__") && note) out.push("user_note: "+note);
+    answers.push(out);
+  });
+  return answers;
+}
+async function answerQuestion(btn){
+  const rid=btn.dataset.rid||""; if(!rid) return;
+  const dismiss=btn.dataset.dismiss==="1";
+  const card=[...document.querySelectorAll(".tool.qcard")].find(c=>c.dataset.rid===rid);
+  const sid=(card&&card.dataset.sid)||CURRENT||"";
+  const t=TABS.find(x=>x.sessionId===sid&&(!card||x.view.contains(card)));
+  const noStream=t&&!t._busy;                    // 刷新恢复卡：没有流跟随，回合收尾靠轮询
+  const base=noStream?await eventsTotal(sid):null;
+  if(noStream) watchRemoteTurn(t,base);
+  let answers=null;
+  if(!dismiss){
+    answers=collectQuestionAnswers(card||{dataset:{rid:rid},_questions:[]});
+  }
+  // 立即置「处理中」防重复点击（对齐 approveTool）
+  document.querySelectorAll(".tool.qcard").forEach(c=>{ if(c.dataset.rid===rid){
+    c.querySelectorAll(".apbtn,.qopt").forEach(b=>{ b.disabled=true; });
+    const f=c.querySelector(".qcfoot"); if(f) f.dataset.busy="1";
+    const hint=c.querySelector(".qchint"); if(hint) hint.textContent="已提交，处理中…";
+  }});
+  const log=card?logOfCard(card):null;
+  try{
+    const r=dismiss
+      ? await call({cmd:"dismiss_question", request_id:rid, session_id:sid})
+      : await call({cmd:"answer_question", request_id:rid, answers:answers||[], session_id:sid});
+    if(!r||r.ok===false) throw new Error((r&&r.error&&r.error.message)||"未知错误");
+    // 未命中（已答过/已清理/幽灵 pending）→ 降级为已失效；注意 r.ok 恒 true，必须看 data.resolved
+    if(!(r.data&&r.data.resolved)){
+      if(card) card.remove();
+      markInteractLine(log,"rid",rid,"⚠ 提问已失效（该提问已被处理）",false);
+      return;
+    }
+    // 命中即撤交互槽卡（SSE question_resolved 也会做，幂等——刷新恢复路径只有这条）。
+    // 时间线问句行不用这里落定：随后的 tool_result（output 即答案）会把它原地落成「已询问 N 个问题」；
+    // 无流跟随的刷新恢复路径由 watchRemoteTurn 轮询落库后整屏重渲，同样收敛。
+    if(card) card.remove();
+    if(log){ log._qwait=false; }
+  }catch(e){
+    // 失败必须可见且恢复可点
+    showToast("提问提交失败："+(e&&e.message||e));
+    document.querySelectorAll(".tool.qcard").forEach(c=>{ if(c.dataset.rid===rid){
+      c.querySelectorAll(".apbtn,.qopt").forEach(b=>{ b.disabled=false; });
+      const f=c.querySelector(".qcfoot"); if(f) delete f.dataset.busy;
+      const hint=c.querySelector(".qchint"); if(hint) hint.textContent="⚠ 提交失败："+String(e&&e.message||e);
     }});
   }
+}
+
+// ── 在途提问恢复（刷新/重开窗口主路径）：挂起中的提问不在落库事件里（回合末才落库），
+// 只能查进程内 pending 补画。历史里已有同 rid 的待答卡（在交互槽）则跳过。──
+async function restorePendingQuestions(t){
+  const sid=t.sessionId; if(!sid) return;
+  try{
+    const r=await call({cmd:"list_pending_questions", session_id:sid});
+    const pending=((r&&r.ok&&r.data)||{}).pending||[];
+    const mine=pending.find(x=>x.session_id===sid); if(!mine) return;
+    const log=t.view.querySelector(".log"); if(!log) return;
+    const alive=t.view.querySelector(`.tool.qcard[data-rid="${CSS.escape(mine.request_id)}"]`);
+    if(alive) return; // 已渲染出可答卡
+    renderEvent(log,{kind:"question_asked",request_id:mine.request_id,questions:mine.questions},sid);
+    log.scrollTop=log.scrollHeight;
+  }catch(e){ console.warn("恢复待答提问失败",e); }
+}
+
+// ── 在途审批恢复（与提问同款主路径）：刷新后审批卡不在落库事件里（回合末才落库），
+// 查进程内待决审批补画到交互槽；否则挂起的回合无人可批，只能等 300s 超时拒绝。──
+async function restorePendingApprovals(t){
+  const sid=t.sessionId; if(!sid) return;
+  try{
+    const r=await call({cmd:"list_pending_approvals", session_id:sid});
+    const pending=((r&&r.ok&&r.data)||{}).pending||[];
+    const log=t.view.querySelector(".log"); if(!log) return;
+    pending.forEach(p=>{
+      if(t.view.querySelector(`.tool.approval[data-callid="${CSS.escape(p.call_id||"")}"]`)) return;
+      renderEvent(log,{kind:"approval_requested",call_id:p.call_id,tool:p.tool,reason:p.reason,summary:p.summary},sid);
+    });
+  }catch(e){ console.warn("恢复待决审批失败",e); }
+}
+
+// ── 无流跟随的回合收尾（刷新恢复卡提交路径）：Web 壳的流只在发送时打开，恢复卡提交后
+// 挂起回合的后续事件（回灌/模型回复/turn_ended）前端不可见——计时行空转、tab 永忙、
+// 后续消息无限排队。轮询落库事件总数（回合末才落库），落库后整屏重渲为权威状态并推进队列。──
+async function eventsTotal(sid){
+  try{ const r=await call({cmd:"get_events",session_id:sid,limit:1});
+    return ((r&&r.ok&&r.data)||{}).total||0; }catch(e){ return null; }
+}
+function watchRemoteTurn(t, baseTotal){
+  if(baseTotal==null) return;
+  if(t._turnWatch) clearInterval(t._turnWatch);
+  const deadline=Date.now()+6*60*1000;           // 兜底上限（审批超时 300s + 模型拖尾）
+  const timer=setInterval(async ()=>{
+    if(!t.view.isConnected||Date.now()>deadline){ clearInterval(timer); t._turnWatch=null; return; }
+    const r=await call({cmd:"get_events",session_id:t.sessionId,limit:HIST_PAGE}).catch(()=>null);
+    const d=(r&&r.ok&&r.data)||{};
+    if((d.total||0)<=baseTotal) return;          // 挂起回合还没落库
+    clearInterval(timer); t._turnWatch=null;
+    const log=t.view.querySelector(".log"); if(!log) return;
+    renderHistory(log, t.sessionId, d.events||[], d.start||0, d.total||0);  // 整屏重渲：顺带清幽灵计时行
+    log.scrollTop=log.scrollHeight;
+    restorePendingQuestions(t); restorePendingApprovals(t);   // 还有下一个挂起则补画交互槽卡
+    t._busy=false; setSessionBusy(t,false);
+    const next=(t._queue||[]).shift();
+    if(next) doSendTab(t,next);
+  },2500);
 }
 
 // ── 会话历史：大会话只渲染最近一屏，更早的按需加载（减少解析/渲染/DOM，切换更快）──
@@ -309,9 +443,11 @@ function makeLoadMore(log, sid, start, total){
   log.innerHTML=""; log._tools=new Map(); log._turn=null; log._typing=null;
   log._sb=null; log._raw=""; log._raf=null; log._rsb=null; log._rraw=""; log._rraf=null;
   log._rcard=null; log._ctx=null; log._intMarked=false;   // 全量渲染前清状态，防旧引用串场
+  log._qwait=false;                                        // 孤立 asked 行勿把计时行留成「等待回答」
   stopWorkDurTick(log); log._durRow=null; log._durTick=null; log._turnStartTs=null;  // 实时计时行一并清（防旧 interval 改新 DOM）
   log._closed=false;
   log.append(frag);
+  log._seqs=new Set([...(frag._seqs||[]),...(log._seqs||[])]);  // 回放 seq 记账（无流增量渲染去重靠它）
   // 空会话占位卡（助理=专属引导，其它=通用提示）：首条事件经 renderEvent 到达即移除。
   if(!start && !events.length && !total){ const c=renderLogEmpty(sid); log._emptyCard=c; log.append(c); }
 }
@@ -364,6 +500,9 @@ async function openSession(sessionId, autoPrompt){
     const d=(resp&&resp.ok&&resp.data)||{};
     renderHistory(log, sessionId, d.events||[], d.start||0, d.total||0);
     if(d.title) t.title=d.title||sessionId;
+    // 在途提问恢复（主路径）：挂起中的提问不在落库事件里，查进程内 pending 补渲染待答卡。
+    restorePendingQuestions(t);
+    restorePendingApprovals(t);
   }
   activateTab(tabId);
   // 打开会话后自动滚到最新消息（底部）：历史是在 tab 隐藏时渲染的，激活后才完成布局，
@@ -423,6 +562,8 @@ async function doSendTab(t, text){
       renderEvent(log, ev, t.sessionId);
       // 工具刚出结果 → 模型将继续思考，重新显示等待行（多步等待提示）。
       if(ev.kind==="tool_result") showTyping(log);
+      // 提问挂起：撤等待行（答题卡本身就是状态展示），计时行切「等待回答」（render.js）
+      else if(ev.kind==="question_asked") hideTyping(log);
       else if(ev.kind==="turn_ended" || ev.kind==="approval_requested") hideTyping(log);
     }, t._streamAbort.signal);
   } catch(e) {

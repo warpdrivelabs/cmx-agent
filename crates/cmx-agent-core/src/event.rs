@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::guard::{GuardDecision, GuardPhase};
+use crate::question::AskQuestion;
 use crate::tool::ToolCall;
 
 /// 一条会话事件的类型化载荷（内部标签 `kind`，snake_case）。
@@ -45,6 +46,9 @@ pub enum EventKind {
         call_id: String,
         tool: String,
         reason: String,
+        /// 参数摘要（shell 类取命令文本，其余取紧凑 JSON，截断）——审批卡上直接展示 `$ …`。
+        #[serde(default)]
+        summary: String,
     },
     /// 审批结果。
     ApprovalResolved {
@@ -57,6 +61,22 @@ pub enum EventKind {
         call_id: String,
         ok: bool,
         output: serde_json::Value,
+    },
+    /// 触发向用户提问（答题卡渲染 + 审计 + 重放；问题内容模型本可见于 ToolInvoked.input，
+    /// 故本事件不进模型上下文——由 [`crate::session::Session::model_context`] 白名单投影保证）。
+    QuestionAsked {
+        request_id: String,
+        questions: Vec<AskQuestion>,
+    },
+    /// 提问解决：`answered=false` 时 `by` 说明放弃方（user=忽略 / canceled=清理 / timeout=超时）。
+    QuestionResolved {
+        request_id: String,
+        answered: bool,
+        by: String,
+        /// 答案（键=question id，值=选中 label 数组；忽略/超时为空表）——UI 轨迹行
+        /// 「已询问 N 个问题」展开还原 Q/A 用（ZCode 式）。`#[serde(default)]` 兼容旧落库事件。
+        #[serde(default)]
+        answers: serde_json::Map<String, serde_json::Value>,
     },
     /// 回合结束。
     TurnEnded {

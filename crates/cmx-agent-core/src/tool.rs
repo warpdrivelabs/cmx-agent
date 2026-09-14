@@ -88,6 +88,11 @@ pub struct ToolSpec {
     pub input_schema: Value,
     #[serde(default, rename = "x-guard")]
     pub guard: GuardHints,
+    /// 交互提问工具（如 ask_user）：会挂起等待用户输入。内核据此在 pre 相托管执行
+    /// （register + 落 QuestionAsked + 执行段挂起等答），不走普通 invoke 路径。
+    /// 该类工具**不触碰 SessionLog**——事件只从内核写入会话日志（方案 20260914 §4.3 不变量）。
+    #[serde(default)]
+    pub user_interactive: bool,
 }
 
 impl ToolSpec {
@@ -97,6 +102,7 @@ impl ToolSpec {
             description: description.into(),
             input_schema: serde_json::json!({"type": "object"}),
             guard: GuardHints::default(),
+            user_interactive: false,
         }
     }
 
@@ -107,6 +113,12 @@ impl ToolSpec {
 
     pub fn guard(mut self, guard: GuardHints) -> Self {
         self.guard = guard;
+        self
+    }
+
+    /// 标记为交互提问工具（内核托管挂起路径）。
+    pub fn user_interactive(mut self) -> Self {
+        self.user_interactive = true;
         self
     }
 }

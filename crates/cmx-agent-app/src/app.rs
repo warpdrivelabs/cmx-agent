@@ -313,16 +313,18 @@ impl AgentApp {
     /// 前端送回审批决定（`approve` 命令）：唤醒挂起的回合。返回是否命中一个待决审批。
     /// 前端送回审批决定。`all=true` 表示「本对话全部允许」：先把该会话标记为全部允许
     /// （此后该会话需审批的工具全部自动放行、不再弹卡），再放行当前这次调用。
+    /// `note` 为用户附言（拒绝时「告诉模型接下来应该怎么做」），随决定回灌给模型。
     pub fn resolve_approval_decision(
         &self,
         call_id: &str,
         approved: bool,
         all: bool,
         session_id: &str,
+        note: &str,
     ) -> bool {
         match &self.approver {
             Some(a) => {
-                let hit = a.decide(call_id, approved, session_id);
+                let hit = a.decide(call_id, approved, session_id, note);
                 // 只有确实命中一个待决审批才授予「全部允许」——空点/重复点击/跨会话误投
                 // 不得静默关闭整会话的审批门。
                 if all && approved && hit && !session_id.is_empty() {
@@ -331,6 +333,18 @@ impl AgentApp {
                 hit
             }
             None => false,
+        }
+    }
+
+    /// 某会话当前待决审批（刷新后在途恢复：前端重画审批卡）。
+    pub fn list_pending_approvals(&self, session_id: &str) -> Vec<serde_json::Value> {
+        match &self.approver {
+            Some(a) => a
+                .pending_in_session(session_id)
+                .into_iter()
+                .map(|i| serde_json::to_value(i).unwrap_or(serde_json::Value::Null))
+                .collect(),
+            None => Vec::new(),
         }
     }
 
@@ -563,6 +577,8 @@ impl AgentApp {
         if let Some(a) = &self.approver {
             a.revoke_all();
         }
+        // 待决提问同理随登录身份失效：全量忽略（挂起的回合以 dismissed 收尾，不跨身份沿用）。
+        self.agent.questions().revoke_all();
         // 壳层钩子（如 Tauri 壳停 IM 桥长连接/轮询）：登出后 IM 不再以旧身份拉消息跑回合。
         for h in self.logout_hooks.lock().expect("logout hooks lock").iter() {
             h();
@@ -1560,11 +1576,14 @@ impl AgentApp {
         serde_json::json!({ "skills": skills })
     }
 
-    /// 中断活动回合；若正卡在审批等待，也同步拒绝本会话待决审批。
+    /// 中断活动回合；若正卡在审批等待，也同步拒绝本会话待决审批/待答提问。
     pub fn cancel_session_turn(&self, session_id: &str) -> bool {
         if let Some(a) = &self.approver {
             a.cancel_session(session_id);
         }
+        // 同步忽略本会话待决提问：走 oneshot 唤醒（而非杀任务）→ 工具路径回灌 dismissed
+        // 结果 → 回合在旗标边界收尾。提问挂起点不经旗标检查，不走 oneshot 就永远停在那里。
+        self.agent.questions().cancel_session(session_id);
         self.active_turns
             .lock()
             .expect("active turns lock")
@@ -1574,6 +1593,33 @@ impl AgentApp {
                 true
             })
             .unwrap_or(false)
+    }
+
+    /// 前端送回提问答案（`answer_question` 命令）：唤醒挂起的回合。返回是否命中一个待决提问。
+    /// 会话绑定校验在服务内（session_hint 必须与提问会话一致，且不允许空）。
+    pub fn answer_question(
+        &self,
+        request_id: &str,
+        answers: Vec<Vec<String>>,
+        session_id: &str,
+    ) -> bool {
+        self.agent
+            .questions()
+            .answer(request_id, answers, session_id)
+    }
+
+    /// 前端忽略一个提问（`dismiss_question` 命令）：以 dismissed 唤醒挂起的回合。
+    pub fn dismiss_question(&self, request_id: &str, session_id: &str) -> bool {
+        self.agent.questions().dismiss(request_id, session_id)
+    }
+
+    /// 列待决提问（`list_pending_questions` 命令）：前端在途恢复主路径——回合事件回合末才
+    /// 落库，刷新后 GetEvents 拿不到挂起中的提问，只能查进程内 pending。`session_id` 缺省列全部。
+    pub fn list_pending_questions(
+        &self,
+        session_id: Option<&str>,
+    ) -> Vec<cmx_agent_core::PendingQuestionInfo> {
+        self.agent.questions().pending_in_session(session_id)
     }
 
     fn workspace_registry(&self) -> AppResult<Arc<crate::workspace::WorkspaceRegistry>> {
@@ -1652,6 +1698,8 @@ fn friendly_auth_error(e: cmx_agent_connectors::ClientError, base: &str) -> Stri
         ClientError::Transport(_) => {
             format!("无法连接认证服务（{base}），请检查 VPN / 内网连接，或确认 cmx 门户服务已启动")
         }
+        // 限流（响应体通常已带「请在 N 秒后重试」的信封 msg 走上一分支；此处兜无体的底）。
+        ClientError::Http(429) => "登录请求过于频繁，请几分钟后再试".to_string(),
         ClientError::Http(code) => format!("认证服务返回 HTTP {code}"),
         ClientError::Decode(m) => format!("认证响应解析失败：{m}"),
     }

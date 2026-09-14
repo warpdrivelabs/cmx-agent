@@ -167,7 +167,7 @@
   .tool .apbtn.allow{background:var(--aqua);color:#fff;border-color:transparent}
   .tool .apbtn.allow:hover{filter:brightness(1.08)}
   .tool .apbtn.reject{color:var(--ink2)} .tool .apbtn.reject:hover{border-color:var(--red);color:var(--red)}
-  .tool .apbtn.allowall{color:var(--gold);border-color:var(--border2);font-weight:500} .tool .apbtn.allowall:hover{border-color:var(--gold);background:rgba(229,185,95,.10)}
+  .tool .apbtn.allowall{color:var(--gold);border-color:var(--border2);font-weight:500} .tool .apbtn.allowall:hover{border-color:var(--gold);background:color-mix(in srgb,var(--gold) 10%,transparent)}
   .tool .apresolved{margin-top:5px;font-size:12px;font-weight:500} .tool .apresolved.ok{color:var(--green2)} .tool .apresolved.no{color:var(--red)}
   .meta.apauto{color:var(--gold);opacity:.85}
   .loadmore{align-self:center;margin:2px 0 12px;padding:6px 16px;border-radius:999px;font-size:12.5px;color:var(--ink2);background:var(--panel);border:1px solid var(--border2);cursor:pointer}
@@ -280,6 +280,13 @@
   font-family:"SF Mono",Menlo,Consolas,monospace;font-size:11px;color:var(--muted)}
 .tool .tc-arg{flex:0 0 auto;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   font-family:"SF Mono",Menlo,Consolas,monospace;font-size:10.5px;color:var(--muted);opacity:.85}
+/* fs_write 写入卡（ZCode diff 卡）：文件名突出 + 目录弱化 + 绿色 +N 行数 */
+.tool .tc-file{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:"SF Mono",Menlo,Consolas,monospace;font-size:12px;font-weight:600;color:var(--ink)}
+.tool .tc-dir{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:"SF Mono",Menlo,Consolas,monospace;font-size:11px;color:var(--muted)}
+.tool .tc-plus{flex:0 0 auto;font-family:"SF Mono",Menlo,Consolas,monospace;font-size:11px;
+  font-weight:600;color:var(--green,var(--green2))}
 /* 展开详情体：缩进 + 左侧细线（不再有卡片头） */
 .tool.tcard .tc-body{padding:2px 0 4px 20px;border-left:2px solid var(--border);margin:1px 0 4px 6px}
 .tool.tcard .tc-body .tcmeta{display:block;margin-bottom:3px}
@@ -289,6 +296,9 @@
 .tool .tterm,.tool .tcode{margin:3px 0;border:1px solid var(--border);border-radius:6px;
   font-size:11px;line-height:1.45;max-height:300px}
 .tool .tdiff{margin:3px 0;font-size:11px;line-height:1.45;max-height:300px;border-radius:6px}
+/* 写入内容行号槽（fs_write 卡内 .dl.add 全绿新增体） */
+.tool .tdiff .ln{display:inline-block;width:30px;margin-right:10px;font-style:normal;font-weight:400;
+  color:var(--muted);opacity:.65;text-align:right;user-select:none}
 
 /* ── 上下文引用组：同样纯行「🔍 已引用 N 处 ▾」，chevron 紧跟文字 ── */
 .tc-chev{color:var(--muted);opacity:.6;transition:transform .16s;flex:0 0 auto;font-size:10px;align-self:center}
@@ -346,7 +356,10 @@
 .work-dur:hover{background:var(--hover);color:var(--ink2)}
 .work-dur .chev{transition:transform .16s;font-size:10px;opacity:.6}
 .turn.folded .work-dur .chev{transform:rotate(-90deg)}
-.turn.folded .reasoning,.turn.folded .tool.tcard,.turn.folded .ctxgroup,.turn.folded .thinking-row{display:none}
+/* 折叠组只留「已工作 N」+ 最终回复（.tail）：思考/工具卡/上下文组之外，中间过程的文字气泡、
+   状态注记（.iline ✕已拒绝、.meta 注脚、回合内 .turn-divider ⎋已中断）也一并收起 */
+.turn.folded .reasoning,.turn.folded .tool.tcard,.turn.folded .ctxgroup,.turn.folded .thinking-row,
+.turn.folded .iline,.turn.folded .meta,.turn.folded .turn-divider,.turn.folded .bubble:not(.tail){display:none}
 
 /* ── 回合分隔条（中断）：轻量一行小字，不画贯穿横线（920px 列宽下横线太抢眼）── */
 .turn-divider{align-self:flex-start;width:fit-content;display:flex;align-items:center;gap:6px;
@@ -354,14 +367,87 @@
 .turn-divider.int{color:var(--orange);opacity:.9}
 .meta.note.bad{color:var(--red)}
 
-/* ── 审批卡：全时间线里唯一保留卡片态的元素（需要用户注意的交互）── */
-.tool.approval{border:1px solid var(--gold);border-radius:10px;padding:8px 12px;margin:4px 0;
-  background:linear-gradient(180deg,rgba(229,185,95,.06),transparent)}
-.tool.approval .tchead{display:flex;align-items:center;gap:7px;font-size:12.5px}
-.tool.approval .tchead b{color:var(--gold)}
-/* 旧式兜底结果卡（跨分页无配对时）：给个轻缩进，内容块自带样式 */
-.tool:not(.tcard):not(.approval) .tchead{display:flex;align-items:center;gap:7px;font-size:12px}
-.tool:not(.tcard):not(.approval) .tchead b{color:var(--ink2)}
+/* ── 交互槽（ZCode 式）：提问/审批卡不进会话时间线——停靠在输入区上方专属区域，
+   答完即撤；时间线只留轻量轨迹行（.iline）。卡片是当前「待办」，不是会话记录。── */
+.interact{display:flex;flex-direction:column;gap:10px;width:100%;max-width:952px;margin:0 auto;
+  padding:0 26px 10px}
+.interact:empty{display:none}
+
+/* 轻量轨迹行：进行中用所属卡主色，回执后落终态色——审批卡在会话里唯一的痕迹
+   （提问已改为工具行即折叠组，不再走轨迹行）。 */
+.iline{font-size:12px;color:var(--muted);padding:1px 0}
+.iline.ap-wait{color:var(--gold)}
+.iline.ok{color:var(--green2)}
+.iline.no{color:var(--red)}
+
+/* 问句行（ZCode r8e 对齐）：ask_user 的工具行本身即折叠组——运行中「? 正在询问」（名称紫色、
+   不可展开），答完落「? 已询问 + N 个问题」（灰色调、无 ✓/✕），展开体逐问 Q/A：
+   问句墨色中量、答案弱化一行；左竖线由 .tc-body 提供。色值一律 var(--*, fallback) 派生，双主题共用。 */
+.tool .tc-g.iq-g{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;
+  border:1px solid var(--border2);border-radius:50%;color:var(--muted);
+  font-size:10.5px;font-weight:700}
+.tool.tcard.run.iq .tc-name{color:var(--violet,var(--aqua))}
+.tool.tcard.iq .tc-name{font-weight:600}
+.tool.tcard.iq .iqwrap{display:flex;flex-direction:column;gap:5px;padding:1px 0}
+.tool.tcard.iq .iqrow{display:flex;flex-direction:column;gap:1px;font-size:12.5px;line-height:1.5}
+.tool.tcard.iq .iqq{color:var(--ink);font-weight:500}
+.tool.tcard.iq .iqa{color:var(--muted)}
+
+/* 卡基（两卡共用）：更大留白 + 悬浮投影；键盘导航宿主（tabindex=-1），聚焦时投影略深。 */
+.tool.qcard,.tool.approval{border-radius:14px;padding:12px 16px;margin:0;
+  box-shadow:0 8px 28px rgba(0,0,0,.18);outline:none}
+.tool.qcard:focus,.tool.approval:focus{box-shadow:0 10px 32px rgba(0,0,0,.26)}
+.tool.qcard{border:1px solid var(--violet,var(--aqua));
+  background:linear-gradient(180deg,rgba(144,133,233,.08),transparent)}
+/* 审批卡：金描边 + 同色外圈一环，醒目度对齐提问卡（环用 color-mix 派生自 --gold，双主题可用） */
+.tool.approval{border:1px solid var(--gold);
+  background:linear-gradient(180deg,color-mix(in srgb,var(--gold) 7%,transparent),transparent);
+  box-shadow:0 8px 28px rgba(0,0,0,.18),0 0 0 1px color-mix(in srgb,var(--gold) 45%,transparent)}
+.tool.approval:focus{box-shadow:0 10px 32px rgba(0,0,0,.26),0 0 0 1px color-mix(in srgb,var(--gold) 45%,transparent)}
+.tool.qcard .qchead,.tool.approval .qchead{display:flex;align-items:center;gap:9px;margin-bottom:8px;flex-wrap:wrap}
+.tool.qcard .qhtag{font-size:10.5px;color:var(--violet,var(--aqua));border:1px solid var(--violet,var(--aqua));
+  border-radius:6px;padding:1px 7px;opacity:.9;flex:0 0 auto;max-width:40%;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tool.approval .qhtag{font-size:10.5px;color:var(--gold);border:1px solid var(--gold);
+  border-radius:6px;padding:1px 7px;opacity:.9;flex:0 0 auto;font-family:"SF Mono",Menlo,monospace}
+.tool.qcard .qhtext{font-size:13.5px;color:var(--ink)}
+.tool.approval .qhtext{font-size:13.5px;color:var(--gold)}
+.tool.approval .apwaitline{font-size:12px;color:var(--muted);margin:-3px 0 6px}
+.tool.approval .apcmd{margin:2px 0 10px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;
+  padding:8px 12px;font-family:"SF Mono",Menlo,monospace;font-size:12px;line-height:1.5;color:var(--code-ink);
+  white-space:pre-wrap;word-break:break-word;
+  max-height:min(320px,40vh);overflow:auto;overscroll-behavior:contain}  /* 长命令卡内滚动，不撑爆交互槽 */
+.tool.approval .apcmd-p{color:var(--green2);margin-right:7px;user-select:none}
+/* 编号选项行（ZCode 式）：号码 + 加粗 label + 淡色描述；高亮行即选中。 */
+.tool.qcard .qpager{margin-left:auto;display:flex;align-items:center;gap:5px;color:var(--muted);font-size:12px}
+.tool.qcard .qpg{width:20px;height:20px;border-radius:5px;border:1px solid var(--border2);background:var(--panel);
+  color:var(--ink2);cursor:pointer;font-size:13px;line-height:1}
+.tool.qcard .qpg:hover{border-color:var(--violet,var(--aqua));color:var(--violet,var(--aqua))}
+.tool.qcard .qq{padding:2px 0}
+.tool.qcard .qopts,.tool.approval .qopts{display:flex;flex-direction:column;gap:2px}
+.tool.qcard .qopt,.tool.approval .apopt{display:flex;align-items:baseline;gap:10px;padding:7px 10px;border-radius:8px;
+  cursor:pointer;font-size:13px;color:var(--ink2);width:100%;text-align:left;border:none;background:none;
+  font-family:inherit;transition:background .1s}
+.tool.qcard .qopt:hover,.tool.approval .apopt:hover{background:var(--hover)}
+.tool.qcard .qopt.qsel,.tool.approval .apopt.qsel{background:var(--hover)}
+.tool.qcard .qopt.qsel .qlabel,.tool.approval .apopt.qsel .qlabel{color:var(--ink)}
+.tool.qcard .qno,.tool.approval .qno{flex:0 0 16px;text-align:right;color:var(--muted);font-size:12px;
+  font-variant-numeric:tabular-nums}
+.tool.qcard .qopt input[type=checkbox],.tool.qcard .qopt input[type=radio]{accent-color:var(--violet,var(--aqua));
+  margin:0;flex:0 0 auto;align-self:center}
+.tool.qcard .qlabel,.tool.approval .qlabel{font-weight:600;color:var(--ink);flex:0 0 auto}
+.tool.qcard .qdesc,.tool.approval .qdesc{color:var(--muted);font-size:12px;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tool.qcard .qnote,.tool.approval .qnote{flex:1;min-width:120px;background:none;border:none;outline:none;
+  color:var(--ink);font-size:13px;font-family:inherit}
+.tool.qcard .qnote::placeholder,.tool.approval .qnote::placeholder{color:var(--muted)}
+.tool.approval .apcustom{cursor:text}
+/* 卡底：左键盘提示 + 右操作按钮（ZCode 式布局）；提交/忽略按钮复用 .apbtn。 */
+.qcfoot{display:flex;align-items:center;gap:8px;margin-top:12px}
+.qchint{flex:1;font-size:12px;color:var(--muted);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 旧式兜底结果卡（跨分页无配对时）：给个轻缩进，内容块自带样式（qcard/approval 有专属样式，排除） */
+.tool:not(.tcard):not(.approval):not(.qcard) .tchead{display:flex;align-items:center;gap:7px;font-size:12px}
+.tool:not(.tcard):not(.approval):not(.qcard) .tchead b{color:var(--ink2)}
 
 /* ── 时间线两侧留白（ZCode 式）：内容列固定宽度居中，两侧按屏幕比例均分留白；窄窗口自动让位。
    width:100% 必须显式——flex 子项一旦带 auto margin 就失去默认 stretch，会塌成内容宽 ── */

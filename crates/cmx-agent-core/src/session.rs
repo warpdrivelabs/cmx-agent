@@ -64,15 +64,24 @@ impl Session {
     /// - `ModelMessage` → Assistant（文本 + 工具调用）
     /// - `ToolResult`   → Tool（回灌）
     ///
-    /// 其余事件（守卫裁决、审批、注记、turn 边界）是审计/控制流元数据，不进模型上下文。
+    /// 其余事件（守卫裁决、审批、提问、注记、turn 边界）是审计/控制流元数据，不进模型上下文。
+    ///
+    /// **配对自愈**：对有 `tool_calls` 却始终没有配对 `ToolResult` 的调用（回合被中断/崩溃于
+    /// 执行段的历史遗留），在投影尾部补合成错误结果——主流模型 API 严格校验 assistant 的每个
+    /// tool_call 必须跟随 tool 结果，缺配对会 400 并把会话对模型砖死。中断只缺尾部调用，补在
+    /// 结尾顺序正确。
     pub fn model_context(&self, tools: Vec<ToolSpec>) -> ModelContext {
         let mut messages = Vec::new();
+        let mut open_calls: Vec<String> = Vec::new();
         for ev in self.log.iter() {
             match &ev.kind {
                 EventKind::UserMessage { text } => {
                     messages.push(ModelMessage::User { text: text.clone() });
                 }
                 EventKind::ModelMessage { text, tool_calls } => {
+                    for c in tool_calls {
+                        open_calls.push(c.id.clone());
+                    }
                     messages.push(ModelMessage::Assistant {
                         text: text.clone(),
                         tool_calls: tool_calls.clone(),
@@ -81,6 +90,7 @@ impl Session {
                 EventKind::ToolResult {
                     call_id, output, ..
                 } => {
+                    open_calls.retain(|id| id != call_id);
                     messages.push(ModelMessage::Tool {
                         call_id: call_id.clone(),
                         output: output.clone(),
@@ -88,6 +98,15 @@ impl Session {
                 }
                 _ => {}
             }
+        }
+        for id in open_calls {
+            messages.push(ModelMessage::Tool {
+                call_id: id,
+                output: serde_json::json!({
+                    "error": "interrupted before tool result",
+                    "interrupted": true
+                }),
+            });
         }
         ModelContext {
             system: self.system.clone(),
