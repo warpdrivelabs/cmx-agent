@@ -70,6 +70,14 @@ impl Default for SandboxSettings {
     fn default() -> Self {
         Self {
             net: NetMode::Open,
+            // fail-closed 旋钮（拍板-2）：有 OS 沙箱实现的平台默认 true（拒绝执行而非裸跑）。
+            // **macOS 例外（用户拍板 2026-09-15，B 方案）**：沙箱方案明确「macOS 不覆盖」
+            // （无 OS 沙箱实现），默认 true 会让 mac 包 shell/git/插件 command 全拒——
+            // 功能半残。mac 默认 false = 降级裸跑 + 黄标（降级语义照方案 §107 行），
+            // 会话事件与 UI 黄标照常标记；待 mac 沙箱实现（Seatbelt）立项后移除本例外。
+            #[cfg(target_os = "macos")]
+            require_os: false,
+            #[cfg(not(target_os = "macos"))]
             require_os: true,
             cmd_risk_screen: true,
             extra_write_roots: Vec::new(),
@@ -205,7 +213,11 @@ mod tests {
         let _g = crate::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let s = SandboxSettings::default();
         assert_eq!(s.net, NetMode::Open); // 拍板-1
-        assert!(s.require_os); // 拍板-2：fail-closed 字面义
+        // 拍板-2 fail-closed 字面义——macOS 例外见 Default 注释（用户拍板 2026-09-15 B 方案）。
+        #[cfg(target_os = "macos")]
+        assert!(!s.require_os);
+        #[cfg(not(target_os = "macos"))]
+        assert!(s.require_os);
         assert!(s.cmd_risk_screen); // S3 默认开
         assert_eq!(s.win_cache_policy, WinCachePolicy::Redirect); // §4.3 默认 env 重定向
         assert!(!s.hardened_read); // §4.8 默认关
