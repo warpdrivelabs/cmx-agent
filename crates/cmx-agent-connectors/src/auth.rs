@@ -17,7 +17,7 @@ pub struct AuthConfig {
 impl Default for AuthConfig {
     fn default() -> Self {
         Self {
-            base_url: "http://192.168.137.111:8080".into(),
+            base_url: "https://cmx.pansoft.com".into(),
         }
     }
 }
@@ -226,7 +226,7 @@ mod tests {
 
     #[test]
     fn default_base_is_portal() {
-        assert_eq!(AuthConfig::default().base_url, "http://192.168.137.111:8080");
+        assert_eq!(AuthConfig::default().base_url, "https://cmx.pansoft.com");
     }
 
     #[test]

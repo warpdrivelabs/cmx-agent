@@ -135,7 +135,7 @@
   // ---------- 更新源（智能体自动更新边缘通道） ----------
   // PORTAL_BASE：门户绝对地址（第一优先）；失败自动回落页面同源（适合 nginx 把
   // /agent-updates/ 反代到门户的部署）。换门户地址只改这里。
-  const PORTAL_BASE = 'http://192.168.137.111:8080';
+  const PORTAL_BASE = 'https://cmx.pansoft.com';
   const trimBase = (b) => String(b || '').replace(/\/+$/, '');
 
   // 产物键（tauri updater 命名 {os}-{arch}-{installer}）→ 展示文案
