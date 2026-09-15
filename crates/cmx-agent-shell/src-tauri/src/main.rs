@@ -42,6 +42,18 @@ fn portal_base() -> String {
     portal_packed_default().unwrap_or_else(|| AuthConfig::default().base_url)
 }
 
+/// 登录页注册入口显隐（构建期烧录，缺省展示）：`.env` 的 `CMX_AGENT_REGISTER_ENABLED`
+/// 设 false/0/off/no 可关。仅控制按钮展示；注册成败由门户部署的 `[auth] whitelist` 决定。
+fn register_enabled_packed() -> bool {
+    match option_env!("CMX_AGENT_REGISTER_ENABLED") {
+        Some(v) => !matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "false" | "0" | "off" | "no"
+        ),
+        None => true,
+    }
+}
+
 /// 运行中的 IM 桥句柄：stop 信号（热重载用）+ provider（其 stop() 断开飞书长连接）。
 /// **多通道**：每个启用的 provider 一项（飞书 + QQ 可同时在线）。
 struct ImBridgeHandle {
@@ -713,6 +725,8 @@ fn build_app() -> AgentApp {
         .connectors(cmx_agent_app::ConnectorConfig::default())
         // 登录门：对接门户 /api/auth（基址统一走 portal_base()：构建期烧录默认，运行期不可改）。
         .auth(AuthConfig { base_url: portal_base() })
+        // 登录页「注册账号」入口显隐（构建期烧录，缺省展示；注册成败由门户 whitelist 决定）。
+        .with_register_enabled(register_enabled_packed())
         .interactive_approval() // X4：shell 等需审批工具挂起等前端点按
         .mcp_tools(mcp_tools)   // U3：外部 MCP 工具
         // U15 插件市场：配 env 则拉远程目录（未配回落 env/无市场，见 builder 双保险）。

@@ -142,6 +142,17 @@ pub enum AppRequest {
     },
     /// 登录（对接门户 /api/auth/login）。成功后前门持有当前用户。
     Login { username: String, password: String },
+    /// 自助注册（对接门户 /api/auth/register）。注册即登录：门户直接签发 token 对，
+    /// 前门与登录同路径持有当前用户。是否真能注册由门户部署 whitelist 决定
+    /// （未放行时门户 401 → 前端收到「注册未开放」文案）。
+    Register {
+        username: String,
+        password: String,
+        #[serde(default)]
+        nickname: Option<String>,
+    },
+    /// 登录页 UI 配置（免登录白名单命令）：注册入口显隐等纯展示开关。
+    UiConfig,
     /// 取当前登录用户（前端启动时填充用户菜单；未登录 data.user=null）。
     /// `user.must_change_password=true` 时前端应弹框提醒修改密码。
     CurrentUser,
@@ -289,13 +300,20 @@ pub async fn dispatch(app: &AgentApp, req: AppRequest) -> AppResponse {
 }
 
 async fn dispatch_inner(app: &AgentApp, req: AppRequest) -> Result<AppResponse, AppError> {
-    // 前门硬登录门：配置了门户认证的双壳里，除登录/查当前用户外一律要求已认证。此前登录门
-    // 只存在于前端路由——任何能到达前门的执行体（Web 壳的跨站请求、注入脚本）都能 set_policy
-    // 拆沙箱、add_local_workspace 挂任意目录、install_plugin 装插件。
+    // 前门硬登录门：配置了门户认证的双壳里，除登录/注册/查当前用户/UI 配置外一律要求已认证。
+    // 此前登录门只存在于前端路由——任何能到达前门的执行体（Web 壳的跨站请求、注入脚本）都能
+    // set_policy 拆沙箱、add_local_workspace 挂任意目录、install_plugin 装插件。
     // 未配置认证（CLI serve / 单元测试的本地单机模式）不强制。
+    // Register/UiConfig 必须免登录：登录页即用（注册建号 / 注册按钮显隐查询）。
     if app.auth_configured()
         && !app.is_authenticated()
-        && !matches!(req, AppRequest::Login { .. } | AppRequest::CurrentUser)
+        && !matches!(
+            req,
+            AppRequest::Login { .. }
+                | AppRequest::Register { .. }
+                | AppRequest::CurrentUser
+                | AppRequest::UiConfig
+        )
     {
         return Err(AppError::Auth("未登录：请先登录门户账号".into()));
     }
@@ -459,6 +477,13 @@ async fn dispatch_inner(app: &AgentApp, req: AppRequest) -> Result<AppResponse, 
             let user = app.login(&username, &password).await?;
             Ok(AppResponse::ok(serde_json::json!({ "user": user })))
         }
+        AppRequest::Register { username, password, nickname } => {
+            let user = app
+                .register(&username, &password, nickname.as_deref())
+                .await?;
+            Ok(AppResponse::ok(serde_json::json!({ "user": user })))
+        }
+        AppRequest::UiConfig => Ok(AppResponse::ok(app.ui_config())),
         AppRequest::CurrentUser => Ok(AppResponse::ok(
             serde_json::json!({ "user": app.current_user() }),
         )),

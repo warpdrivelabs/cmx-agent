@@ -88,6 +88,9 @@ pub struct AgentApp {
     /// 登录会话落盘路径（`<data_dir>/auth.json`，由 builder 在启用登录门时自动装配）。
     /// None = 不持久化（CLI / 测试）。
     auth_session_path: Option<std::path::PathBuf>,
+    /// 登录页注册入口显隐（`CMX_AGENT_REGISTER_ENABLED`，缺省开）。仅控制前端展示；
+    /// 是否真能注册由门户部署的 `[auth] whitelist` 决定（服务端无开关）。
+    register_enabled: bool,
     /// 工作空间注册表。None 兼容直接构造 AgentApp 的旧测试/CLI。
     workspaces: Option<Arc<crate::workspace::WorkspaceRegistry>>,
     /// 正在执行的会话回合；前端 CancelSession / 会话删除据此置位。
@@ -176,6 +179,7 @@ impl AgentApp {
             event_bus: Arc::new(crate::bus::SessionEventBus::new()),
             im_binding: None,
             auth_session_path: None,
+            register_enabled: true,
             workspaces: None,
             active_turns: Mutex::new(std::collections::HashMap::new()),
             session_locks: tokio::sync::Mutex::new(std::collections::HashMap::new()),
@@ -205,6 +209,12 @@ impl AgentApp {
     /// 注入登录会话落盘路径（由 DesktopAppBuilder 在启用登录门时调用；None = 不持久化）。
     pub fn with_auth_session_path(mut self, path: std::path::PathBuf) -> Self {
         self.auth_session_path = Some(path);
+        self
+    }
+
+    /// 注入登录页注册入口显隐开关（双壳构建期/启动期 env 烧定，缺省 true）。
+    pub fn with_register_enabled(mut self, enabled: bool) -> Self {
+        self.register_enabled = enabled;
         self
     }
 
@@ -459,6 +469,38 @@ impl AgentApp {
         Ok(public)
     }
 
+    /// 自助注册（对接门户 /api/auth/register）。注册成功即登录：门户直接签发 token 对，
+    /// 这里与登录完全同路径（persist_auth_session + apply_session）。返回前端可见用户信息。
+    pub async fn register(
+        &self,
+        username: &str,
+        password: &str,
+        nickname: Option<&str>,
+    ) -> AppResult<serde_json::Value> {
+        let auth = self
+            .auth
+            .as_ref()
+            .ok_or_else(|| AppError::Auth("未配置认证服务".into()))?;
+        if username.trim().is_empty() || password.is_empty() {
+            return Err(AppError::Auth("请输入用户名和密码".into()));
+        }
+        // 镜像门户 PasswordPolicy 本地快速失败（与 change_password 同规；门户仍为最终裁决）。
+        check_password_policy(password).map_err(AppError::Auth)?;
+        let user = auth
+            .register(username.trim(), password, nickname)
+            .await
+            .map_err(|e| AppError::Auth(friendly_register_error(e, auth.base_url())))?;
+        let public = user.public_json();
+        self.persist_auth_session(&user);
+        self.apply_session(user).await;
+        Ok(public)
+    }
+
+    /// 登录页 UI 配置（免登录白名单命令）：注册入口显隐等纯展示开关。
+    pub fn ui_config(&self) -> serde_json::Value {
+        serde_json::json!({ "register_enabled": self.register_enabled })
+    }
+
     /// 启动会话回放：读 `<data_dir>/auth.json` → `/api/auth/me` 校验 → 有效则恢复登录态；
     /// access 失效用 refresh_token 续签（轮换）后重试；确认失效 → 清落盘文件（回登录门）。
     /// ⚠ 网络/服务不可达 ≠ 会话失效：此时**保留**落盘文件，下次启动再试（不能因断网把人登出）。
@@ -594,23 +636,7 @@ impl AgentApp {
         if old_password == new_password {
             return Err(AppError::Auth("新密码不能与旧密码相同".into()));
         }
-        // 镜像门户 PasswordPolicy（cmx-auth password/policy.rs）本地快速失败；门户仍为最终裁决。
-        if new_password.len() < 8 {
-            return Err(AppError::Auth("密码长度不能少于 8 位".into()));
-        }
-        if !new_password.chars().any(|c| c.is_ascii_uppercase()) {
-            return Err(AppError::Auth("密码必须包含大写字母".into()));
-        }
-        if !new_password.chars().any(|c| c.is_ascii_lowercase()) {
-            return Err(AppError::Auth("密码必须包含小写字母".into()));
-        }
-        if !new_password.chars().any(|c| c.is_ascii_digit()) {
-            return Err(AppError::Auth("密码必须包含数字".into()));
-        }
-        const PWD_SPECIAL: &str = "!@#$%^&*()_+-=[]{}|;':\",./<>?`~";
-        if !new_password.chars().any(|c| PWD_SPECIAL.contains(c)) {
-            return Err(AppError::Auth("密码必须包含特殊字符".into()));
-        }
+        check_password_policy(new_password).map_err(AppError::Auth)?;
         auth.change_password(&token, old_password, new_password)
             .await
             .map_err(|e| AppError::Auth(friendly_auth_error(e, auth.base_url())))?;
@@ -2056,6 +2082,43 @@ fn now_secs() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// 镜像门户 PasswordPolicy（cmx-auth password/policy.rs）本地快速失败；门户仍为最终裁决。
+/// 改密与自助注册共用同一条策略。
+fn check_password_policy(p: &str) -> Result<(), String> {
+    if p.len() < 8 {
+        return Err("密码长度不能少于 8 位".into());
+    }
+    if !p.chars().any(|c| c.is_ascii_uppercase()) {
+        return Err("密码必须包含大写字母".into());
+    }
+    if !p.chars().any(|c| c.is_ascii_lowercase()) {
+        return Err("密码必须包含小写字母".into());
+    }
+    if !p.chars().any(|c| c.is_ascii_digit()) {
+        return Err("密码必须包含数字".into());
+    }
+    const PWD_SPECIAL: &str = "!@#$%^&*()_+-=[]{}|;':\",./<>?`~";
+    if !p.chars().any(|c| PWD_SPECIAL.contains(c)) {
+        return Err("密码必须包含特殊字符".into());
+    }
+    Ok(())
+}
+
+/// 注册专用错误文案：部署未放行 whitelist 时门户 mw_auth 拦 401/403——此时应明示
+/// 「注册未开放」而非通用的认证失败，避免用户误以为账号密码输错。
+fn friendly_register_error(e: cmx_agent_connectors::ClientError, base: &str) -> String {
+    use cmx_agent_connectors::ClientError;
+    match &e {
+        ClientError::Http(401 | 403) => {
+            "注册未开放：当前环境未启用自助注册，请联系管理员创建账号".to_string()
+        }
+        ClientError::Envelope { code: 401 | 403, .. } => {
+            "注册未开放：当前环境未启用自助注册，请联系管理员创建账号".to_string()
+        }
+        _ => friendly_auth_error(e, base),
+    }
 }
 
 /// 把连接器 [`ClientError`] 映射为面向用户的干净登录错误文案。

@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use crate::client::{ClientError, CmxServiceClient};
 
-/// 认证服务配置（缺省指向团队门户 `192.168.137.111:8080`，本机开发门户同端口）。
+/// 认证服务配置（缺省指向团队门户 `https://cmx.pansoft.com`，本机开发门户同端口）。
 #[derive(Debug, Clone)]
 pub struct AuthConfig {
     pub base_url: String,
@@ -86,25 +86,49 @@ impl AuthProvider {
 
     /// 登录：POST /api/auth/login → 取 token → GET /api/auth/me 取身份。
     pub async fn login(&self, username: &str, password: &str) -> Result<LoggedInUser, ClientError> {
-        let device_id = format!("desktop-{}", short_rand());
         let body = json!({
             "username": username,
             "password": password,
             "device_type": "desktop",
-            "device_id": device_id,
+            "device_id": format!("desktop-{}", short_rand()),
         });
         let data = self.client.post_data("/api/auth/login", body).await?;
+        self.assemble_logged_in(&data, username).await
+    }
+
+    /// 自助注册：POST /api/auth/register → 注册即登录（响应含 token 对）→ GET /api/auth/me 取身份。
+    ///
+    /// 与登录同构：成功即持有完整会话（令牌/过期时间由注册响应直发，门户侧注册后签发）。
+    pub async fn register(
+        &self,
+        username: &str,
+        password: &str,
+        nickname: Option<&str>,
+    ) -> Result<LoggedInUser, ClientError> {
+        let data = self
+            .client
+            .post_data("/api/auth/register", register_body(username, password, nickname))
+            .await?;
+        self.assemble_logged_in(&data, username).await
+    }
+
+    /// 登录/注册响应（含 token 对的 `data`）→ 取 me → 组装 LoggedInUser。
+    /// 令牌与过期时间取自响应（me 不含）；初始密码标志以响应为准（me 已兜底）。
+    async fn assemble_logged_in(
+        &self,
+        data: &Value,
+        fallback_username: &str,
+    ) -> Result<LoggedInUser, ClientError> {
         let access_token = data
             .get("access_token")
             .and_then(|t| t.as_str())
-            .ok_or_else(|| ClientError::Decode("登录响应缺少 access_token".into()))?
+            .ok_or_else(|| ClientError::Decode("认证响应缺少 access_token".into()))?
             .to_string();
 
         // 带 Bearer 取用户身份；失败不致命（至少已登录），用 username 兜底。
         let me = self.me(&access_token).await.unwrap_or(Value::Null);
-        let mut user = user_from_me(&me, username, access_token);
-        // 令牌与过期时间取自登录响应（me 不含）；初始密码标志以登录响应为准（me 已兜底）。
-        user.refresh_token = json_str(&data, "refresh_token");
+        let mut user = user_from_me(&me, fallback_username, access_token);
+        user.refresh_token = json_str(data, "refresh_token");
         user.access_expires_at = data
             .get("access_expires_at")
             .and_then(|v| v.as_i64())
@@ -113,7 +137,7 @@ impl AuthProvider {
             .get("refresh_expires_at")
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
-        if let Some(b) = json_bool(&data, "must_change_password") {
+        if let Some(b) = json_bool(data, "must_change_password") {
             user.must_change_password = b;
         }
         Ok(user)
@@ -161,6 +185,20 @@ impl AuthProvider {
             .await?;
         Ok(())
     }
+}
+
+/// 注册请求体（抽纯函数便于测试）：昵称 trim、空白视为未填（门户侧缺省取用户名）。
+fn register_body(username: &str, password: &str, nickname: Option<&str>) -> Value {
+    let mut body = json!({
+        "username": username,
+        "password": password,
+        "device_type": "desktop",
+        "device_id": format!("desktop-{}", short_rand()),
+    });
+    if let Some(n) = nickname.map(str::trim).filter(|s| !s.is_empty()) {
+        body["nickname"] = json!(n);
+    }
+    body
 }
 
 /// 由 /api/auth/me 响应组装用户（token 由调用方附加；me 缺字段时回退 `fallback_username`）。
@@ -280,5 +318,19 @@ mod tests {
         assert_eq!(u.roles, vec!["r1".to_string(), "r2".to_string()]);
         assert!(u.must_change_password);
         assert_eq!(u.access_token, "tok");
+    }
+
+    #[test]
+    fn register_body_trims_and_omits_blank_nickname() {
+        let b = register_body("u1", "Abcd1234!", None);
+        assert_eq!(b["username"], "u1");
+        assert_eq!(b["device_type"], "desktop");
+        assert!(b.get("nickname").is_none(), "未填昵称不应带字段");
+
+        let blank = register_body("u1", "Abcd1234!", Some("   "));
+        assert!(blank.get("nickname").is_none(), "空白昵称视为未填");
+
+        let named = register_body("u1", "Abcd1234!", Some(" Nick "));
+        assert_eq!(named["nickname"], "Nick", "昵称应 trim 后带上");
     }
 }

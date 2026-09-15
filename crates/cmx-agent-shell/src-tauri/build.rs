@@ -14,6 +14,19 @@ fn main() {
     }
     println!("cargo:rerun-if-changed={}", root_env.display());
     println!("cargo:rerun-if-env-changed=CMX_AGENT_PORTAL_DEFAULT");
+    // 登录页注册入口显隐（缺省 true）：.env / env 的 CMX_AGENT_REGISTER_ENABLED 设 false|0|off|no 可关。
+    let reg_enabled = std::env::var("CMX_AGENT_REGISTER_ENABLED")
+        .ok()
+        .or_else(|| read_env_file(&root_env, "CMX_AGENT_REGISTER_ENABLED"))
+        .map(|v| {
+            !matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "false" | "0" | "off" | "no"
+            )
+        })
+        .unwrap_or(true);
+    println!("cargo:rustc-env=CMX_AGENT_REGISTER_ENABLED={reg_enabled}");
+    println!("cargo:rerun-if-env-changed=CMX_AGENT_REGISTER_ENABLED");
     tauri_build::build()
 }
 

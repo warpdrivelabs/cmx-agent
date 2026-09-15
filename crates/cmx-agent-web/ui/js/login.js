@@ -6,6 +6,17 @@
 function showLoginView () {
   document.getElementById('main-view').style.display = 'none';
   document.getElementById('login-view').style.display = 'block';
+  // 登出/换号清场：复位到登录表单（注册成功进主界面后登出，不能停在注册表单）、清输入与错误提示。
+  // 用 DOM 直查而非闭包常量——初始化路由可能早于文件尾部常量初始化执行。
+  const loginFormEl = document.getElementById('login-form');
+  const regFormEl = document.getElementById('register-form');
+  if (regFormEl && regFormEl.style.display !== 'none') showRegisterForm(false);
+  if (loginFormEl) loginFormEl.reset();
+  if (regFormEl) regFormEl.reset();
+  const loginErr = document.getElementById('error');
+  if (loginErr) loginErr.textContent = '';
+  const regErr = document.getElementById('register-error');
+  if (regErr) regErr.textContent = '';
   // 首次显示时 seed 星空（只在还没有子元素时执行一次）
   const starsFar = document.getElementById('space-stars-far');
   if (starsFar && !starsFar.childElementCount) seedLoginSpace();
@@ -139,5 +150,78 @@ form.addEventListener('submit', async (e) => {
   }
 });
 
-// ── 脚本在 body 底部，DOM 已解析完 → 立即路由，不闪首页 ──
+// ── 脚本在 body 底部，DOM 已解析完。启动路由挪到文件最末尾（注册表单常量初始化之后），
+// 避免 showLoginView 复位逻辑触碰未初始化的绑定。──
+
+// ── 自助注册（同核多壳）：登录/注册表单互斥切换；注册走前门 register 命令（免登录白名单），
+// 成功即登录（门户直发 token 对，后端落 auth.json），与登录成功完全同路径进主界面。──
+const regForm = document.getElementById('register-form');
+const regError = document.getElementById('register-error');
+const regSubmit = document.getElementById('register-submit');
+const gotoRegister = document.getElementById('goto-register');
+const gotoLogin = document.getElementById('goto-login');
+const formTitle = document.getElementById('form-title');
+const formSubtitle = document.getElementById('form-subtitle');
+// 与门户 /api/auth/register 同规的用户名格式（后端仍为最终裁决）
+const REG_USERNAME_RE = /^[A-Za-z0-9_@.\-]{2,100}$/;
+
+function showRegisterForm (show) {
+  form.style.display = show ? 'none' : '';
+  regForm.style.display = show ? '' : 'none';
+  gotoRegister.style.display = show ? 'none' : '';
+  gotoLogin.style.display = show ? '' : 'none';
+  formTitle.textContent = show ? '创建账号' : '欢迎回来';
+  formSubtitle.textContent = show ? '注册 TrueMate，开启你的工作' : '登录 TrueMate，开启你的工作';
+  (show ? regForm : form).querySelector('input').focus();
+}
+gotoRegister.addEventListener('click', () => showRegisterForm(true));
+gotoLogin.addEventListener('click', () => showRegisterForm(false));
+
+// 注册入口显隐：后端 ui_config（免登录白名单）决定；查询失败保持默认展示（注册成败最终由门户裁决）。
+(async () => {
+  try {
+    const r = await call({ cmd: 'ui_config' });
+    if (r && r.ok && r.data && r.data.register_enabled === false) {
+      gotoRegister.style.display = 'none';
+    }
+  } catch (e) { /* 查询失败保持默认 */ }
+})();
+
+regForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  regError.textContent = '';
+  const username = regForm.username.value.trim();
+  const nickname = regForm.nickname.value.trim();
+  const password = regForm.password.value;
+  const password2 = regForm.password2.value;
+  if (!username || !password) { regError.textContent = '请输入用户名和密码'; return; }
+  if (!REG_USERNAME_RE.test(username)) { regError.textContent = '用户名须为 2-100 位字母、数字或 _ @ . - 组成'; return; }
+  if (password !== password2) { regError.textContent = '两次输入的密码不一致'; return; }
+  // 复杂度提示（与改密同规；门户服务端为最终裁决）
+  if (password.length < 8 || !/[A-Z]/.test(password) || !/[a-z]/.test(password)
+    || !/[0-9]/.test(password) || !/[!@#$%^&*()_+\-=[\]{}|;':",./<>?`~]/.test(password)) {
+    regError.textContent = '密码须 8 位以上，且包含大写字母、小写字母、数字和特殊字符';
+    return;
+  }
+  const old = regSubmit.textContent;
+  regSubmit.disabled = true; regSubmit.textContent = '注册中…';
+  try {
+    const r = await call({ cmd: 'register', username, password, nickname: nickname || undefined });
+    if (!r || r.ok === false) {
+      throw new Error((r && r.error && r.error.message) || '注册未开放或失败，请重试');
+    }
+    // 注册即登录 → SPA 切主视图（同登录成功回调）
+    location.hash = '#/';
+    showMainView();
+    if (typeof refreshUser === "function") refreshUser();
+    if (typeof refreshTasks === "function") refreshTasks();
+    if (typeof refreshModelLabel === "function") refreshModelLabel();
+  } catch (err) {
+    regError.textContent = (typeof err === 'string' ? err : (err && err.message)) || '注册失败，请重试';
+  } finally {
+    regSubmit.disabled = false; regSubmit.textContent = old;
+  }
+});
+
+// ── 启动路由（放文件最末尾：注册表单相关常量均已初始化，showLoginView 复位逻辑可安全执行）──
 routeByHash();

@@ -31,6 +31,8 @@ pub struct DesktopAppBuilder {
     connectors: Option<ConnectorConfig>,
     /// 认证配置（None = 不启用登录门；Some = 对接门户 /api/auth/*）。
     auth: Option<AuthConfig>,
+    /// 登录页注册入口显隐（缺省 true；双壳构建期/启动期 env 烧定，仅控制前端展示）。
+    register_enabled: bool,
     /// 交互式审批（X4）：true = 桌面壳交互审批卡片；false = 用 `approver`（CLI 自动审批）。
     interactive_approval: bool,
     /// MCP 工具（U3）：外部 MCP server 的工具代理（由壳异步连接后传入）。
@@ -61,6 +63,7 @@ impl DesktopAppBuilder {
             system: Some(default_office_system_prompt()),
             connectors: None,
             auth: None,
+            register_enabled: true,
             interactive_approval: false,
             mcp_tools: Vec::new(),
             data_auth: None,
@@ -95,6 +98,12 @@ impl DesktopAppBuilder {
     /// 启用登录门（对接门户 /api/auth/*）。传 `AuthConfig::default()` 即用本机门户 :8080。
     pub fn auth(mut self, cfg: AuthConfig) -> Self {
         self.auth = Some(cfg);
+        self
+    }
+
+    /// 登录页注册入口显隐（缺省 true）。双壳从 env / 构建期烧录解析后传入。
+    pub fn with_register_enabled(mut self, enabled: bool) -> Self {
+        self.register_enabled = enabled;
         self
     }
 
@@ -375,6 +384,8 @@ impl DesktopAppBuilder {
                 .with_auth(Arc::new(AuthProvider::new(auth_cfg)))
                 .with_auth_session_path(auth_session_path);
         }
+        // 登录页注册入口显隐（与登录门独立：按钮可显，注册成败由门户 whitelist 决定）。
+        app = app.with_register_enabled(self.register_enabled);
         // U13：把 PEP + 共享 identity 交给 app——登录后按真实用户角色重热 PDP 判定（授权门接地）。
         if let Some((pep, identity)) = data_auth_wire {
             app = app.with_data_auth_identity(pep, identity);

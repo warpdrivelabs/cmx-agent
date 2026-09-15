@@ -100,6 +100,8 @@ async fn build_app(workdir: &std::path::Path, data_dir: &std::path::Path) -> Age
     let mut app = DesktopAppBuilder::new(workdir, data_dir, model)
         .connectors(cmx_agent_app::ConnectorConfig::default())
         .auth(cmx_agent_app::AuthConfig::default())
+        // 登录页「注册账号」入口显隐（env CMX_AGENT_REGISTER_ENABLED，缺省展示；成败由门户 whitelist 决定）。
+        .with_register_enabled(register_enabled_from_env())
         .interactive_approval() // X4：shell 等需审批工具挂起等前端点按
         .mcp_tools(mcp_tools) // U3：外部 MCP 工具
         // U15 插件市场：配 env 则拉远程目录（未配回落 env/无市场，见 builder 双保险）。
@@ -118,6 +120,17 @@ async fn build_app(workdir: &std::path::Path, data_dir: &std::path::Path) -> Age
     app = app.with_im_binding(cmx_agent_app::ImBindingClient::new(portal_base));
 
     app
+}
+
+/// 登录页注册入口显隐：env `CMX_AGENT_REGISTER_ENABLED`（"false"/"0"/"off"/"no" = 隐藏，缺省展示）。
+fn register_enabled_from_env() -> bool {
+    match std::env::var("CMX_AGENT_REGISTER_ENABLED") {
+        Ok(v) => !matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "false" | "0" | "off" | "no"
+        ),
+        Err(_) => true,
+    }
 }
 
 /// 环回守卫：Host 必须是本机回环；带 Origin 头（浏览器跨站场景）必须是回环源。
