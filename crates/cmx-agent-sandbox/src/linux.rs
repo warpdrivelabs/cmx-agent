@@ -284,12 +284,13 @@ fn sf(code: u16, jt: u8, jf: u8, k: u32) -> SockFilter {
 }
 
 /// 装载 seccomp 过滤器（只应在 fork 后 exec 前的 child 单线程上下文调用——B-7 安装位置唯一性）。
-/// 过滤器由**父进程预建**后 move 进来：pre_exec 闭包内零分配（红队3 P1-1，fork 后 malloc 锁死锁面）。
-fn install_seccomp(filter: &mut Vec<SockFilter>, prog: &mut SockFprog) -> Result<(), String> {
-    prog.len = filter.len() as u16;
-    prog.filter = filter.as_mut_ptr();
+/// 过滤器由**父进程预建**后 move 进来：pre_exec 闭包内零堆分配（红队3 P1-1，fork 后 malloc 死锁面）。
+/// fprog 在 child 栈上现构（两字结构体，非堆分配）——闭包因此不捕获裸指针（pre_exec 要求
+/// 闭包 Send+Sync，`*const SockFilter` 不满足，跨线程捕获编译即拒）。
+fn install_seccomp(filter: &[SockFilter]) -> Result<(), String> {
+    let mut prog = SockFprog { len: filter.len() as u16, filter: filter.as_ptr() };
     let r = unsafe {
-        libc::prctl(libc::PR_SET_SECCOMP, libc::SECCOMP_MODE_FILTER, prog as *mut SockFprog)
+        libc::prctl(libc::PR_SET_SECCOMP, libc::SECCOMP_MODE_FILTER, &mut prog as *mut SockFprog)
     };
     if r < 0 {
         return Err(format!("prctl(PR_SET_SECCOMP) 失败：{}", io::Error::last_os_error()));
@@ -365,8 +366,7 @@ pub(crate) fn spawn(
     let plan = build_landlock_plan(ctx.roots, abi)?;
     let enforce = crate::settings::get().net == crate::NetMode::Enforce;
     // seccomp 过滤器父进程预建（B-6：pre_exec 闭包零分配——fork 后 malloc 死锁面）。
-    let mut filter = if enforce { build_seccomp_filter() } else { Vec::new() };
-    let mut prog = SockFprog { len: 0, filter: std::ptr::null() };
+    let filter = if enforce { build_seccomp_filter() } else { Vec::new() };
     let plan_fd = plan.ruleset_fd;
 
     let mut cmd = Command::new(program);
@@ -390,13 +390,12 @@ pub(crate) fn spawn(
             if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
                 return Err(io::Error::last_os_error());
             }
-            // ③ seccomp（仅 enforce 档；过滤器已预建，闭包内零分配）。
-            if enforce {
-                if let Err(e) = install_seccomp(&mut filter, &mut prog) {
-                    // 闭包只能回 io::Error——把上下文编码进 errno 语义（EINVAL）+ errno 保留。
-                    let _ = e;
-                    return Err(io::Error::from_raw_os_error(libc::EINVAL));
-                }
+            // ③ seccomp（仅 enforce 档；过滤器已预建，闭包内零堆分配，fprog 栈上现构）。
+            // 闭包只能回 io::Error——失败时把上下文编码进 errno 语义（EINVAL）+ errno 保留。
+            if enforce
+                && let Err(_e) = install_seccomp(&filter)
+            {
+                return Err(io::Error::from_raw_os_error(libc::EINVAL));
             }
             // ④ landlock_restrict_self（execve 后仍生效、孙进程自动在域内、不可逆）。
             if libc::syscall(SYS_LANDLOCK_RESTRICT_SELF, plan_fd, 0) < 0 {
@@ -405,7 +404,7 @@ pub(crate) fn spawn(
             Ok(())
         });
     }
-    let mut child = cmd
+    let child = cmd
         .spawn()
         .map_err(|e| format!("受限 spawn {program} 失败（fail-closed）：{e}"))?;
     let pid = child.id();
