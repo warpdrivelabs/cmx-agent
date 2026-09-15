@@ -676,8 +676,10 @@ fn work_area_logical(win: &tauri::WebviewWindow) -> Option<(f64, f64, f64, f64)>
     use objc2_app_kit::{NSWindow, NSScreen};
     let ns_win: *mut NSWindow = win.ns_window().ok()?.cast();
     // SAFETY：ns_window 由 Tauri 在主线程创建，setup 同在主线程；此处仅读取屏幕矩形。
+    // NSScreen::mainScreen 需 MainThreadMarker（objc2 0.6 API）——本函数只在 setup 主线程被调。
     unsafe {
-        let screen = (*ns_win).screen().or_else(|| NSScreen::mainScreen())?;
+        let mtm = objc2::MainThreadMarker::new_unchecked();
+        let screen = (*ns_win).screen().or_else(|| NSScreen::mainScreen(mtm))?;
         let vf = screen.visibleFrame();
         let top_y = screen.frame().size.height - (vf.origin.y + vf.size.height);
         Some((vf.origin.x, top_y, vf.size.width, vf.size.height))
