@@ -40,7 +40,11 @@ async function streamSend(sessionId, text, onEvent, signal){
     finally { un(); STREAMING.delete(sessionId); }
     return;
   }
-  // Web：fetch + ReadableStream 手动解析 SSE（\n\n 分帧，取 data: 行）
+  // Web：fetch + ReadableStream 手动解析 SSE（\n\n 分帧，取 data: 行）。
+  // 本地回合同样标记 STREAMING（与 Tauri 分支同规）：/api/subscribe 常驻通道会把本回合的
+  // 落库事件也广播一遍，不标记会被 onSessionEvent 二次渲染（用户气泡/工具卡重复）。
+  STREAMING.add(sessionId);
+  try {
     const r = await fetch("/api/stream", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({session_id:sessionId, text}), signal});
     // 必须检查状态：后端 401/500 返回 JSON 错误体时没有任何 data: 帧——旧实现静默结束，
     // 用户消息石沉大海且计时器空转。失败时合成 stream_error 走统一错误渲染。
@@ -48,18 +52,19 @@ async function streamSend(sessionId, text, onEvent, signal){
       onEvent({kind:"stream_error", message:"请求失败（HTTP " + r.status + "）"});
       return;
     }
-  const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = "";
-  while(true){
-    const {value, done} = await reader.read(); if(done) break;
-    buf += dec.decode(value, {stream:true});
-    let idx;
-    while((idx = buf.indexOf("\n\n")) >= 0){
-      const frame = buf.slice(0, idx); buf = buf.slice(idx+2);
-      const dline = frame.split("\n").find(l => l.startsWith("data:"));
-      if(!dline) continue;
-      try { onEvent(JSON.parse(dline.slice(5).trim())); } catch(e){}
+    const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = "";
+    while(true){
+      const {value, done} = await reader.read(); if(done) break;
+      buf += dec.decode(value, {stream:true});
+      let idx;
+      while((idx = buf.indexOf("\n\n")) >= 0){
+        const frame = buf.slice(0, idx); buf = buf.slice(idx+2);
+        const dline = frame.split("\n").find(l => l.startsWith("data:"));
+        if(!dline) continue;
+        try { onEvent(JSON.parse(dline.slice(5).trim())); } catch(e){}
+      }
     }
-  }
+  } finally { STREAMING.delete(sessionId); }
 }
 function esc(s){ return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 function el(cls,html){ const d=document.createElement("div"); d.className=cls; if(html!=null)d.innerHTML=html; return d; }

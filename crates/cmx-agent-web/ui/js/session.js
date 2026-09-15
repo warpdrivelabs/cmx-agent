@@ -176,9 +176,28 @@ function onSessionEvent(env){
       renderEvent(log, ev, sid);
       log._skipUser = saved;
       if(ev.seq) log._seqs.add(ev.seq);
+      log._live = true;   // 有实时渲染内容：openSession 补历史时只 prepend 不整屏擦除（P3-4）
     }
   }
   scheduleRefreshTasks();
+}
+
+// 历史补挂（openSessionLive / openSession 竞态分支共用）：把**未渲染过**的事件 prepend 到
+// log 顶部（历史在上、实时新事件在下），不擦除已有内容——实时通道先到时整屏重画会把刚到的
+// 事件擦掉且 _seqs 记账阻止重渲，表现为消息凭空消失（红蓝审查 P3-4）。
+function prependHistory(log, t, sessionId, d){
+  const frag=document.createDocumentFragment();
+  if((d.start||0)>0) frag.append(makeLoadMore(log, sessionId, d.start, d.total||0));
+  const tmp=document.createElement('div'); tmp._sb=null; tmp._history=true;
+  (d.events||[]).forEach(ev=>{
+    if(log._seqs && log._seqs.has(ev.seq)) return;
+    const s=tmp._skipUser; tmp._skipUser=false; renderEvent(tmp, ev, sessionId); tmp._skipUser=s;
+    while(tmp.firstChild) frag.append(tmp.firstChild);
+    (log._seqs=log._seqs||new Set()).add(ev.seq);
+  });
+  settlePendingCards(frag);
+  log.prepend(frag);
+  if(d.title && t){ t.title=d.title||sessionId; renderTabs(); }
 }
 
 // 远程来源会话首次有事件时同步建 tab：实时事件立即渲染进 log；后台 get_events 补历史（prepend，不擦除）。
@@ -199,24 +218,13 @@ function openSessionLive(sessionId){
   inp.addEventListener("keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendChatTab(t);} });
   inp.addEventListener("input",e=>autoGrow(e.target));
   t.view.querySelector(".tab-send").onclick=()=>sendChatTab(t);
-  const log=t.view.querySelector(".log"); log.innerHTML=""; log._seqs=new Set(); log._sb=null;
+  const log=t.view.querySelector(".log"); log.innerHTML=""; log._seqs=new Set(); log._sb=null; log._live=true;
   activateTab(tabId);
   scheduleRefreshTasks();
   // 后台补历史：把未渲染过的事件 prepend 到 log 顶部（历史在上、实时新事件在下），不擦除。
   call({cmd:"get_events",session_id:sessionId,limit:HIST_PAGE}).then(resp=>{
-    const d=(resp&&resp.ok&&resp.data)||{}; const evs=d.events||[];
-    const frag=document.createDocumentFragment();
-    if((d.start||0)>0) frag.append(makeLoadMore(log, sessionId, d.start, d.total||0));
-    const tmp=document.createElement('div'); tmp._sb=null; tmp._history=true;
-    evs.forEach(ev=>{
-      if(log._seqs.has(ev.seq)) return;
-      const s=tmp._skipUser; tmp._skipUser=false; renderEvent(tmp, ev, sessionId); tmp._skipUser=s;
-      while(tmp.firstChild) frag.append(tmp.firstChild);
-      log._seqs.add(ev.seq);
-    });
-    settlePendingCards(frag);
-    log.prepend(frag);
-    if(d.title){ t.title=d.title||sessionId; renderTabs(); }
+    const d=(resp&&resp.ok&&resp.data)||{};
+    prependHistory(log, t, sessionId, d);
   });
 }
 
@@ -267,12 +275,13 @@ async function runConnectorTool(tool, online){
 }
 
 // ── 人在环审批（X4）：交互槽审批卡 → 发 approve 命令唤醒挂起的回合。
-// note=用户附言（ZCode 式「告诉模型接下来应该怎么做」），拒绝时随决定回灌给模型帮其自愈。──
-async function approveTool(callId, approved, all, note){
+// note=用户附言（ZCode 式「告诉模型接下来应该怎么做」），拒绝时随决定回灌给模型帮其自愈。
+// sidHint=卡片所属会话（红蓝审查 P2-2：call_id 由模型自报、跨会话可重号，定位卡与提交都按会话限定）。──
+async function approveTool(callId, approved, all, note, sidHint){
   if(!callId) return;
-  // 取该卡片所属会话 id（「本对话全部允许」需按会话授权）；兜底用当前 active 会话。
-  const card=[...document.querySelectorAll(".tool.approval")].find(c=>c.dataset.callid===callId);
-  const sid=(card&&card.dataset.sid)||CURRENT||"";
+  const sameId=[...document.querySelectorAll(".tool.approval")].filter(c=>c.dataset.callid===callId);
+  const card=sameId.find(c=>sidHint&&c.dataset.sid===sidHint)||sameId[0];
+  const sid=sidHint||(card&&card.dataset.sid)||CURRENT||"";
   const t=TABS.find(x=>x.sessionId===sid&&(!card||x.view.contains(card)));
   const noStream=t&&!t._busy;                    // 刷新恢复卡：没有流跟随，回合收尾靠轮询
   const base=noStream?await eventsTotal(sid):null;
@@ -282,7 +291,14 @@ async function approveTool(callId, approved, all, note){
   try{
     const r=await call({cmd:"approve", call_id:callId, approved, all:!!all, note:note||"", session_id:sid});
     if(!r||r.ok===false) throw new Error((r&&r.error&&r.error.message)||"未知错误");
-    // 成功即撤卡（SSE approval_resolved 也会做，幂等——刷新恢复路径只有这条）。
+    // 未命中（已超时/已被处理/会话不符）→ 降级为「已失效」：旧实现不看 resolved 直接标
+    // 「✕ 已拒绝」，与真实裁决不符（红蓝审查 P2-2/2-3 配套；后端现拒绝空 session_id）。
+    if(!(r.data&&r.data.resolved)){
+      if(card) card.remove();
+      markInteractLine(log,"callid",callId,"⚠ 审批已失效（该审批已被处理或已超时）",false);
+      return;
+    }
+    // 命中即撤卡（SSE approval_resolved 也会做，幂等——刷新恢复路径只有这条）。
     // 放行 → 撤「⏸ 等待确认」行：随后的工具卡即完整记录；拒绝 → 行落「✕ 已拒绝」（唯一痕迹）。
     if(card) card.remove();
     if(approved) removeInteractLine(log,"callid",callId);
@@ -447,6 +463,28 @@ function watchRemoteTurn(t, baseTotal){
   },2500);
 }
 
+// ── 总线丢帧重同步（红蓝审查 P3-5）：Tauri 壳在 event bus Lagged（订阅落后丢帧）时广播
+// session_resync——丢掉的帧无法凭空补，前端把打开中的会话 tab 全部标脏，活动 tab 立即
+// 整屏重拉落库事件；后台 tab 在下次激活时补拉（activateTab 钩子）。旧实现只打日志，
+// 丢掉的事件要等用户手动重开 tab 才回来。──
+function resyncOpenSessions(){
+  TABS.filter(t=>t.kind==="session").forEach(t=>{ t._stale=true; });
+  const t=TABS.find(x=>x.kind==="session"&&x.view.classList.contains("active"));
+  if(t) resyncSessionTab(t);
+  scheduleRefreshTasks();
+}
+async function resyncSessionTab(t){
+  if(!t||t._busy) return;              // 流式进行中不整屏重画（会与流回调互踩）；保持标脏，激活时再补
+  t._stale=false;
+  const r=await call({cmd:"get_events",session_id:t.sessionId,limit:HIST_PAGE}).catch(()=>null);
+  const d=(r&&r.ok&&r.data)||{};
+  const log=t.view.querySelector(".log"); if(!log) return;
+  renderHistory(log, t.sessionId, d.events||[], d.start||0, d.total||0);
+  log.scrollTop=log.scrollHeight;
+  restorePendingQuestions(t); restorePendingApprovals(t);
+  scheduleRefreshTasks();
+}
+
 // ── 会话历史：大会话只渲染最近一屏，更早的按需加载（减少解析/渲染/DOM，切换更快）──
 const HIST_PAGE = 300;
 // 把一段事件渲染进临时容器再整体搬入目标（一次性插入，避免逐条重排）。
@@ -473,7 +511,7 @@ function makeLoadMore(log, sid, start, total){
   log._rcard=null; log._ctx=null; log._intMarked=false;   // 全量渲染前清状态，防旧引用串场
   log._qwait=false;                                        // 孤立 asked 行勿把计时行留成「等待回答」
   stopWorkDurTick(log); log._durRow=null; log._durTick=null; log._turnStartTs=null;  // 实时计时行一并清（防旧 interval 改新 DOM）
-  log._closed=false;
+  log._closed=false; log._live=false;                      // 整屏权威重画后回到「无实时残留」基态
   log.append(frag);
   log._seqs=new Set([...(frag._seqs||[]),...(log._seqs||[])]);  // 回放 seq 记账（无流增量渲染去重靠它）
   // 空会话占位卡（助理=专属引导，其它=通用提示）：首条事件经 renderEvent 到达即移除。
@@ -526,8 +564,15 @@ async function openSession(sessionId, autoPrompt){
     const log=t.view.querySelector(".log"); log.innerHTML="";
     const resp=await call({cmd:"get_events",session_id:sessionId,limit:HIST_PAGE});
     const d=(resp&&resp.ok&&resp.data)||{};
-    renderHistory(log, sessionId, d.events||[], d.start||0, d.total||0);
-    if(d.title) t.title=d.title||sessionId;
+    if(log._live){
+      // 打开期间实时通道已先渲染（session_event 竞态）：只补历史前缀，不整屏擦除——
+      // renderHistory 会把刚实时渲染、尚未落库的事件擦掉且 _seqs 记账阻止重渲（红蓝审查 P3-4）。
+      prependHistory(log, t, sessionId, d);
+    }
+    else {
+      renderHistory(log, sessionId, d.events||[], d.start||0, d.total||0);
+      if(d.title) t.title=d.title||sessionId;
+    }
     // 在途提问恢复（主路径）：挂起中的提问不在落库事件里，查进程内 pending 补渲染待答卡。
     restorePendingQuestions(t);
     restorePendingApprovals(t);
@@ -559,6 +604,10 @@ async function doSendTab(t, text){
     queueNote(log,"⏳ 已加入会话等待队列（第 "+t._queue.length+" 条）");
     return;
   }
+  // 代际守卫（红蓝审查 P2-1）：finally 置 _busy=false 后到队列推进之间隔着元数据 await，
+  // 该窗口内的新发送会立即开新回合并接手队列——本帧若照旧 drain 会出现同会话两个并发
+  // streamSend（乐观气泡/计时行互踩）。推进前校验代际，被接手即放弃。
+  const myGen=(t._sendGen=(t._sendGen||0)+1);
   t._busy=true;
   if(STREAMING && STREAMING.add) STREAMING.add(t.sessionId);
   setSessionBusy(t,true);
@@ -613,6 +662,7 @@ async function doSendTab(t, text){
   const m=((resp&&resp.data&&resp.data.sessions)||[]).find(x=>x.id===t.sessionId);
   if(m){ t.title=m.title||t.sessionId; renderTabs(); }
   scheduleRefreshTasks();
+  if(myGen!==t._sendGen) return;              // 队列已被窗口期的新发送接手，本帧不得再 drain
   const next=(t._queue||[]).shift();
   if(next && !_cancelled) doSendTab(t,next);
   else if(_cancelled && (t._queue||[]).length){

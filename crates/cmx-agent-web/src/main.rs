@@ -59,6 +59,7 @@ async fn main() {
         .route("/js/{*path}", get(js_asset))
         .route("/api", post(api))
         .route("/api/stream", post(api_stream))
+        .route("/api/subscribe", get(sse_subscribe))
         .route("/health", get(|| async { "ok" }))
         .with_state(state)
         .layer(axum::middleware::from_fn(loopback_guard));
@@ -161,12 +162,29 @@ async fn loopback_guard(
         .into_response()
 }
 
-async fn index() -> Html<&'static str> {
-    Html(INDEX_HTML)
+async fn index() -> impl IntoResponse {
+    no_cache(Html(INDEX_HTML).into_response())
+}
+
+/// 静态资产禁缓存：ui 真源经 include_bytes! 烧进二进制，重启即换内容——缓存旧 JS/CSS 会
+/// 让「改了没生效」假象（旧实现无缓存头，浏览器启发式缓存曾强逼用户手动强刷）。
+/// `no-cache` = 可存但每次回源校验；无 ETag/Last-Modified 时等价于每次拉新。
+fn no_cache(mut resp: axum::response::Response) -> axum::response::Response {
+    resp.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-cache"),
+    );
+    resp
 }
 
 async fn cmx_png() -> impl IntoResponse {
-    ([(axum::http::header::CONTENT_TYPE, "image/png")], CMX_PNG)
+    no_cache(
+        (
+            [(axum::http::header::CONTENT_TYPE, "image/png")],
+            CMX_PNG,
+        )
+            .into_response(),
+    )
 }
 
 /// 静态 CSS 资源路由：path 匹配到 include_bytes! 内嵌内容，Content-Type text/css。
@@ -184,11 +202,13 @@ async fn css_asset(
         "settings.css" => include_bytes!("../ui/css/settings.css"),
         _ => return axum::http::StatusCode::NOT_FOUND.into_response(),
     };
-    (
-        [(axum::http::header::CONTENT_TYPE, "text/css")],
-        body,
+    no_cache(
+        (
+            [(axum::http::header::CONTENT_TYPE, "text/css")],
+            body,
+        )
+            .into_response(),
     )
-        .into_response()
 }
 
 /// 静态 JS 资源路由：path 匹配到 include_bytes! 内嵌内容，Content-Type application/javascript。
@@ -215,14 +235,16 @@ async fn js_asset(
         "main.js" => include_bytes!("../ui/js/main.js"),
         _ => return axum::http::StatusCode::NOT_FOUND.into_response(),
     };
-    (
-        [(
-            axum::http::header::CONTENT_TYPE,
-            "application/javascript",
-        )],
-        body,
+    no_cache(
+        (
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "application/javascript",
+            )],
+            body,
+        )
+            .into_response(),
     )
-        .into_response()
 }
 
 /// 唯一 API：前端 POST 一段 JSON 命令，回一段 JSON 响应（= Tauri invoke 边界的 HTTP 版）。
@@ -237,10 +259,13 @@ async fn api(State(state): State<AppState>, body: String) -> impl IntoResponse {
 /// 流式会话（办公助手对话）：POST `{session_id,text}` → `text/event-stream`，回合内每个事件
 /// （模型消息 / 工具调用 / 工具结果 / 收尾）边产生边推。对齐 cmx-ai 的 SSE 事件流思路。
 /// 末尾补发一个 `{"kind":"stream_done"}`（成功）或 `{"kind":"stream_error","message":..}`（失败）。
-async fn api_stream(
-    State(state): State<AppState>,
-    body: String,
-) -> impl IntoResponse {
+async fn api_stream(State(state): State<AppState>, body: String) -> axum::response::Response {
+    // 前门硬登录门（红蓝审查 P1-1）：本端点直调 send_streaming、不经 dispatch_json 的统一
+    // 登录门，旧实现未登录也能驱动回合跑工具。401 由前端 streamSend 的 r.ok 检查合成
+    // stream_error 呈现。
+    if state.app.auth_configured() && !state.app.is_authenticated() {
+        return axum::http::StatusCode::UNAUTHORIZED.into_response();
+    }
     use axum::response::sse::{Event, KeepAlive, Sse};
     use tokio_stream::wrappers::UnboundedReceiverStream;
     use tokio_stream::StreamExt;
@@ -272,7 +297,45 @@ async fn api_stream(
 
     let stream = UnboundedReceiverStream::new(rx)
         .map(|v| Ok::<Event, std::convert::Infallible>(Event::default().data(v.to_string())));
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    Sse::new(stream).keep_alive(KeepAlive::default()).into_response()
+}
+
+/// 会话事件总线订阅（U16 落地，红蓝审查 P1-2）：`GET /api/subscribe` SSE 把
+/// `SessionEventBus` 的所有会话事件（任意来源：本地 / IM 桥 / 后台子任务回执）实时推给前端，
+/// 前端 EventSource 按 session_id 分流到对应 tab。此前只有 Tauri 壳有 session_event 实时通路，
+/// Web 壳事件不落库就不可见（后台回执「没返回」的根因）。Lagged 跳过续收（历史兜底可重拉）。
+async fn sse_subscribe(State(state): State<AppState>) -> axum::response::Response {
+    // 前门硬登录门（与 /api/stream 同规）：事件流含全部会话内容，未登录不得订阅。
+    if state.app.auth_configured() && !state.app.is_authenticated() {
+        return axum::http::StatusCode::UNAUTHORIZED.into_response();
+    }
+    use axum::response::sse::{Event, KeepAlive, Sse};
+    use tokio::sync::broadcast::error::RecvError;
+    use tokio_stream::wrappers::UnboundedReceiverStream;
+    use tokio_stream::StreamExt;
+
+    let mut rx = state.app.event_bus().subscribe();
+    let (tx, rx_out) = tokio::sync::mpsc::unbounded_channel::<Event>();
+    // 转发 task：broadcast → SSE 帧。客户端断开（tx send 失败）或总线关闭即退出。
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(env) => {
+                    let data = serde_json::to_string(&env).unwrap_or_default();
+                    if tx.send(Event::default().data(data)).is_err() {
+                        break;
+                    }
+                }
+                Err(RecvError::Lagged(n)) => {
+                    tracing::warn!("[subscribe] 订阅落后 {n} 帧，已跳过（前端可重开会话补齐）");
+                }
+                Err(RecvError::Closed) => break,
+            }
+        }
+    });
+    let stream = UnboundedReceiverStream::new(rx_out)
+        .map(Ok::<Event, std::convert::Infallible>);
+    Sse::new(stream).keep_alive(KeepAlive::default()).into_response()
 }
 
 /// 端口解析：`--port N` 参数 > `CMX_AGENT_WEB_PORT` 环境变量 > 默认 [`DEFAULT_PORT`]。

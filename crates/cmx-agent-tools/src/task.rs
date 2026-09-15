@@ -27,8 +27,12 @@ use cmx_agent_core::{Agent, Session, Tool, ToolCtx, ToolError, ToolResult, ToolS
 use serde_json::{json, Value};
 
 /// 子智能体默认系统提示：专注、独立、简洁收尾（spec 未写系统提示词时用）。
+/// 收尾语约定（09-15）：最终回复会被原样作为结果交付父会话（<task_result> 卡片正文+转述引用），
+/// 写「任务已完成」这类状态句会退化成回声——完成状态由系统另行呈现，正文只放结果本体。
 const SUBAGENT_SYSTEM: &str = "你是一个子智能体，专注完成被交办的**单一子任务**。\
- 可用工具就用工具，独立把任务做完（不要反问父级）。完成后用简洁中文给出**最终结果**，结论在前。";
+ 可用工具就用工具，独立把任务做完（不要反问父级）。完成后用简洁中文给出**最终结果**，结论在前。\
+ 你的最终回复就是交付给父级的结果本体：结论、数据、产出直接给出，不要写「任务已完成」之类的状态语\
+（完成状态由系统另行呈现）。";
 
 /// 控制面工具（v1 硬规则，§6.4）：子代理一律收走，类型显式 Allow 也不生效。
 const CONTROL_PLANE_TOOLS: &[&str] = &["task", "ask_user", cmx_agent_core::EXIT_PLAN_TOOL_NAME];

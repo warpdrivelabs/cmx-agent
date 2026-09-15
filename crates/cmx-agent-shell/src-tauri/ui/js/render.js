@@ -330,11 +330,11 @@ function toolBodyHtml(ev){
       +`<div class="wsr-u">${esc(x.url||"")}</div>`
       +(x.snippet?`<div class="wsr-s">${esc(x.snippet)}</div>`:"")+`</div>`).join("");
     return (items||`<div class="tcempty">（无结果）</div>`)
-      +`<div class="tcmeta" style="margin-top:4px">${o.count??o.results.length} 条 · ${esc(String(o.query))}</div>`;
+      +`<div class="tcmeta" style="margin-top:4px">${esc(String(o.count??o.results.length))} 条 · ${esc(String(o.query))}</div>`;
   }
   if(o.bytes!=null && o.width!=null && o.path!=null){
     const kb=(o.bytes/1024).toFixed(0);
-    return `<div class="tcmeta">${o.width}×${o.height} · ${kb} KB</div><div class="wf-url">${esc(String(o.path))}</div>`;
+    return `<div class="tcmeta">${esc(String(o.width))}×${esc(String(o.height))} · ${kb} KB</div><div class="wf-url">${esc(String(o.path))}</div>`;
   }
   if(o.computer_use===true){
     const acts=(o.actions||[]).map(a=>`<span class="cuact">${esc(String(a))}</span>`).join("");
@@ -362,20 +362,20 @@ function toolBodyHtml(ev){
       const top=(c.top||[]).map(t=>esc(String(t.value))+"("+esc(String(t.count))+")").join("、");
       return `<tr><td>${esc(c.name)}</td><td>文本</td><td>去重 ${esc(String(c.distinct))} · Top ${top}</td></tr>`;
     }).join("");
-    return `<div class="tcmeta">${o.rows} 行 · ${o.columns.length} 列</div><table class="tdata"><thead><tr><th>列</th><th>类型</th><th>统计</th></tr></thead><tbody>${cols}</tbody></table>`;
+    return `<div class="tcmeta">${esc(String(o.rows))} 行 · ${esc(String(o.columns.length))} 列</div><table class="tdata"><thead><tr><th>列</th><th>类型</th><th>统计</th></tr></thead><tbody>${cols}</tbody></table>`;
   }
   if(o.kind==="excel" && Array.isArray(o.sheets)){
     const sh=o.sheets[0]||{}; const rows=(sh.data||[]).slice(0,12);
     const body=rows.map((r,i)=>`<tr>${r.slice(0,10).map(c=>i===0?`<th>${esc(String(c))}</th>`:`<td>${esc(String(c))}</td>`).join("")}</tr>`).join("");
     // sheet 名来自用户文件内容，必须转义（XSS 注入面：IM 遥控可驱动 agent 读任意 xlsx）。
-    return `<div class="tcmeta">${o.sheets.length} sheet · ${esc(String(sh.name||""))} ${esc(String(sh.rows_total??"?"))}×${esc(String(sh.cols_total??"?"))}</div><table class="tdata"><tbody>${body}</tbody></table>`;
+    return `<div class="tcmeta">${esc(String(o.sheets.length))} sheet · ${esc(String(sh.name||""))} ${esc(String(sh.rows_total??"?"))}×${esc(String(sh.cols_total??"?"))}</div><table class="tdata"><tbody>${body}</tbody></table>`;
   }
   if(o.kind==="pptx" && Array.isArray(o.slides)){
     const s=o.slides.map(sl=>`<b>幻灯片 ${sl.slide}</b>\n${sl.text}`).join("\n\n");
     return `<pre class="tcode">${esc(s)}</pre>`;
   }
   if((o.kind==="pdf"||o.kind==="docx"||o.kind==="text") && o.text!=null){
-    return `<div class="tcmeta">${o.chars??""} 字符</div><pre class="tcode">${esc(String(o.text))}</pre>`;
+    return `<div class="tcmeta">${esc(String(o.chars??""))} 字符</div><pre class="tcode">${esc(String(o.text))}</pre>`;
   }
   if(o.diagnostics!=null) return (o.diagnostics.length?`<pre class="tcode">${esc(o.diagnostics.join("\n"))}</pre>`:`<div class="tcempty">（无诊断）</div>`);
   if(o.hover!=null) return `<pre class="tcode">${esc(String(o.hover))||"（无信息）"}</pre>`;
@@ -410,7 +410,7 @@ function toolBodyHtml(ev){
     return `<div class="tcmeta">${esc(meta)}</div><pre class="tcode">${esc(String(body))}</pre>`;
   }
   if(o.service==="cmx-chain" && Array.isArray(o.steps)){
-    const rows=o.steps.map(s=>`<div class="ecrow"><span class="ecl">${s.ok?"✅":"❌"} 步${s.step} ${esc(String(s.op||""))}</span><span class="ecc"><span class="cuact">${esc(compact(s.ok?(s.output||{}):{error:s.error}))}</span></span></div>`).join("");
+    const rows=o.steps.map(s=>`<div class="ecrow"><span class="ecl">${s.ok?"✅":"❌"} 步${esc(String(s.step))} ${esc(String(s.op||""))}</span><span class="ecc"><span class="cuact">${esc(compact(s.ok?(s.output||{}):{error:s.error}))}</span></span></div>`).join("");
     const badge=o.completed?`<span class="apresolved ok">✓ 全程完成</span>`:`<span class="apresolved no">中途失败</span>`;
     return rows+`<div style="margin-top:6px">${badge}</div>`;
   }
@@ -432,7 +432,7 @@ function toolBodyHtml(ev){
     return `<pre class="tcode">${esc(compact(o.data||{}))}</pre>`;
   }
   if(o.service==="cmx-report" && o.computed){
-    return `<div class="tcmeta">${o.cellCount??"?"} 格 · 错误 ${o.errorCount??0}</div>`;
+    return `<div class="tcmeta">${esc(String(o.cellCount??"?"))} 格 · 错误 ${esc(String(o.errorCount??0))}</div>`;
   }
   if(o.text!=null) return `<pre class="tcode">${esc(String(o.text))}</pre>`;
   if(o.tree!=null) return `<pre class="tcode">${esc(String(o.tree))}</pre>`;
@@ -490,8 +490,14 @@ function markInteractLine(log, attr, id, text, good){
   line.textContent=text;
 }
 // 撤交互槽里的对应卡片（答完即撤——卡片是「当前待办」，不是会话记录）。
-function removeInteractCard(cardSel, attr, id){
-  document.querySelectorAll(".interact .tool"+cardSel).forEach(c=>{ if(c.dataset[attr]===id) c.remove(); });
+// scope=log 时优先限定在本会话视图内（红蓝审查 P2-2：call_id 由模型自报、跨会话可重号，
+// 全文档撤会把别的会话同名卡一起误撤）；本视图没命中再退回全文档兜底（历史边界路径）。
+function removeInteractCard(cardSel, attr, id, log){
+  const scoped=log&&log.closest(".session-view");
+  const root=scoped||document;
+  let hit=false;
+  root.querySelectorAll(".interact .tool"+cardSel).forEach(c=>{ if(c.dataset[attr]===id){ c.remove(); hit=true; } });
+  if(!hit&&scoped) document.querySelectorAll(".interact .tool"+cardSel).forEach(c=>{ if(c.dataset[attr]===id) c.remove(); });
 }
 // 撤时间线上的轻量轨迹行（审批放行用：随后的工具卡就是这次操作的完整记录，不留「已允许」行）。
 function removeInteractLine(log, attr, id){
@@ -636,18 +642,18 @@ function approvalConfirm(card, fromInput){
   // 焦点在「告诉模型」输入框里回车 = 明确的附言意图：有字 = 拒绝+附言，没字不动（防误拒）。
   if(fromInput&&fromInput.classList&&fromInput.classList.contains("qnote")){
     const v=(fromInput.value||"").trim();
-    if(v) approveTool(card.dataset.callid,false,false,v);
+    if(v) approveTool(card.dataset.callid,false,false,v,card.dataset.sid);
     return;
   }
   const rows=[...card.querySelectorAll(".apopt")];
   const i=Math.max(0,rows.indexOf(card.querySelector(".qsel")));
   if(rows[i]&&rows[i].classList.contains("apcustom")){
     const inp=rows[i].querySelector(".qnote");
-    if(inp&&inp.value.trim()) approveTool(card.dataset.callid,false,false,inp.value.trim());
+    if(inp&&inp.value.trim()) approveTool(card.dataset.callid,false,false,inp.value.trim(),card.dataset.sid);
     else if(inp) inp.focus();
     return;
   }
-  approveTool(card.dataset.callid, i!==2, i===1, "");
+  approveTool(card.dataset.callid, i!==2, i===1, "", card.dataset.sid);
 }
 
 // ── 思考过程卡：流式展开，收尾自动折叠，头部显示「思考 · 持续 N 秒」（贴参考界面）──
@@ -706,6 +712,7 @@ function insertWorkDur(turn,row){
 }
 function ensureWorkDur(log){
   if(log._history||log._closed) return;                 // 回放不起实时行；已中断的回合不再拉起新计时行
+  if(log._notifyTurn) return;                           // 后台回执回合：通知不计时，不拉「已工作」行
   if(!log._turnStartTs) log._turnStartTs=Date.now();
   if(log._durRow) return;
   const turn=ensureTurn(log);
@@ -777,10 +784,12 @@ function renderEvent(log, ev, sid){
   if(ev.ts) log._lastTs = (typeof ev.ts==="string" ? Date.parse(ev.ts) : ev.ts) || log._lastTs;
   if(k==="turn_started"){
     stopWorkDurTick(log); log._durRow=null;             // 新回合：上一回合的实时计时行已定格，清引用
-    log._closed=false; log._liveR=false;                // 思考对账标记随回合重置
+    log._closed=false; log._liveR=false; log._notifyTurn=false;   // 思考对账/回执计时豁免标记随回合重置
     log._turnStartTs=log._lastTs||Date.now(); return;   // 只记起点（计时行随首个内容事件出现）
   }
-  if(k!=="user_message") ensureWorkDur(log);            // 内容事件：确保「已工作」计时行已在（实时态）
+  if(k!=="user_message" && k!=="note") ensureWorkDur(log);  // 内容事件：确保「已工作」计时行已在（实时态）。
+                                                            // note 豁免：回合间隙的 note 若拉起计时行，
+                                                            // 无人收口就成永久跳动的幽灵行（09-15 事故）。
   if(k==="text_delta"){
     closeCtxGroup(log);
     if(!log._sb){ closeReasoning(log); const b=el("bubble bare md"); ensureTurn(log).append(b); log._sb=b; log._raw=""; }
@@ -847,14 +856,20 @@ function renderEvent(log, ev, sid){
         +`<span class="tc-st ${st==="failed"?"bad":"ok"}" title="${esc(st)}">${st==="failed"?ICON_X:ICON_CHECK}</span>`
         +`<span class="tc-g">🛰</span>`
         +`<span class="tc-name">后台子任务完成</span>`
-        +(id2?`<span class="tc-sub">${esc(id2)}</span>`:"")
+        +(id2?`<span class="tc-sub" title="${esc(id2)}">${esc(id2.length>24?id2.slice(0,12)+"…"+id2.slice(-5):id2)}</span>`:"")
         +`<span class="tc-badge">${esc(st==="failed"?"失败":"完成")}</span>`
         +`<span class="tc-chev">▾</span></button>`
         +`<div class="tc-body" hidden><div class="tterm">${esc(body||"（无输出）")}</div></div>`;
       card.querySelector(".tc-trig").addEventListener("click",()=>{
         const b=card.querySelector(".tc-body"); b.hidden=!b.hidden; card.classList.toggle("open",!b.hidden);
       });
-      ensureTurn(log).append(card); log._stick=true; stickScroll(log); return;
+      // 回执开头的回合是「通知」不是「干活」：掐掉本回合的「已工作」计时行（realtime 通路，
+      // 悬空的计时器行很怪）；turn_started 时随回合复位。回合打 .notify 标记：它没有用户
+      // 气泡也没有计时行做锚点，光靠默认留白与上一回合分不开，读感像两条贴在一起的渲染
+      // 异常（2026-09-15 反馈）——CSS 据此画虚线分界并加大上距，明确「这是新的一条」。
+      log._notifyTurn=true;
+      const nt=ensureTurn(log); nt.classList.add("notify"); nt.append(card);
+      log._stick=true; stickScroll(log); return;
     }
     log._sb=null; closeReasoning(log); ensureTurn(log).append(el("user-chip", esc(ev.text))); log._stick=true; stickScroll(log);
   }
@@ -885,7 +900,7 @@ function renderEvent(log, ev, sid){
       // 拒绝没有工具卡跟随，「✕ 已拒绝」是唯一痕迹，保留。
       markInteractLine(log,"callid",ev.call_id||"","✕ 已拒绝",false);
     }
-    removeInteractCard(".approval","callid",ev.call_id||"");
+    removeInteractCard(".approval","callid",ev.call_id||"",log);
   }
   else if(k==="question_asked"){ log._sb=null; closeCtxGroup(log); hideTyping(log);
     // 挂起观感：计时行文案切「等待回答」；答题卡本体挂交互槽（ZCode 式弹窗），答完即撤。
@@ -897,7 +912,7 @@ function renderEvent(log, ev, sid){
   }
   else if(k==="question_resolved"){
     log._qwait=false;                            // 问句行落定由 tool_result 负责（output 即答案）
-    removeInteractCard(".qcard","rid",ev.request_id||"");
+    removeInteractCard(".qcard","rid",ev.request_id||"",log);
   }
   else if(k==="turn_ended"){
     log._sb=null; hideTyping(log); closeCtxGroup(log); closeReasoning(log); log._qwait=false;
@@ -932,9 +947,13 @@ function renderEvent(log, ev, sid){
     log._turn=null;
   }
   else if(k==="note"){ log._sb=null; closeCtxGroup(log);
-    // 回合间隙的 note（计划模式开/关等状态线）不能开新回合：ensureTurn 若为它建 .turn，
-    // 下一条 user_message 会被吞进同一回合，「已工作」计时行翻到用户气泡上方、note 本体
-    // 又被折叠 CSS 藏掉（2026-09-15 排版事故）。无开启回合时比照 queueNote 挂线程根。
+    // 计划模式状态线（已开启/已关闭/已退出…）不进时间线：模式状态由输入区 chip + 切换
+    // toast 承担，浮在回合之间的独立小字既突兀也无信息量（用户反馈 2026-09-15）。后端仍
+    // 落库作审计（何时进/出只读档），仅展示层滤除；旧日志里已持久化的同类事件同此滤除。
+    if((ev.text||"").startsWith("计划模式")) return;
+    // 其余回合间隙的 note（⚠ 处理出错等）不能开新回合：ensureTurn 若为它建 .turn，
+    // 下一条 user_message 会被吞进同一回合，「已工作」计时行翻到用户气泡上方（2026-09-15
+    // 排版事故）。无开启回合时比照 queueNote 挂线程根。
     const inTurn=!!log._turn;
     (inTurn?log._turn:log).append(el("meta note"+(inTurn?"":" solo"),esc(ev.text||"")));
   }

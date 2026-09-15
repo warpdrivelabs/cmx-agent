@@ -899,7 +899,11 @@ fn main() {
                         // 在 Lagged 时直接终结转发 task，审批卡/消息/工具结果从此不再推前端，
                         // 挂起的审批只能等 300s 超时拒绝（长回合/多通道并发正是 lag 高发场景）。
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            eprintln!("[bus] session_event 落后 {n} 帧，已续收（前端可重拉会话补齐）");
+                            eprintln!("[bus] session_event 落后 {n} 帧，已续收（通知前端重拉补齐）");
+                            // 丢帧段无法凭空补：广播 `session_resync`，前端把打开中的会话 tab
+                            // 标脏并整屏重拉落库事件（红蓝审查 P3-5——旧实现只打日志，丢的
+                            // 事件要等用户手动重开 tab 才回来）。
+                            let _ = handle.emit("session_resync", ());
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }

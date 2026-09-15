@@ -143,21 +143,23 @@ fn load_missing_is_not_found() {
 }
 
 #[test]
-fn corrupt_line_is_detected() {
+fn corrupt_line_is_skipped_not_fatal() {
     let tmp = TempDir::new("store-corrupt");
     let store = FileSessionStore::new(tmp.path()).unwrap();
     store.append_events("s1", &sample_events()).unwrap();
-    // 中段坏行 = 真损坏：仍须报 Corrupt（末行残迹才可跳过自愈，见下方测试）
+    // 中段坏行=并发残迹/崩溃残留：跳过并恢复其余事件（红蓝审查 P2-5 放宽——双壳共享数据根后
+    // 中段交错残迹会砖死整个会话，比丢一行审计事件更伤；模型上下文对孤儿工具调用合成 interrupted）。
     let path = tmp.path().join("sessions/s1/log.jsonl");
     let content = std::fs::read_to_string(&path).unwrap();
     let mut lines: Vec<String> = content.lines().map(String::from).collect();
     lines.insert(lines.len() / 2, "{not valid json}".into());
     std::fs::write(&path, lines.join("\n") + "\n").unwrap();
 
-    let err = store.load("s1").unwrap_err();
-    assert!(
-        matches!(err, AppError::Corrupt(_)),
-        "bad line must be reported as Corrupt"
+    let session = store.load("s1").unwrap();
+    assert_eq!(
+        session.log.len(),
+        sample_events().len(),
+        "除坏行外其余事件应完整恢复"
     );
 }
 
@@ -179,7 +181,7 @@ fn trailing_partial_line_is_tolerated() {
 fn path_injection_is_rejected() {
     let tmp = TempDir::new("store-inject");
     let store = FileSessionStore::new(tmp.path()).unwrap();
-    for bad in ["../evil", "a/b", "..", "", "x\0y"] {
+    for bad in ["../evil", "a/b", "..", "", "x\0y", "CON", "nul", "Com1", "abc.", "x "] {
         let err = store.append_events(bad, &sample_events()).unwrap_err();
         assert!(
             matches!(err, AppError::BadRequest(_)),

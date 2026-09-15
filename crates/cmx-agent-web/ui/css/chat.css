@@ -53,7 +53,7 @@
   .composer .model:hover{background:var(--hover)}
   .composer .send{width:34px;height:34px;border-radius:50%;background:var(--surface);color:var(--ink);
     display:flex;align-items:center;justify-content:center;font-size:15px}
-  .composer .send:hover{background:var(--aqua);color:#052} .composer .send:disabled{opacity:.4}
+  .composer .send:hover{background:var(--aqua);color:#fff} .composer .send:disabled{opacity:.4}
   .selectors{display:flex;gap:10px;margin-top:12px;max-width:820px;width:100%}
   /* 壳即 chip 本体（与 .workspace-btn 同规格）；内层 cmx-dd-trigger 透明化，防双层 padding 撑出大块 */
   .selbtn{display:flex;align-items:center;gap:7px;padding:5px 11px;border-radius:9px;color:var(--ink2);font-size:12.5px;
@@ -168,7 +168,6 @@
   .tool .apbtn.allow:hover{filter:brightness(1.08)}
   .tool .apbtn.reject{color:var(--ink2)} .tool .apbtn.reject:hover{border-color:var(--red);color:var(--red)}
   .tool .apbtn.allowall{color:var(--gold);border-color:var(--border2);font-weight:500} .tool .apbtn.allowall:hover{border-color:var(--gold);background:color-mix(in srgb,var(--gold) 10%,transparent)}
-  .tool .apresolved{margin-top:5px;font-size:12px;font-weight:500} .tool .apresolved.ok{color:var(--green2)} .tool .apresolved.no{color:var(--red)}
   .meta.apauto{color:var(--gold);opacity:.85}
   .loadmore{align-self:center;margin:2px 0 12px;padding:6px 16px;border-radius:999px;font-size:12.5px;color:var(--ink2);background:var(--panel);border:1px solid var(--border2);cursor:pointer}
   .loadmore:hover{border-color:var(--aqua);color:var(--aqua)}
@@ -510,3 +509,7 @@
 .task-result .tc-name{ color:var(--aqua); }
 .task-result.tr-fail .tc-name{ color:var(--red); }
 .task-result .tc-body .tterm{ white-space:pre-wrap;word-break:break-word; }
+
+/* 回执回合（render.js 打 .notify）：无用户气泡/计时行做锚点，光靠默认留白与上一回合
+   分不开，读感像两条贴在一起的渲染异常（2026-09-15 反馈）——画虚线分界 + 加大上距。 */
+.turn.notify{ margin-top:22px;padding-top:12px;border-top:1px dashed var(--border2); }

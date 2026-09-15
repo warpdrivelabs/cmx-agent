@@ -41,7 +41,11 @@ function activateTab(id){
   const t=findTab(id);
   CURRENT = (t && t.kind==="session") ? t.sessionId : null;
   renderTabs();
-  if(t && t.kind==="session"){ const inp=t.view.querySelector(".inp2"); if(inp) inp.focus(); }
+  if(t && t.kind==="session"){
+    // 总线丢帧标脏的 tab（session_resync）：激活时补拉落库事件（红蓝审查 P3-5）
+    if(t._stale && typeof resyncSessionTab==="function") resyncSessionTab(t);
+    const inp=t.view.querySelector(".inp2"); if(inp) inp.focus();
+  }
 }
 
 // 打开或聚焦一个 tab

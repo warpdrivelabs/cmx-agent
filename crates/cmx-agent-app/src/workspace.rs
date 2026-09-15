@@ -300,6 +300,17 @@ impl WorkspaceRegistry {
             .map(|w| w.path.clone()))
     }
 
+    /// 查指定空间的 `(id, name, root)` 上下文（红蓝审查 P2-4：系统提示词的空间段落按
+    /// 会话所属空间生成时用，与 [`Self::current_context`] 同形）。空间不存在返回 `None`。
+    pub fn context_for(&self, id: &str) -> Option<(String, String, PathBuf)> {
+        let state = self.state.read().expect("workspace state");
+        state
+            .items
+            .iter()
+            .find(|w| w.id == id)
+            .map(|w| (w.id.clone(), w.name.clone(), w.path.clone()))
+    }
+
     pub fn search_files(&self, query: &str, limit: usize) -> AppResult<Vec<WorkspaceFile>> {
         let Some(root) = self.current_path() else {
             return Ok(Vec::new());
@@ -709,8 +720,12 @@ mod tests {
 
         let reg = WorkspaceRegistry::load_or_init(&tmp, None).unwrap();
         reg.add_local(&local.to_string_lossy(), None).unwrap();
-        // add_local 会 canonicalize（macOS 下 /var → /private/var），断言按同口径比较。
-        assert_eq!(reg.current_path().unwrap(), local.canonicalize().unwrap());
+        // add_local 会 canonicalize 后经 displayable_path 归一化落库（macOS 下 /var → /private/var；
+        // Windows 的 canonicalize 会带 \\?\ 逐字前缀，落库时剥掉），断言按落库同口径比较。
+        assert_eq!(
+            reg.current_path().unwrap(),
+            displayable_path(local.canonicalize().unwrap())
+        );
         assert!(reg
             .search_files("readme", 10)
             .unwrap()

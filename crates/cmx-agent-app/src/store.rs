@@ -100,12 +100,21 @@ impl FileSessionStore {
     }
 
     fn session_dir(&self, id: &str) -> AppResult<PathBuf> {
-        // 防路径注入：会话 id 不得含分隔符 / .. 。
+        // 防路径注入：会话 id 不得含分隔符 / .. / 空字符。
+        // 另挡 Windows 保留设备名与结尾点/空格（红蓝审查 P3-2）：CON/NUL 等在 Windows 上是
+        // 设备语义、结尾点/空格会被系统剥除，都会造成目录创建/读写行为异常。
+        const RESERVED: [&str; 22] = [
+            "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+            "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        ];
         if id.is_empty()
             || id.contains('/')
             || id.contains('\\')
             || id.contains("..")
             || id.contains('\0')
+            || id.ends_with('.')
+            || id.ends_with(' ')
+            || RESERVED.iter().any(|r| id.eq_ignore_ascii_case(r))
         {
             return Err(AppError::BadRequest(format!("illegal session id '{id}'")));
         }
@@ -129,14 +138,19 @@ impl SessionStore for FileSessionStore {
         let dir = self.session_dir(session_id)?;
         std::fs::create_dir_all(&dir)?;
         let path = self.log_path(session_id)?;
+        // 整批序列化后**一次写入**（红蓝审查 P2-5）：逐行 write 在双进程并发（Tauri 壳 +
+        // Web 壳共享数据根）时交错窗口是每行一次，单次 write_all 把交错窗口压到一个批量，
+        // 也省 N-1 次系统调用。
+        let mut buf = String::new();
+        for ev in events {
+            buf.push_str(&serde_json::to_string(ev)?);
+            buf.push('\n');
+        }
         let mut f = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&path)?;
-        for ev in events {
-            let line = serde_json::to_string(ev)?;
-            writeln!(f, "{line}")?;
-        }
+        f.write_all(buf.as_bytes())?;
         f.flush()?;
         Ok(())
     }
@@ -151,7 +165,6 @@ impl SessionStore for FileSessionStore {
         let reader = BufReader::new(file);
         let mut events = Vec::new();
         let lines: Vec<String> = reader.lines().collect::<Result<_, _>>()?;
-        let last = lines.len().saturating_sub(1);
         for (i, raw) in lines.iter().enumerate() {
             let line = raw.trim();
             if line.is_empty() {
@@ -160,16 +173,11 @@ impl SessionStore for FileSessionStore {
             match serde_json::from_str::<SessionEvent>(line) {
                 Ok(ev) => events.push(ev),
                 Err(e) => {
-                    // 末行损坏 = 进程中断的 append 残迹（行写非原子）：跳过可自愈；
-                    // 中段坏行 = 真损坏：仍报 Corrupt，不静默吞数据。
-                    if i == last {
-                        eprintln!("[store] 会话 {session_id} 末行损坏（疑似崩溃残迹），已跳过：{e}");
-                    } else {
-                        return Err(AppError::Corrupt(format!(
-                            "session '{session_id}' line {}: {e}",
-                            i + 1
-                        )));
-                    }
+                    // 坏行一律跳过并告警（红蓝审查 P2-5 放宽）：双壳共享数据根后，两进程并发
+                    // append 可能在**中段**留下交错残迹——旧实现中段坏行报 Corrupt 砖死整个会话
+                    //（双壳一起读不了），比丢一行审计事件更伤。跳过的代价可控：模型上下文对孤儿
+                    // 工具调用会合成 interrupted 结果（model_context），seq 水位取 max 不回退。
+                    eprintln!("[store] 会话 {session_id} 第 {} 行损坏（并发残迹或崩溃残留），已跳过：{e}", i + 1);
                 }
             }
         }

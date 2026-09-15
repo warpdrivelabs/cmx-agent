@@ -247,7 +247,18 @@ if(window.__TAURI__ && window.__TAURI__.event){
     try { console.log("[session_event] recv", JSON.stringify(e && e.payload)); } catch(err){ console.log("[session_event] recv (unserializable)", e && e.payload); }
     onSessionEvent(e.payload);
   });
+  // 总线丢帧重同步（红蓝审查 P3-5）：壳在 event bus Lagged 时广播，前端标脏+重拉落库事件。
+  window.__TAURI__.event.listen("session_resync", () => { if(typeof resyncOpenSessions==="function") resyncOpenSessions(); });
   console.log("[session_event] 监听已注册");
 } else {
   console.log("[session_event] 未注册：window.__TAURI__.event 不可用");
+  // Web 壳实时通路（U16 落地，红蓝审查 P1-2）：EventSource 订阅 /api/subscribe，同一
+  // onSessionEvent 分流——后台子任务回执 / IM 会话事件实时上屏，不再「落库才可见」。
+  // 本地回合由 STREAMING 标记（bridge.js web 分支）交还给 streamSend 流式通道，不重复渲染。
+  try{
+    const es = new EventSource("/api/subscribe");
+    es.onmessage = (m)=>{ try{ onSessionEvent(JSON.parse(m.data)); }catch(e){} };
+    es.onerror = ()=>{ /* 断线 EventSource 自动重连，无需打扰用户 */ };
+    console.log("[session_event] EventSource(/api/subscribe) 已注册");
+  }catch(e){ console.warn("[session_event] EventSource 不可用", e); }
 }

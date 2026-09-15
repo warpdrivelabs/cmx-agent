@@ -27,6 +27,13 @@ const PLAN_MODE_PROMPT_SECTION: &str = "\n\n【计划模式】当前处于计划
 完成后调用 exit_plan 工具提交计划请求用户批准。不得宣称已修改任何文件；\
 被拒绝的工具不要重试，改用白名单内的只读工具继续调研，或直接调用 exit_plan。";
 
+/// 后台子任务回执回合（<task_result> 注入）追加的系统提示词章节：完成状态与完整原文已由
+/// 界面系统卡承载，约束父模型转述措辞——不复述状态语、不整段引用原文（09-15「卡片+转述+
+/// 引用」三连冗余收敛）。同计划模式章节模式：只改本回合模型上下文，不落日志。
+const TASK_RESULT_PROMPT_SECTION: &str = "\n\n【后台子任务回执】刚收到的 <task_result> 回执已作为\
+系统卡片向用户展示（含完成状态与完整输出）。请勿复述「子任务已完成」等状态语，也不要整段引用回执\
+原文；直接给出基于结果实质内容的回答、整理或后续动作；若无实质内容可说，简短说明即可。";
+
 /// 一个回合的对外结果（含新产生的事件条数，便于前门增量渲染）。
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SendOutcome {
@@ -402,6 +409,12 @@ impl AgentApp {
     ) -> bool {
         match &self.approver {
             Some(a) => {
+                // 会话绑定强制（红蓝审查 P2-3）：空 session_hint 一律拒绝——与提问服务同规。
+                // （审批者内部清理路径 revoke_all/cancel_session 走 InteractiveApprover::decide
+                // 原语、不经本前门入口，不受此限。）
+                if session_id.is_empty() {
+                    return false;
+                }
                 let hit = a.decide(call_id, approved, session_id, note);
                 // 只有确实命中一个待决审批才授予「全部允许」——空点/重复点击/跨会话误投
                 // 不得静默关闭整会话的审批门。
@@ -1187,6 +1200,13 @@ impl AgentApp {
         if id.is_empty() {
             return Err(AppError::BadRequest("empty session id".into()));
         }
+        // 保留前缀（红蓝审查 P3-2）：subtask- 是子智能体会话的内部命名空间，会话列表按前缀
+        // 隐匿它们——用户显式创建同前缀 id 会得到「列表里看不见」的隐身会话。
+        if id.starts_with("subtask-") {
+            return Err(AppError::BadRequest(
+                "会话 id 不能使用保留前缀 subtask-".into(),
+            ));
+        }
         if self.store.list()?.iter().any(|m| m.id == id) {
             return Ok(id);
         }
@@ -1372,6 +1392,13 @@ impl AgentApp {
         // 且不再写共享 policy（旧实现两会话并发回合互相覆盖对方的工作空间根）。
         let turn_roots = self.session_workspace_roots(session_id)?;
 
+        // 系统提示词与回合根同源（红蓝审查 P2-4）：提示词里的空间段落按**会话所属空间**生成
+        //（无绑定/空间已移除时回合根回落共享 policy 的当前空间，提示词同规回落），
+        // 旧实现恒用全局当前空间，切空间后回旧会话发消息会「提示词说 A、工具落 B」。
+        if let Some(sys) = self.session_system_prompt(session_id) {
+            session = session.with_system(sys);
+        }
+
         // 计划模式（阶段二）：回合开始插活开关（值 = meta.plan_mode），整个回合任务树在
         // TURN_PLAN_MODE 作用域内（PlanModeGuard 每批现读）；收尾摘除并对账回写 meta——
         // 覆盖 exit_plan 批准后同回合翻旗标的落盘（§7.1）。
@@ -1391,6 +1418,13 @@ impl AgentApp {
             // 计划模式回合追加固定章节（§7.3）：session.system 每回合都由 current_system_prompt
             // 重置，此处追加只影响本回合的模型上下文。
             let sys = self.current_system_prompt().unwrap_or_default() + PLAN_MODE_PROMPT_SECTION;
+            session = session.with_system(sys);
+        }
+        // 后台子任务回执回合（阶段三注入器经 app.send 送达，桌面/IM/CLI 三通道全在 send_inner
+        // 汇聚）：检测 <task_result 前缀，本回合追加转述措辞章节。放在计划模式块之后，
+        // session.system() 已含该有的一切，直接续加不会互相覆盖。
+        if user_input.starts_with("<task_result") {
+            let sys = session.system().unwrap_or_default().to_string() + TASK_RESULT_PROMPT_SECTION;
             session = session.with_system(sys);
         }
 
@@ -1456,7 +1490,9 @@ impl AgentApp {
                 session.log.append(cmx_agent_core::event::EventKind::Note {
                     text: msg.clone(),
                 });
-                let turn = session.next_turn_no().saturating_sub(1);
+                // turn 号 = 本回合应有编号（内核 TurnStarted 也取 next_turn_no()，红蓝审查 P3-6：
+                // 旧实现的 -1 会把错误收尾记到上一个已完成回合头上）。
+                let turn = session.next_turn_no();
                 session.log.append(cmx_agent_core::event::EventKind::TurnEnded {
                     turn,
                     reason: cmx_agent_core::event::StopReason::Error,
@@ -1698,6 +1734,51 @@ impl AgentApp {
             Some(id) => registry.roots_for(&id),
             None => Ok(None),
         }
+    }
+
+    /// 会话视角的工作空间上下文 `(id, name, root)`（红蓝审查 P2-4）：会话绑定的空间在册且
+    /// 根可解析 → 该空间；否则 `None`（调用方回落全局当前空间，与 [`Self::session_workspace_roots`]
+    /// 返回 None 时回合根的回落目标同源）。
+    fn session_workspace_context(
+        &self,
+        session_id: &str,
+    ) -> Option<(String, String, std::path::PathBuf)> {
+        let registry = self.workspaces.as_ref()?;
+        let workspace_id = self
+            .store
+            .list()
+            .ok()?
+            .into_iter()
+            .find(|m| m.id == session_id)
+            .and_then(|m| m.workspace_id)?;
+        // 空间已移除 → roots_for 为 None → 回落（与回合根行为一致）。
+        match registry.roots_for(&workspace_id).ok().flatten() {
+            Some(_) => registry.context_for(&workspace_id),
+            None => None,
+        }
+    }
+
+    /// 系统提示词（**会话同源版**，send_inner 每回合重建 session.system 时用）：
+    /// 空间段落按会话所属空间生成；无绑定/已移除时回落全局当前空间，再无则「未绑定」。
+    fn session_system_prompt(&self, session_id: &str) -> Option<String> {
+        let base = self.default_system.clone().unwrap_or_else(|| {
+            "你是 cmx 企业桌面智能体。用简洁中文回答，优先动手完成用户任务。".to_string()
+        });
+        let context = match self
+            .session_workspace_context(session_id)
+            .or_else(|| {
+                self.workspaces
+                    .as_ref()
+                    .and_then(|w| w.current_context())
+            }) {
+            Some((_, name, path)) => format!(
+                "\n\n当前工作空间：{name}\n工作空间根：{}\n文件操作使用相对该根的路径；用户用 @ 引用的文件也相对该根解析。\
+                 用户输入以 / 开头时，斜杠后是技能名，请优先调用同名工具完成后续诉求。",
+                path.display()
+            ),
+            None => "\n\n当前未绑定工作空间：这是普通任务，不要主动创建或改写本地文件。".to_string(),
+        };
+        Some(base + &context)
     }
 
     /// 技能 = 当前已注册工具。前端 / 菜单只做选择，发送后模型仍经工具契约与守卫执行。
