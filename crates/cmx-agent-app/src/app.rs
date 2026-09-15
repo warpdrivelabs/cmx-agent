@@ -471,6 +471,28 @@ impl AgentApp {
         }
     }
 
+    /// 某父会话当前活动子任务快照（方案 20260915 可视化 B4/F4 恢复层）：
+    /// 页面刷新/重开后，前端据此重建「后台执行中」卡、续流子事件、并逐个补查子会话挂起的审批。
+    /// 项在子任务收尾/级联取消时即摘除（登记与取消同源同生命周期）。
+    pub fn list_active_subtasks(&self, parent_id: &str) -> Vec<serde_json::Value> {
+        match &self.subagents {
+            Some(h) => h
+                .active_for_parent(parent_id)
+                .into_iter()
+                .map(|t| {
+                    serde_json::json!({
+                        "task_id": t.sub_id,
+                        "description": t.description,
+                        "subagent_type": t.subagent_type,
+                        "background": t.background,
+                        "started_at_ms": t.started_at_ms,
+                    })
+                })
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
     /// 登录：校验凭据（对接门户 /api/auth/login）→ 成功后置入当前用户 → 返回前端可见用户信息（不含令牌）。
     pub async fn login(&self, username: &str, password: &str) -> AppResult<serde_json::Value> {
         let auth = self
@@ -2097,6 +2119,7 @@ impl AgentApp {
         self.store.append_events(session_id, std::slice::from_ref(&note))?;
         self.event_bus.publish(crate::bus::EventEnvelope {
             session_id: session_id.to_string(),
+            parent: None, // 父会话自身的系统 note，非子智能体事件
             event: note,
         });
         // 有进行中回合时同步翻活 flag（立刻生效；无回合时下回合按 meta 读初值）。

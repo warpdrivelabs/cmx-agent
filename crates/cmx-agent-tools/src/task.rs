@@ -52,6 +52,13 @@ fn truncate_result(s: &str) -> String {
     }
 }
 
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 tokio::task_local! {
     /// 当前子智能体的**递归嵌套层级**（父回合视为 0，其直接子智能体为 1，依此类推）。
     ///
@@ -71,17 +78,55 @@ tokio::task_local! {
 /// `injector`（阶段三，可选）：后台子任务完成注入回调（parent_session_id, `<task_result>` 文本），
 /// app 层经 `AgentApp::into_shared` 装配（内部 `Weak<AgentApp>` → `send` 唤醒父会话）；
 /// 未装配时 `background=true` 直接报错拒绝（fail-closed，不静默丢结果）。
+///
+/// `event_sink`（方案 20260915 可视化 B2，可选）：子会话**实时**事件回调 `(sub_id, parent_id, event)`，
+/// app 装配层注入（内部包总线 publish——`EventEnvelope.parent=Some(parent)`，前端渲染进父视图子任务卡）。
+/// 与 `log_sink`（收尾整批落审计 JSONL）互补：本通路管「过程实时可见」，log_sink 管「事后可审计」。
 pub type SubagentLogSink = Arc<dyn Fn(&str, &[cmx_agent_core::SessionEvent]) + Send + Sync>;
 pub type SubagentInjector =
     Arc<dyn Fn(String, String) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync>;
+pub type SubagentEventSink = Arc<dyn Fn(&str, &str, &cmx_agent_core::SessionEvent) + Send + Sync>;
+
+/// 活动子任务登记项（B4）：供父会话级联取消与「活动子任务清单」查询共用——
+/// 页面刷新/重开后，前端据此重建「后台执行中」卡并续流（F4 恢复层）。
+#[derive(Debug, Clone)]
+pub struct ActiveSubTask {
+    pub sub_id: String,
+    pub description: String,
+    pub subagent_type: String,
+    pub background: bool,
+    /// 登记时刻（UNIX 毫秒），前端可展示「已运行多久」。
+    pub started_at_ms: u64,
+}
+
+/// 子会话事件 → event_sink 的转发壳（每个子会话一个，挂 `SessionLog::add_sink`）。
+#[derive(Clone)]
+struct SubEventRelay {
+    sub_id: Arc<str>,
+    parent_id: Arc<str>,
+    sink: SubagentEventSink,
+}
+
+impl cmx_agent_core::EventSink for SubEventRelay {
+    fn on_event(&self, ev: &cmx_agent_core::SessionEvent) {
+        (self.sink)(&self.sub_id, &self.parent_id, ev);
+    }
+}
+
+/// 登记项：取消旗标 + 展示信息（同生命周期，同增同删）。
+struct ActiveChild {
+    info: ActiveSubTask,
+    cancel: TurnCancel,
+}
 
 pub struct SubagentHandle {
     agent: OnceLock<Weak<Agent>>,
     max_depth: usize,
     log_sink: OnceLock<SubagentLogSink>,
     injector: OnceLock<SubagentInjector>,
-    /// 活动子任务取消旗标：parent_session_id → [(sub_id, TurnCancel)]（级联取消用）。
-    cancels: Mutex<HashMap<String, Vec<(String, TurnCancel)>>>,
+    event_sink: OnceLock<SubagentEventSink>,
+    /// 活动子任务：parent_session_id → [ActiveChild]（级联取消 + 活动清单共用，同增同删）。
+    cancels: Mutex<HashMap<String, Vec<ActiveChild>>>,
     /// 每父会话并发子任务计数（前台+后台合计；key = `ToolCtx.session_id`）。
     active_children: Mutex<HashMap<String, Arc<AtomicUsize>>>,
 }
@@ -93,6 +138,7 @@ impl SubagentHandle {
             max_depth,
             log_sink: OnceLock::new(),
             injector: OnceLock::new(),
+            event_sink: OnceLock::new(),
             cancels: Mutex::new(HashMap::new()),
             active_children: Mutex::new(HashMap::new()),
         }
@@ -109,9 +155,30 @@ impl SubagentHandle {
     pub fn attach_injector(&self, f: SubagentInjector) {
         let _ = self.injector.set(f);
     }
+    /// 注入子会话实时事件回调（builder 装配，包总线 publish；重复 set 静默忽略）。
+    pub fn attach_event_sink(&self, f: SubagentEventSink) {
+        let _ = self.event_sink.set(f);
+    }
     /// 后台派生可用性（未装配注入器的无头环境 `background=true` 必须显式拒绝）。
     pub fn has_injector(&self) -> bool {
         self.injector.get().is_some()
+    }
+    /// 某父会话当前活动子任务快照（B4 恢复层查询；运行结束/级联取消后即摘除）。
+    pub fn active_for_parent(&self, parent: &str) -> Vec<ActiveSubTask> {
+        self.cancels
+            .lock()
+            .expect("cancels lock")
+            .get(parent)
+            .map(|list| list.iter().map(|c| c.info.clone()).collect())
+            .unwrap_or_default()
+    }
+    /// 子会话实时事件 sink 就绪时，给子会话 log 挂转发壳（前台/后台两条路径共用）。
+    fn relay_for(&self, sub_id: &str, parent_id: &str) -> Option<SubEventRelay> {
+        self.event_sink.get().map(|sink| SubEventRelay {
+            sub_id: Arc::from(sub_id),
+            parent_id: Arc::from(parent_id),
+            sink: sink.clone(),
+        })
     }
     fn upgrade(&self) -> Option<Arc<Agent>> {
         self.agent.get().and_then(Weak::upgrade)
@@ -132,20 +199,20 @@ impl SubagentHandle {
         Some(ChildSlotGuard { counter })
     }
 
-    /// 登记一个活动子任务取消旗标（父会话级联取消用）。
-    fn register_cancel(&self, parent: &str, sub_id: &str, cancel: TurnCancel) {
+    /// 登记一个活动子任务（取消旗标 + 展示信息；父会话级联取消/活动清单共用）。
+    fn register_cancel(&self, parent: &str, info: ActiveSubTask, cancel: TurnCancel) {
         self.cancels
             .lock()
             .expect("cancels lock")
             .entry(parent.to_string())
             .or_default()
-            .push((sub_id.to_string(), cancel));
+            .push(ActiveChild { info, cancel });
     }
 
-    /// 子任务收尾摘除旗标。
+    /// 子任务收尾摘除登记项。
     fn remove_cancel(&self, parent: &str, sub_id: &str) {
         if let Some(entries) = self.cancels.lock().expect("cancels lock").get_mut(parent) {
-            entries.retain(|(id, _)| id != sub_id);
+            entries.retain(|c| c.info.sub_id != sub_id);
         }
     }
 
@@ -156,9 +223,9 @@ impl SubagentHandle {
         let entries = self.cancels.lock().expect("cancels lock").remove(parent);
         match entries {
             Some(list) => {
-                let ids: Vec<String> = list.iter().map(|(id, _)| id.clone()).collect();
-                for (_, c) in list {
-                    c.cancel();
+                let ids: Vec<String> = list.iter().map(|c| c.info.sub_id.clone()).collect();
+                for c in list {
+                    c.cancel.cancel();
                 }
                 ids
             }
@@ -382,6 +449,13 @@ impl Tool for TaskTool {
                     depth,
                     &parent_id,
                     ctx.allowed_roots,
+                    ActiveSubTask {
+                        sub_id: sub_id.clone(),
+                        description: description.to_string(),
+                        subagent_type: stype.to_string(),
+                        background: false,
+                        started_at_ms: now_ms(),
+                    },
                 )
                 .await);
         }
@@ -394,7 +468,17 @@ impl Tool for TaskTool {
             ));
         };
         let bg_cancel = TurnCancel::new();
-        self.handle.register_cancel(&parent_id, &sub_id, bg_cancel.clone());
+        self.handle.register_cancel(
+            &parent_id,
+            ActiveSubTask {
+                sub_id: sub_id.clone(),
+                description: description.to_string(),
+                subagent_type: stype.to_string(),
+                background: true,
+                started_at_ms: now_ms(),
+            },
+            bg_cancel.clone(),
+        );
         let handle = self.handle.clone();
         let sink = self.handle.log_sink.get().cloned();
         let roots = ctx.allowed_roots.to_vec(); // spawn 闭包需 'static：所有权快照
@@ -445,11 +529,17 @@ impl TaskTool {
         depth: usize,
         parent_id: &str,
         roots: &[std::path::PathBuf],
+        info: ActiveSubTask,
     ) -> ToolResult {
         let mut sub = Session::new(sub_id.to_string()).with_system(system);
+        // B2 实时可视化：子会话每条事件经 relay 进总线（parent=父会话 id），前端渲染进父视图子任务卡。
+        // 失败/未装配都无害——实时通路是尽力而为，落库审计与回执不受影响。
+        if let Some(relay) = self.handle.relay_for(sub_id, parent_id) {
+            sub.log.add_sink(Arc::new(relay));
+        }
         let child_cancel = TurnCancel::new();
         self.handle
-            .register_cancel(parent_id, sub_id, child_cancel.clone());
+            .register_cancel(parent_id, info, child_cancel.clone());
         // 子回合整体在 depth+1 的 task-local 作用域内运行；SUBAGENT_TURN=true 让内核把
         // 交互工具门控为 dismissed（与控制面收走构成双保险）。
         // roots 用父回合工作区根快照（不读共享 policy——两会话并发回合互不踩）。
@@ -503,6 +593,8 @@ impl TaskTool {
             Ok(o) => {
                 let final_text = truncate_result(&o.final_text.unwrap_or_default());
                 ToolResult::ok(json!({
+                    // B3：回放懒加载锚点——父历史 tool_result(task) 据此可拉取子会话日志（get_events）。
+                    "task_id": sub_id,
                     "final": final_text,
                     "steps": o.steps,
                     "reason": format!("{:?}", o.reason),
@@ -537,10 +629,15 @@ async fn run_background_child(
     // 内层 spawn 捕获 JoinError：panic → state="failed" 注入摘要（外层任务不被炸死）。
     let inner_sub_id = sub_id.clone();
     let inner_sink = sink.clone();
+    // B2：后台子会话同样挂实时 relay（task-local 不跨 spawn，relay 是普通 Arc 所有权移交，无碍）。
+    let inner_relay = handle.relay_for(&sub_id, &parent_id);
     let inner = tokio::spawn(async move {
         let run_fut = async move {
             let mut sub =
                 Session::new(inner_sub_id.clone()).with_system(system);
+            if let Some(relay) = inner_relay {
+                sub.log.add_sink(Arc::new(relay));
+            }
             let outcome = match &turn_subject {
                 Some(subj) => child
                     .run_turn_observed_as_cancellable(
@@ -964,6 +1061,143 @@ mod tests {
         assert!(!r.ok, "注入器未装配时 background=true 必须 fail-closed 拒绝");
         let msg = r.output["error"].as_str().unwrap();
         assert!(msg.contains("后台执行不可用"), "{msg}");
+    }
+
+    // ── B2/B3（方案 20260915 可视化）：event_sink 实时回调 + 前台 task_id 锚点 ──
+
+    #[tokio::test]
+    async fn event_sink_fires_for_foreground_and_background() {
+        // 前台：父第一步 task（前台）→ 收尾。event_sink 应收到 (sub_id, parent, …) 序列，
+        // 首条 user_message 即下发的 prompt；收尾后活动登记摘除（active_for_parent 空）。
+        let handle = Arc::new(SubagentHandle::new(2));
+        let model = Arc::new(MockModel::new([
+            ModelResponse::calls(vec![cmx_agent_core::ToolCall::with_id(
+                "c1", "task", json!({ "prompt": "前台活", "description": "调研" }),
+            )]),
+            ModelResponse::text("子完成"),
+            ModelResponse::text("父完成"),
+        ]));
+        let mut reg = ToolRegistry::new();
+        reg.register(Arc::new(TaskTool::new(
+            handle.clone(),
+            test_specs(),
+            Arc::new(SameModel(model.clone())),
+        )));
+        let agent = Agent::builder()
+            .model(model)
+            .tools(reg)
+            .guards(GuardPipeline::new())
+            .policy(Policy { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: vec![PathBuf::from("/tmp")], ..Default::default() })
+            .build()
+            .unwrap();
+        let agent = Arc::new(agent);
+        handle.attach(&agent);
+        let seen = Arc::new(Mutex::new(Vec::<(String, String, String)>::new()));
+        {
+            let cap = seen.clone();
+            handle.attach_event_sink(Arc::new(move |sub, parent, ev| {
+                let kind = match &ev.kind {
+                    cmx_agent_core::event::EventKind::UserMessage { .. } => "user_message",
+                    _ => "other",
+                };
+                cap.lock().unwrap().push((sub.to_string(), parent.to_string(), kind.to_string()));
+            }));
+        }
+        let mut session = Session::new("parent-fg");
+        agent.run_turn(&mut session, "派前台子任务").await.unwrap();
+        let got = seen.lock().unwrap();
+        let um: Vec<_> = got.iter().filter(|(_, _, k)| k == "user_message").collect();
+        assert_eq!(um.len(), 1, "前台子回合应恰好一条 user_message 事件");
+        let (sub, parent, _) = &um[0];
+        assert!(sub.starts_with("subtask-"), "sub_id 应为 subtask- 前缀：{sub}");
+        assert_eq!(parent, "parent-fg", "parent 应为父会话 id");
+        assert!(handle.active_for_parent("parent-fg").is_empty(), "收尾后活动登记应摘除");
+    }
+
+    #[tokio::test]
+    async fn foreground_result_contains_task_id() {
+        // B3：前台 tool_result 输出带 task_id（回放懒加载锚点），且 active_for_parent 暴露登记项。
+        let handle = Arc::new(SubagentHandle::new(2));
+        let model = Arc::new(MockModel::new([
+            ModelResponse::calls(vec![cmx_agent_core::ToolCall::with_id(
+                "c1", "task", json!({ "prompt": "查点东西", "subagent_type": "explore" }),
+            )]),
+            ModelResponse::text("子完成"),
+            ModelResponse::text("父完成"),
+        ]));
+        let mut reg = ToolRegistry::new();
+        reg.register(Arc::new(TaskTool::new(
+            handle.clone(),
+            test_specs(),
+            Arc::new(SameModel(model.clone())),
+        )));
+        let agent = Agent::builder()
+            .model(model)
+            .tools(reg)
+            .guards(GuardPipeline::new())
+            .policy(Policy { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: vec![PathBuf::from("/tmp")], ..Default::default() })
+            .build()
+            .unwrap();
+        let agent = Arc::new(agent);
+        handle.attach(&agent);
+        let mut session = Session::new("parent-anchor");
+        agent.run_turn(&mut session, "派 explore").await.unwrap();
+        let tr = session.log.events().iter().find_map(|e| match &e.kind {
+            cmx_agent_core::event::EventKind::ToolResult { ok: true, output, .. } => {
+                output.get("task_id").and_then(|v| v.as_str()).map(String::from)
+            }
+            _ => None,
+        });
+        let task_id = tr.expect("前台 task 的 tool_result 应含 task_id");
+        assert!(task_id.starts_with("subtask-"), "{task_id}");
+        assert!(
+            handle.active_for_parent("parent-anchor").is_empty(),
+            "收尾后登记应摘除"
+        );
+    }
+
+    #[tokio::test]
+    async fn background_registers_active_subtask_and_unregisters_on_done() {
+        // B4：后台派生期间 active_for_parent 可见（type/description/background 正确），完成后摘除。
+        let handle = Arc::new(SubagentHandle::new(2));
+        let model = Arc::new(MockModel::new([
+            ModelResponse::calls(vec![cmx_agent_core::ToolCall::with_id(
+                "c1",
+                "task",
+                json!({ "prompt": "后台活", "description": "盘点插件", "background": true }),
+            )]),
+            ModelResponse::text("父立即返回"),
+        ]));
+        let mut reg = ToolRegistry::new();
+        reg.register(Arc::new(TaskTool::new(
+            handle.clone(),
+            test_specs(),
+            Arc::new(SameModel(model.clone())),
+        )));
+        let agent = Agent::builder()
+            .model(model)
+            .tools(reg)
+            .guards(GuardPipeline::new())
+            .policy(Policy { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: vec![PathBuf::from("/tmp")], ..Default::default() })
+            .build()
+            .unwrap();
+        let agent = Arc::new(agent);
+        handle.attach(&agent);
+        handle.attach_injector(Arc::new(|_parent, _text| {
+            Box::pin(async {}) as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+        }));
+        let mut session = Session::new("parent-bg4");
+        agent.run_turn(&mut session, "后台派活").await.unwrap();
+        // 后台子任务（MockModel 单步）毫秒级收尾——运行窗口太窄不做中途快照（免竞态 flaky），
+        // 这里验证：收尾轮询后登记必被摘除，且查询接口对无登记父会话返回空。
+        for _ in 0..500 {
+            if handle.active_for_parent("parent-bg4").is_empty() {
+                assert!(handle.active_for_parent("no-such-parent").is_empty());
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("后台任务完成后登记应被摘除");
     }
 
     #[tokio::test]

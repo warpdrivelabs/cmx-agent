@@ -537,3 +537,48 @@
 /* 回执回合（render.js 打 .notify）：无用户气泡/计时行做锚点，光靠默认留白与上一回合
    分不开，读感像两条贴在一起的渲染异常（2026-09-15 反馈）——画虚线分界 + 加大上距。 */
 .turn.notify{ margin-top:22px;padding-top:12px;border-top:1px dashed var(--border2); }
+
+/* ── 子智能体子任务卡（方案 20260915 可视化，原型 v3+ 定稿）──
+   嵌套金脊：过程体左侧 2px 金色脊线（var(--gold) 派生）——「父回合里嵌着一个隔离子会话」
+   的结构真相直接编码进视觉；卡内组件（思考卡/工具卡/引用组/气泡）与主会话结构性同源。 */
+.tool.tcard.subcard .tc-body{ border-left-color:color-mix(in srgb,var(--gold) 45%,transparent); }
+.tool.tcard.subcard .cg-sub{ max-width:380px; }
+.tc-state{ flex:0 0 auto;font-size:11px;color:var(--muted);align-self:center; }
+.live-dot{ display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--aqua);
+  margin-right:5px;vertical-align:1px;animation:thPulse 1.2s ease-in-out infinite; }
+
+/* 「📋 下发提示词」行：思考卡同款可折叠行（默认展开、全文、无边框面板） */
+.subprompt{ margin:0;padding:0;border:0;background:none; }
+.subprompt .sp-head{ display:flex;align-items:center;gap:7px;width:fit-content;max-width:100%;min-height:20px;
+  padding:2px 7px;margin:0 -7px;border:0;background:transparent;color:var(--muted);font-size:12px;
+  font-family:inherit;text-align:left;border-radius:7px;transition:background .12s; }
+.subprompt .sp-head:hover{ background:var(--hover);color:var(--ink2); }
+.subprompt .sp-head .chev{ color:var(--muted);opacity:.6;transition:transform .16s;font-size:10px; }
+.subprompt .sp-body{ padding:2px 0 4px 20px;color:var(--muted);font-size:11.5px;line-height:1.55;
+  white-space:pre-wrap;word-break:break-word;border-left:2px solid var(--border);margin:1px 0 4px 6px; }
+.subprompt.closed .chev{ transform:rotate(-90deg); }
+.subprompt.closed .sp-body{ display:none; }
+
+/* 过程区容器：mini-log（子事件复用主渲染管线直落于此） */
+.sublog{ display:flex;flex-direction:column;gap:3px;min-width:0; }
+.sublog .reasoning-body{ max-height:180px; }   /* 子卡内思考正文限高，超长内部滚动 */
+.subfold{ background:none;border:0;color:var(--muted);font-size:11px;padding:1px 0;width:fit-content;
+  text-align:left;font-family:inherit; }
+.subfold:hover{ color:var(--gold); }
+.sublazy{ display:flex;align-items:center;gap:6px;background:none;border:0;color:var(--gold);font-size:11px;
+  padding:2px 0 0 24px;width:fit-content;font-family:inherit; }
+.sublazy:hover{ text-decoration:underline; }
+/* 最终结果段：纯文本（无框），与过程行共用同一条对齐脊线 */
+.subfinal{ margin:4px 0 2px 6px;padding:2px 0 4px 20px;color:var(--ink);font-size:12.5px;line-height:1.6;
+  white-space:pre-wrap;word-break:break-word;border-left:2px solid var(--border); }
+/* 懒加载骨架屏 */
+.skel{ display:flex;flex-direction:column;gap:5px;padding:4px 0; }
+.skel i{ height:10px;border-radius:5px;
+  background:linear-gradient(90deg,var(--panel2) 25%,var(--hover) 50%,var(--panel2) 75%);
+  background-size:200% 100%;animation:shimmerSlide 1s linear infinite; }
+.skel i:nth-child(2){ width:72%; } .skel i:nth-child(3){ width:88%; } .skel i:nth-child(4){ width:60%; }
+
+@media (prefers-reduced-motion:reduce){
+  .live-dot{ animation:none; }
+  .skel i{ animation:none; }
+}

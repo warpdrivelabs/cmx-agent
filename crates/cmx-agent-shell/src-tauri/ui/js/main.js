@@ -255,10 +255,17 @@ if(window.__TAURI__ && window.__TAURI__.event){
   // Web 壳实时通路（U16 落地，红蓝审查 P1-2）：EventSource 订阅 /api/subscribe，同一
   // onSessionEvent 分流——后台子任务回执 / IM 会话事件实时上屏，不再「落库才可见」。
   // 本地回合由 STREAMING 标记（bridge.js web 分支）交还给 streamSend 流式通道，不重复渲染。
-  try{
-    const es = new EventSource("/api/subscribe");
-    es.onmessage = (m)=>{ try{ onSessionEvent(JSON.parse(m.data)); }catch(e){} };
-    es.onerror = ()=>{ /* 断线 EventSource 自动重连，无需打扰用户 */ };
-    console.log("[session_event] EventSource(/api/subscribe) 已注册");
-  }catch(e){ console.warn("[session_event] EventSource 不可用", e); }
+  // 封装为可重建：未登录时建连会被 401 打死（EventSource 对 401 不自动重连），
+  // 登录/注册成功后经 showMainView() → initEventBus() 重挂。
+  window.initEventBus = function(){
+    try{
+      if (window.__es) { try{ window.__es.close(); }catch(_){} }
+      const es = new EventSource("/api/subscribe");
+      es.onmessage = (m)=>{ try{ onSessionEvent(JSON.parse(m.data)); }catch(e){} };
+      es.onerror = ()=>{ /* 网络断线 EventSource 自动重连；401（未登录）会停止——登录成功后由 showMainView 重建 */ };
+      window.__es = es;
+      console.log("[session_event] EventSource(/api/subscribe) 已注册");
+    }catch(e){ console.warn("[session_event] EventSource 不可用", e); }
+  };
+  initEventBus();
 }

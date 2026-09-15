@@ -342,32 +342,43 @@ impl DesktopAppBuilder {
         let agent = Arc::new(agent);
         sub_handle.attach(&agent); // 注入弱引用，task 工具据此跑子回合
 
-        // 子会话日志落库（审计）：子回合事件 append 到 sessions/subtask-*/log.jsonl（不写 meta，
-        // UI 列表不显示）；失败仅 warn——审计是尽力而为，不得让子任务因落盘失败而报错。
+        // 子会话日志落库（审计）：事件**实时**逐条 append 到 sessions/subtask-*/log.jsonl（不写 meta，
+        // UI 列表不显示）。方案 20260915 B2 前为收尾整批落库——运行中子会话 get_events 必 not_found，
+        // 回放懒加载/恢复查询全部踩空；实时落库后运行中即可读。失败仅 warn——审计是尽力而为，
+        // 不得让子任务因落盘失败而报错。
         let store = Arc::new(FileSessionStore::new(&self.data_dir)?);
-        {
-            let store_for_sink = store.clone();
-            sub_handle.attach_log_sink(Arc::new(move |id, events| {
-                if let Err(e) = store_for_sink.append_events(id, events) {
-                    eprintln!("[subagent] 子会话 {id} 日志落库失败（审计留痕缺失）：{e}");
-                }
-            }));
-        }
+        let store_for_events = store.clone();
 
         let workspaces = crate::workspace::WorkspaceRegistry::load_or_init(
             &self.data_dir,
             Some(&self.workdir),
         )?;
         workspaces.set_allowed_roots(&agent)?;
-        let mut app = AgentApp::new(agent, store)
+        let app = AgentApp::new(agent, store)
             .with_token_store(token_store)
             .with_plugins(plugin_summaries)
             .with_plugins_dir(plugins_dir)
             .with_plugin_market(plugin_market)
             .with_model(model_slot, model_config_dir)
-            .with_subagents(sub_handle)
             .with_agents(agents_registry)
             .with_model_resolver(model_resolver);
+        // B2（方案 20260915 可视化）：子会话事件实时落库 + 总线广播。EventEnvelope.parent=Some(父
+        // 会话 id)，前端据此渲染进父视图子任务卡；总线无订阅者 send 失败静默（落盘审计兜底）。
+        // event_bus 在 AgentApp 内部构造，故先建 app、挂 event_sink、再装配 sub_handle。
+        {
+            let tx = app.event_bus().sender();
+            sub_handle.attach_event_sink(Arc::new(move |sub_id, parent_id, ev| {
+                if let Err(e) = store_for_events.append_events(sub_id, std::slice::from_ref(ev)) {
+                    eprintln!("[subagent] 子会话 {sub_id} 事件实时落库失败（审计留痕缺失）：{e}");
+                }
+                let _ = tx.send(crate::bus::EventEnvelope {
+                    session_id: sub_id.to_string(),
+                    parent: Some(parent_id.to_string()),
+                    event: ev.clone(),
+                });
+            }));
+        }
+        let mut app = app.with_subagents(sub_handle);
         app = app.with_workspace_registry(workspaces);
         if let Some(a) = interactive {
             app = app.with_approver(a);

@@ -133,13 +133,34 @@ function ensureToolCard(log, call){
   card._input=call&&call.input;
   card.innerHTML=toolCardHtml(call||{});
   bindToolCard(card);
-  // 子智能体类型徽标（阶段一）：task 卡显示 subagent_type / 后台标记
+  // 子智能体子任务卡（方案 20260915 可视化）：头=类型/后台徽标+实时状态；体=「📋 下发提示词」行 +
+  // mini-log（复用主渲染管线：思考卡/工具卡/引用组/气泡）。实时配对键=prompt 全文（子会话首条
+  // user_message 与 input.prompt 逐字相等），tool_result(task) 落定后以 task_id 补登记（B3）。
   if(card.dataset.tool==="task" && call && call.input){
+    card.classList.add("subcard");
     const t=call.input.subagent_type;
     const nameEl=card.querySelector(".tc-name");
     if(nameEl){
       if(t) nameEl.insertAdjacentHTML("afterend",`<span class="tc-badge">${esc(String(t))}</span>`);
       if(call.input.background) nameEl.insertAdjacentHTML("afterend",`<span class="tc-badge bg">后台</span>`);
+    }
+    const live=!log._history;                    // 回放容器带 _history=true；实时 log 没有
+    const body=card.querySelector(".tc-body");
+    // 通用工具卡模板没有状态位——子任务卡补插 .tc-state（运行计时/完成文案落点，chev 之前）
+    const chevEl=card.querySelector(".tc-chev");
+    if(chevEl) chevEl.insertAdjacentHTML("beforebegin",'<span class="tc-state"></span>');
+    const mini=el("sublog");
+    mini._history=true;                          // 复用主管线的关键开关：不拉「已工作」计时行
+    mini._turn=mini;                             // ensureTurn(mini) 恒返回 mini，组件直落卡内
+    body.innerHTML="";
+    const prompt=typeof call.input.prompt==="string"?call.input.prompt:"";
+    if(prompt) body.append(promptLine(prompt));
+    body.append(mini);
+    card._mini=mini; card._subPrompt=prompt.trim();
+    if(live){
+      body.hidden=false; card.classList.add("open");
+      startSubTicker(card, call.input.background?"后台执行中":"执行中");
+      (log._subPending=log._subPending||new Map()).set(card._subPrompt, card);
     }
   }
   if(id){ log._tools=log._tools||new Map(); log._tools.set(id,card); }
@@ -176,6 +197,7 @@ function completeToolCard(log, ev){
     ensureTurn(log).append(t);
     return;
   }
+  if(card.dataset.tool==="task"){ completeTaskCard(log, card, ev); return; }   // 子任务卡特化收口（后台保持 run 态，故须先于通用 remove("run")）
   card.classList.remove("run");
   card.classList.add(ev.ok?"done":"fail");
   setToolStatus(card, ev.ok?"ok":"bad", ev.ok?"完成":"失败 / 被拦截");
@@ -202,6 +224,164 @@ function completeToolCard(log, ev){
   else if(!(isWrite && ev.ok)){ card.querySelector(".tc-body").innerHTML=toolBodyHtml(ev); addBodyCopy(card); }
   if(CONTEXT_GROUP_TOOLS.has(card.dataset.tool)){ foldIntoCtxGroup(log, card, !!ev.ok); return; }   // 失败也入组：满屏红叉比静默失败更吵（opencode 降噪）
   closeCtxGroup(log);                      // 非只读结果落卡后，引用组定格（后续只读工具另起一组）
+}
+
+// ── 子智能体子任务卡（方案 20260915 可视化，交互定稿=documents/prototypes/20260915 原型 v3+）──
+// 卡内过程完全复用主会话同款组件（思考卡 .reasoning / 工具卡 .tcard / 引用组 .ctxgroup /
+// 过渡文字 .bubble.bare），结构性同源零另造样式；唯一新视觉=卡体嵌套金脊（chat.css subcard）。
+// 「📋 下发提示词」行：思考卡同款可折叠行（默认展开、全文、无边框面板）。
+function promptLine(text){
+  const d=el("subprompt");
+  d.innerHTML=`<button class="sp-head" type="button"><span class="si">📋</span>`
+    +`<span class="sp-txt">下发提示词</span><span class="chev">▾</span></button><div class="sp-body"></div>`;
+  d.querySelector(".sp-body").textContent=text||"";
+  d.querySelector(".sp-head").addEventListener("click",()=>d.classList.toggle("closed"));
+  return d;
+}
+// 实时状态（卡头右侧）：运行态呼吸点+秒表；收口由 subStateText 定格。
+function startSubTicker(card,label){
+  stopSubTicker(card);
+  const st=card.querySelector(".tc-state"); if(!st) return;
+  const paint=()=>{ st.innerHTML='<span class="live-dot"></span>'+esc(label)+" "+esc(fmtDur(Date.now()-card._subT0)); };
+  card._subT0=Date.now();
+  paint();
+  card._subTick=setInterval(paint,1000);
+}
+function stopSubTicker(card){ if(card._subTick){ clearInterval(card._subTick); card._subTick=null; } }
+function subStateText(card,text){
+  const st=card.querySelector(".tc-state"); if(!st) return;
+  stopSubTicker(card);
+  st.className="tc-state";
+  st.textContent=text;
+}
+// 子事件渲染入口：prompt 行 / turn 边界 / note 自管，其余整体走主渲染管线（思考卡、工具卡、
+// 引用组、气泡、审批卡原样复用）。mini._history=true 挡住「已工作」计时行；审批卡仍挂父视图
+// 交互槽（interactZone 沿 DOM 向上找 .session-view），approve 带子 sid（后端按绑定校验命中）。
+function renderSubEvent(card, ev, subSid){
+  const mini=card._mini; if(!mini) return;
+  const k=ev.kind;
+  if(k==="user_message"){
+    // 提示词行去重：实时/回放卡建卡时已按 input.prompt 在卡体建过（ensureToolCard，位于
+    // tc-body 直下）；卡体没有才渲染（恢复壳/懒加载的 mini 里没有，子会话首条 user_message
+    // 就是下发的 prompt）。
+    if(!card.querySelector(".tc-body > .subprompt")) mini.append(promptLine(ev.text));
+    trimSubLines(card); return;
+  }
+  if(k==="turn_started") return;
+  if(k==="turn_ended"){ hideTyping(mini); closeCtxGroup(mini); closeReasoning(mini); return; }
+  if(k==="note") return;                       // 回合间隙注记不上屏（与主会话滤「计划模式」行同规）
+  renderEvent(mini, ev, subSid||"");
+  trimSubLines(card);
+}
+// 运行中只保留尾部 6 项 + 「⋯ 前面 N 步」全量展开（点开后不再裁剪）。
+const SUB_TAIL=6;
+function trimSubLines(card){
+  if(card._subFolded) return;
+  const mini=card._mini; if(!mini) return;
+  const items=[...mini.children].filter(x=>!x.classList.contains("subfold"));
+  const hidden=items.length-SUB_TAIL;
+  if(hidden<=0) return;
+  items.slice(0,hidden).forEach(x=>{ x.style.display="none"; });
+  let f=mini.querySelector(":scope > .subfold");
+  if(!f){
+    f=el("subfold"); f.type="button";
+    f.addEventListener("click",()=>{ card._subFolded=true;
+      mini.querySelectorAll(":scope > .reasoning, :scope > .tool, :scope > .ctxgroup, :scope > .bubble, :scope > .subprompt, :scope > .iline")
+        .forEach(x=>{ x.style.display=""; });
+      f.remove();
+    });
+    mini.prepend(f);
+  }
+  f.textContent=`⋯ 前面 ${hidden} 步（点开全量，含提示词 / 思考）`;
+}
+// 子会话日志懒加载（回放/刷新态）：get_events 对 subtask- 会话本就无读取门（仅列表过滤前缀），
+// 后端零改动。加载后子会话首条 user_message 自然渲染成提示词行，与实时形态一致。
+function armSubLazy(card, taskId){
+  if(!taskId||card._subLazy||!card._mini) return;
+  card._subLazy=true;
+  const body=card.querySelector(".tc-body"); if(!body) return;
+  const btn=el("sublazy"); btn.type="button"; btn.textContent="🧵 查看完整过程（懒加载子会话日志）";
+  body.after(btn);
+  btn.addEventListener("click",()=>loadSubEvents(card, taskId, btn));
+}
+async function loadSubEvents(card, taskId, btn){
+  if(card._subLoaded||!card._mini) return;
+  card._subLoaded=true;
+  if(btn) btn.remove();
+  const mini=card._mini;
+  const sk=el("skel","<i></i><i></i><i></i><i></i>"); mini.append(sk);
+  try{
+    const r=await call({cmd:"get_events", session_id:taskId, limit:500});
+    sk.remove();
+    const evs=(r&&r.ok&&r.data&&r.data.events)||[];
+    evs.forEach(ev=>renderSubEvent(card, ev, taskId));
+    card._subFolded=true;                                  // 全量历史一次到位，不再裁尾
+    mini.querySelectorAll(":scope > *").forEach(x=>{ x.style.display=""; });
+  }catch(e){
+    sk.remove();
+    mini.append(el("tcempty","（子会话过程暂不可见："+esc(String(e&&e.message||e))+"；任务结束后重开会话可回看）"));
+  }
+}
+// tool_result(task) 落定：前台即时收口；后台保持运行态等 <task_result> 收口（F2 回执合一）。
+function completeTaskCard(log, card, ev){
+  const o=(ev.output&&typeof ev.output==="object")?ev.output:{};
+  if(o.task_id){                                           // B3 锚点：task_id → 卡（回执收口/恢复共用）
+    (log._subCards=log._subCards||new Map()).set(o.task_id, card);
+    card._taskId=o.task_id;
+  }
+  if(log._subPending&&card._subPrompt!=null) log._subPending.delete(card._subPrompt);  // 防跨回合误配
+  const live=!log._history;
+  if(ev.ok && o.background===true){
+    // 后台：卡保持运行态实时续流；分页边界外回执缺席时由 settlePendingCards 收敛为「无回执」。
+    if(!live) armSubLazy(card, o.task_id);
+    return;
+  }
+  stopSubTicker(card);
+  card.classList.remove("run");
+  card.classList.add(ev.ok?"done":"fail");
+  setToolStatus(card, ev.ok?"ok":"bad", ev.ok?"完成":"失败 / 被拦截");
+  const t1=(typeof ev.ts==="string"?Date.parse(ev.ts):ev.ts);
+  const durTxt=(card._t0&&t1&&t1>card._t0)?" · "+fmtDur(t1-card._t0):"";
+  subStateText(card,(ev.ok?"已完成":"失败")+durTxt);
+  // 最终结果不在此重复渲染：mini 里子会话末条 model_message 气泡（markdown）已承载；
+  // 回放态 mini 由懒加载拉全量子日志，同样自带。这里只落「N 步」收尾注记 / 失败错误体。
+  if(card._mini){
+    if(ev.ok && typeof o.steps==="number") card._mini.append(el("meta note solo","— 子智能体 "+o.steps+" 步 —"));
+    else if(!ev.ok){
+      const msg=(o&&typeof o==="object")?(o.error??o.message):o;
+      card._mini.append(el("tterm tterr", esc(typeof msg==="string"?msg:compact(o||{}))));
+    }
+  }
+  if(live){
+    const body=card.querySelector(".tc-body");             // 完成自动折叠（ZCode 式），点卡头可回看全过程
+    if(body) body.hidden=true;
+    card.classList.remove("open");
+  } else {
+    armSubLazy(card, o.task_id);                           // 回放：过程不在父日志里，懒加载补
+  }
+}
+// <task_result> 收口既有后台运行卡（F2 回执合一）的收口逻辑内联在 renderEvent 的态一分支
+// （67e18e4 预留的 _subCards 挂点）：命中则收口该卡不另弹 notify 卡；未命中走原 notify 卡路径。
+// 恢复场景（F4）的空壳子任务卡：无 input 事件可依，头=徽标+描述+状态，体=mini 由懒加载填充。
+function buildSubCardShell(a){
+  const card=el("tool tcard run subcard open");
+  card.dataset.tool="task";
+  card.innerHTML=`<button class="tc-trig" type="button">`
+    +`<span class="tc-st run" title="运行中"><span class="tc-spin"></span></span>`
+    +`<span class="tc-g">🤖</span>`
+    +`<span class="tc-name">子智能体</span>`
+    +(a.subagent_type?`<span class="tc-badge">${esc(String(a.subagent_type))}</span>`:"")
+    +(a.background?`<span class="tc-badge bg">后台</span>`:"")
+    +`<span class="tc-sub" title="${esc(String(a.description||""))}">${esc(String(a.description||""))}</span>`
+    +`<span class="tc-state"></span>`
+    +`<span class="tc-chev">▾</span></button>`
+    +`<div class="tc-body"></div>`;
+  const body=card.querySelector(".tc-body");
+  const mini=el("sublog"); mini._history=true; mini._turn=mini;
+  body.append(mini);
+  card._mini=mini; card._taskId=a.task_id;
+  bindToolCard(card);
+  return card;
 }
 // 问句行落定（ZCode r8e 对齐）：trigger 重写为「? 已询问 + N 个问题」，体为逐问 Q/A（问句墨色、答案弱化）。
 // 答案取 tool_result output（{answers:{qid:[...]}}）；忽略/超时（dismissed）落「未回答，已自动继续」，
@@ -859,12 +1039,13 @@ function renderEvent(log, ev, sid){
       const sc=_scs?(typeof _scs.get==="function"?_scs.get(id2):_scs[id2]):null;
       if(sc){
         try{
+          // 可视化卡口径（方案 20260915 F2）：收口=状态定格；结果正文已由 mini 的子会话
+          // model_message 气泡承载，不再重复注入（失败摘要例外——mini 里没有错误气泡）。
           sc.classList.remove("run"); sc.classList.add(st==="failed"?"fail":"done");
-          const stEl=sc.querySelector(".tc-st");
-          if(stEl){ stEl.className="tc-st "+(st==="failed"?"bad":"ok"); stEl.textContent=st==="failed"?"✕":"✓"; }
-          const se=sc.querySelector(".tc-state"); if(se) se.textContent=st==="failed"?"后台失败":"后台完成";
-          const sb=sc.querySelector(".tc-body"); if(sb&&sb.hidden){ sb.hidden=false; sc.classList.add("open"); }
-          const term=sc.querySelector(".tterm"); if(term) term.textContent=body||"（无输出）";
+          setToolStatus(sc, st==="failed"?"bad":"ok", st);
+          subStateText(sc, st==="failed"?"失败":"已完成");
+          if(st==="failed"&&sc._mini&&body) sc._mini.append(el("tterm tterr", esc(body)));
+          if(!log._history) armSubLazy(sc, id2);
         }catch(_){ }
         log._stick=true; stickScroll(log); return;
       }

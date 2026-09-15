@@ -203,6 +203,12 @@ pub enum AppRequest {
         #[serde(default)]
         session_id: String,
     },
+    /// 列某父会话当前活动子任务快照（方案 20260915 可视化 B4/F4）：页面刷新/重开后前端据此
+    /// 重建「后台执行中」卡、续流子事件（信封 parent 分流）、并补查子会话挂起的审批。
+    /// 项在子任务收尾/级联取消时即摘除。返回 `{ active: [{task_id,description,subagent_type,background,started_at_ms}] }`。
+    ListActiveSubtasks {
+        session_id: String,
+    },
     /// IM 绑定：为当前登录用户生成一次性验证码（前端引导用户把码发到 IM 机器人完成绑定）。
     ImBindGenCode,
     /// IM 绑定：列出当前登录用户已绑定的 IM 身份（provider/open_id/created_at）。
@@ -519,6 +525,10 @@ async fn dispatch_inner(app: &AgentApp, req: AppRequest) -> Result<AppResponse, 
         AppRequest::ListPendingApprovals { session_id } => {
             let pending = app.list_pending_approvals(&session_id);
             Ok(AppResponse::ok(serde_json::json!({ "pending": pending })))
+        }
+        AppRequest::ListActiveSubtasks { session_id } => {
+            let active = app.list_active_subtasks(&session_id);
+            Ok(AppResponse::ok(serde_json::json!({ "active": active })))
         }
         AppRequest::ImBindGenCode => Ok(AppResponse::ok(app.im_bind_gen_code().await?)),
         AppRequest::ImListBindings => Ok(AppResponse::ok(app.im_list_bindings().await?)),

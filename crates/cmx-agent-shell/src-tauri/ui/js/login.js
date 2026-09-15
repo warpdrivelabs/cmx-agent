@@ -27,6 +27,10 @@ function showMainView () {
   // 主视图显示后聚焦输入框
   const inp = document.getElementById('inp');
   if (inp) inp.focus();
+  // 会话事件总线重建（方案 20260915）：EventSource 在未登录页面加载时被 /api/subscribe 的
+  // 401 打死（EventSource 对 401 不自动重连）——登录/注册/会话恢复进入主视图的每条路径
+  // 都在这里重建，否则登录后收不到任何总线事件（后台子任务回执、IM 实时全失效）。
+  if (typeof initEventBus === 'function') initEventBus();
 }
 function routeByHash () {
   if (location.hash === '#/login') { showLoginView(); return; }

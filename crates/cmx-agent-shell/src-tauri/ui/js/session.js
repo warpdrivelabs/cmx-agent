@@ -156,6 +156,10 @@ function scheduleRefreshTasks(){
 }
 function onSessionEvent(env){
   if(!env || !env.session_id || !env.event) return;
+  // 子智能体实时事件分流（方案 20260915 可视化 F1）：env.parent 非空 = 子会话事件 → 渲染进
+  // 父视图的子任务卡。**必须先于 openSessionLive 短路**——否则子信封会被当成未知新会话误开 tab；
+  // 子事件也不得进下方父 log 的 _seqs（两个 seq 空间独立，混入会被历史 prepend 去重误吞父事件）。
+  if(env.parent){ handleSubagentEvent(env); return; }
   const sid = env.session_id, ev = env.event;
   if(STREAMING.has(sid)) return;          // 本地流式中：交给 streamSend，避免重复
   let tab = findTab("s:"+sid);
@@ -180,6 +184,35 @@ function onSessionEvent(env){
     }
   }
   scheduleRefreshTasks();
+}
+
+// ── 子智能体实时事件 → 父视图子任务卡（方案 20260915 可视化 F1）──
+// 定位：父 tab 没开着直接丢弃（不缓存——回放懒加载 + list_active_subtasks 恢复兜底）；
+// 卡定位：_subCards 按「子会话 id」直配（B3 后 tool_result(task) 也按 task_id==子会话 id 登记，
+// 两键同值）；前台运行中先到的事件按「prompt 全文」配对（子会话首条 user_message 与
+// task 工具 input.prompt 逐字相等），配对前先到的暂存 _subOrphans，配对后 flush。
+function handleSubagentEvent(env){
+  const sid=env.session_id, ev=env.event;
+  const tab=findTab("s:"+env.parent); if(!tab) return;
+  const log=tab.view.querySelector(".log"); if(!log) return;
+  const cards=(log._subCards=log._subCards||new Map());
+  let card=cards.get(sid);
+  if(!card && ev.kind==="user_message" && log._subPending && log._subPending.size){
+    const key=(ev.text||"").trim();
+    const cand=log._subPending.get(key);
+    if(cand){
+      log._subPending.delete(key);
+      card=cand; card._subSid=sid; cards.set(sid,card);
+      const orph=(log._subOrphans||{})[sid];              // 竞态先到的事件（罕见）按序 flush
+      if(orph){ delete (log._subOrphans||{})[sid]; orph.forEach(oe=>renderSubEvent(card,oe,sid)); }
+    }
+  }
+  if(!card){
+    const orph=(log._subOrphans=log._subOrphans||{});
+    orph[sid]=(orph[sid]||[]).concat([ev]);
+    return;
+  }
+  renderSubEvent(card, ev, sid);
 }
 
 // 历史补挂（openSessionLive / openSession 竞态分支共用）：把**未渲染过**的事件 prepend 到
@@ -483,6 +516,38 @@ async function restorePendingApprovals(t){
   }catch(e){ console.warn("恢复待决审批失败",e); }
 }
 
+// ── 活动子任务恢复（方案 20260915 可视化 F4）：后台任务运行中刷新/重开会话——父回合仍在途，
+// 落库历史里只有 task 工具的即时回执、没有过程。拉 list_active_subtasks 快照重建「后台执行中」
+// 卡、立即懒加载已有过程、后续子事件经总线（env.parent 分流）续流（_subCards 已按 task_id 登记）。
+// 顺带清偿 B5：子会话审批挂在子 sid 名下，按父 sid 的 restorePendingApprovals 永远查不到——
+// 逐个活动子会话补查 pending 审批并画进父视图交互槽（approve 带子 sid，后端按绑定校验命中）。──
+async function restoreActiveSubtasks(t){
+  const sid=t.sessionId; if(!sid) return;
+  try{
+    const r=await call({cmd:"list_active_subtasks", session_id:sid});
+    const active=((r&&r.ok&&r.data)||{}).active||[];
+    if(!active.length) return;
+    const log=t.view.querySelector(".log"); if(!log) return;
+    active.forEach(a=>{
+      if(!a.task_id) return;
+      const cards=(log._subCards=log._subCards||new Map());
+      if(cards.get(a.task_id)) return;          // 实时卡已在（历史重放/总线先到），跳过
+      const card=buildSubCardShell(a);
+      ensureTurn(log).append(card);
+      cards.set(a.task_id, card);
+      startSubTicker(card, a.background?"后台执行中":"执行中");
+      loadSubEvents(card, a.task_id, null);     // 立即拉已有过程（含提示词行），后续事件续流
+      call({cmd:"list_pending_approvals", session_id:a.task_id}).then(rr=>{
+        const pend=((rr&&rr.ok&&rr.data)||{}).pending||[];
+        pend.forEach(p=>{
+          if(t.view.querySelector(`.tool.approval[data-callid="${CSS.escape(p.call_id||"")}"]`)) return;
+          renderEvent(log,{kind:"approval_requested",call_id:p.call_id,tool:p.tool,reason:p.reason,summary:p.summary},a.task_id);
+        });
+      }).catch(()=>{});
+    });
+  }catch(e){ console.warn("恢复活动子任务失败",e); }
+}
+
 // ── 无流跟随的回合收尾（刷新恢复卡提交路径）：Web 壳的流只在发送时打开，恢复卡提交后
 // 挂起回合的后续事件（回灌/模型回复/turn_ended）前端不可见——计时行空转、tab 永忙、
 // 后续消息无限排队。轮询落库事件总数（回合末才落库），落库后整屏重渲为权威状态并推进队列。──
@@ -503,7 +568,7 @@ function watchRemoteTurn(t, baseTotal){
     const log=t.view.querySelector(".log"); if(!log) return;
     renderHistory(log, t.sessionId, d.events||[], d.start||0, d.total||0);  // 整屏重渲：顺带清幽灵计时行
     log.scrollTop=log.scrollHeight;
-    restorePendingQuestions(t); restorePendingApprovals(t);   // 还有下一个挂起则补画交互槽卡
+    restorePendingQuestions(t); restorePendingApprovals(t); restoreActiveSubtasks(t);   // 还有下一个挂起则补画交互槽卡；活动子任务卡重建
     t._busy=false; setSessionBusy(t,false);
     const next=(t._queue||[]).shift();
     renderQueue(t);
@@ -529,7 +594,7 @@ async function resyncSessionTab(t){
   const log=t.view.querySelector(".log"); if(!log) return;
   renderHistory(log, t.sessionId, d.events||[], d.start||0, d.total||0);
   log.scrollTop=log.scrollHeight;
-  restorePendingQuestions(t); restorePendingApprovals(t);
+  restorePendingQuestions(t); restorePendingApprovals(t); restoreActiveSubtasks(t);
   scheduleRefreshTasks();
 }
 
@@ -557,6 +622,7 @@ function makeLoadMore(log, sid, start, total){
   log.innerHTML=""; log._tools=new Map(); log._turn=null; log._typing=null;
   log._sb=null; log._raw=""; log._raf=null; log._rsb=null; log._rraw=""; log._rraf=null;
   log._rcard=null; log._ctx=null; log._intMarked=false;   // 全量渲染前清状态，防旧引用串场
+  log._subCards=new Map(); log._subPending=new Map(); log._subOrphans={};  // 子任务卡状态同清（旧卡已随 innerHTML 擦除）
   log._qwait=false;                                        // 孤立 asked 行勿把计时行留成「等待回答」
   stopWorkDurTick(log); log._durRow=null; log._durTick=null; log._turnStartTs=null;  // 实时计时行一并清（防旧 interval 改新 DOM）
   log._closed=false; log._live=false;                      // 整屏权威重画后回到「无实时残留」基态
@@ -625,6 +691,7 @@ async function openSession(sessionId, autoPrompt){
     // 在途提问恢复（主路径）：挂起中的提问不在落库事件里，查进程内 pending 补渲染待答卡。
     restorePendingQuestions(t);
     restorePendingApprovals(t);
+    restoreActiveSubtasks(t);      // F4 恢复：后台任务运行中刷新/重开 → 重建运行卡续流 + 子审批补画
   }
   // 权限三模式下拉（方案 20260914 改造三）：状态 = 会话 plan_mode ? plan : 全局档
   //（im-* 会话的 plan 项已在克隆时禁用）

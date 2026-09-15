@@ -17,9 +17,14 @@ use tokio::sync::broadcast;
 const BUS_CAPACITY: usize = 1024;
 
 /// 事件信封：把事件与其所属会话 id 绑在一起广播（订阅者据此分流到对应 tab）。
-#[derive(Debug, Clone, serde::Serialize)]
+/// `parent`（方案 20260915 子智能体可视化 B1）：子智能体会话事件填所属**父会话 id**，
+/// 前端据此把子事件渲染进父视图的子任务卡（而不是当成新会话开 tab）；父会话事件为 `None`。
+/// `#[serde(default)]` 兼容旧信封 JSON（无该字段 = None）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EventEnvelope {
     pub session_id: String,
+    #[serde(default)]
+    pub parent: Option<String>,
     pub event: SessionEvent,
 }
 
@@ -75,6 +80,7 @@ impl EventSink for BusSink {
         // send 失败 = 无订阅者或 lagging；静默忽略（事件仍正常落库，订阅者拉取历史兜底）。
         let _ = self.tx.send(EventEnvelope {
             session_id: self.session_id.clone(),
+            parent: None, // 父会话事件无 parent；子会话走 SubagentHandle 的 event_sink 通路
             event: ev.clone(),
         });
     }
@@ -134,5 +140,23 @@ mod tests {
         });
         assert_eq!(rx1.recv().await.unwrap().session_id, "s1");
         assert_eq!(rx2.recv().await.unwrap().session_id, "s1");
+    }
+
+    #[test]
+    fn envelope_parent_defaults_to_none_for_old_json() {
+        // B1 兼容：旧信封 JSON（无 parent 字段）反序列化 = None；父信封 parent 恒 None；
+        // 子信封带 parent，序列化往返不丢。
+        let old = r#"{"session_id":"s1","event":{"seq":1,"ts":"2026-09-16T00:00:00Z","kind":"user_message","text":"hi"}}"#;
+        let env: EventEnvelope = serde_json::from_str(old).expect("旧信封应可解析");
+        assert_eq!(env.session_id, "s1");
+        assert!(env.parent.is_none(), "缺省 parent 应为 None");
+        let sub = EventEnvelope {
+            session_id: "subtask-1-2".into(),
+            parent: Some("s1".into()),
+            event: env.event.clone(),
+        };
+        let round: EventEnvelope =
+            serde_json::from_str(&serde_json::to_string(&sub).unwrap()).unwrap();
+        assert_eq!(round.parent.as_deref(), Some("s1"));
     }
 }
