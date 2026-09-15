@@ -151,6 +151,9 @@ impl DesktopAppBuilder {
     /// 装配。沙箱根 = workdir；挂全部内置工具 + 五层守卫（Auth/HighRisk/Approval）；
     /// 若启用连接器，把 flow/onto/report 三连接器工具也挂进注册表，并把 ConnectorRegistry 交给 app 供面板查询。
     pub fn build(self) -> AppResult<AgentApp> {
+        // S0 沙箱应用级配置：绑定数据根（settings.json + SANDBOX_SID 对持久化读入；方案 §6.3）。
+        // builder 持 data_dir（Tauri 全局根 / Web 壳共享根）——桌面单机语义，全局配置而非 per-user。
+        cmx_agent_sandbox::settings::init(Some(self.data_dir.clone()));
         // U13 数据权限：启用则 AuthGuard 用真 PEP（PDP /decide 判定 + 缓存 + fail-closed）；否则 allow_all 占位。
         // 授权按**当前登录用户**（共享 identity 单元，登录后由 app 更新 + 重热）——非静态 desktop 主体。
         let identity: Arc<std::sync::RwLock<Subject>> =
@@ -193,6 +196,8 @@ impl DesktopAppBuilder {
             // 阶段二：计划模式守卫（默认拒绝 + PLAN_READ_TOOLS 白名单；TURN_PLAN_MODE 未 scope
             // 时恒放行）。装配在 sandbox 之后、high_risk 之前；danger 档不豁免（用户意图比旋钮硬）。
             .add(Arc::new(cmx_agent_core::PlanModeGuard))
+            // S3 命令级风险屏（advisory 层：命中破坏模式升 NeedApproval，不硬拒；方案 §3.5）。
+            .add(Arc::new(cmx_agent_sandbox::CmdRiskGuard))
             .add(Arc::new(HighRiskGuard))
             .add(Arc::new(ApprovalGuard));
 

@@ -9,6 +9,8 @@ description = "cmx-agent 插件面（U15）：cmx-plugin.json 清单驱动，把
 unsafe_code = "forbid"
 
 [dependencies]
+cmx-agent-tools.workspace = true
+cmx-agent-sandbox.workspace = true
 cmx-agent-core.workspace = true
 cmx-agent-mcp.workspace = true
 serde.workspace = true

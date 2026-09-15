@@ -1,0 +1,42 @@
+# cmx-agent-sandbox —— OS 级进程沙箱（方案 20260914_沙箱OS级隔离完善方案 S0-S3）。
+#
+# Windows：write-restricted 受限令牌（Codex unelevated 同款）+ ACL 放行集 + 原生
+# CreateProcessAsUserW spawn（STARTUPINFOEX 属性表：句柄继承 + spawn 时挂 Job + 独立桌面）。
+# Linux：Landlock 逐挂载规则矩阵（ABI 分级）+ 可选 seccomp 硬断网（enforce 档，封 io_uring）。
+# 无 tokio 依赖（阻塞执行模型由 tools/proc.rs 的 spawn_blocking 适配）。
+
+[package]
+name = "cmx-agent-sandbox"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "cmx-agent OS 级进程沙箱：受限令牌/Landlock/seccomp + 能力探测 + fail-closed"
+
+[dependencies]
+cmx-agent-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# S3 命令级风险屏正则（版本对齐 tools 仓，离线缓存命中）。
+regex = "1"
+
+[target.'cfg(windows)'.dependencies]
+# 与 tools 仓同源（0.59 离线缓存）；类型/常量与 job.rs 现有调用风格一致。
+windows-sys = { version = "0.59", features = [
+    "Win32_Security",             # CreateRestrictedToken / GetTokenInformation / TOKEN_* / SID_AND_ATTRIBUTES
+    "Win32_Security_Authorization", # SetEntriesInAclW / SetNamedSecurityInfoW / TRUSTEE / ConvertSidToString*
+    "Win32_System_Threading",     # CreateProcessAsUserW / OpenProcessToken / STARTUPINFOEXW / 属性表 / 等待与终止
+    "Win32_System_JobObjects",    # spawn 时挂 Job（kill-on-close 整树收尸）
+    "Win32_System_Pipes",         # CreatePipe
+    "Win32_System_SystemServices", # SE_GROUP_LOGON_ID（令牌组常量）
+    "Win32_System_StationsAndDesktops", # CreateDesktopW（lpDesktop 独立桌面）
+    "Win32_Graphics_Gdi",         # CreateDesktopW 的 DEVMODEW 参数类型（传 null 仍需类型门控）
+    "Win32_Foundation",           # CloseHandle / SetHandleInformation / GetLastError / LocalFree
+    "Win32_Storage_FileSystem",   # GetVolumeInformationW / FILE_* 常量 / DELETE
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Landlock/seccomp 走 raw syscall（glibc 2.35 无 landlock wrapper）；libc 提供 SYS_ 常量与 prctl。
+# 仅 Linux 目标解析，Windows 主机离线构建不受影响。
+libc = "0.2"
+
+[dev-dependencies]

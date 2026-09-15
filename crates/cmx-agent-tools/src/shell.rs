@@ -8,6 +8,7 @@
 //! OS 级隔离（Seatbelt/Landlock/受限令牌）在 E2 补齐（见方案图 5 沙箱纵深）。
 
 use async_trait::async_trait;
+use cmx_agent_core::guard::SandboxMode;
 use cmx_agent_core::tool::GuardHints;
 use cmx_agent_core::{Tool, ToolCtx, ToolError, ToolResult, ToolSpec};
 use serde_json::{Value, json};
@@ -27,7 +28,7 @@ fn spec_description() -> String {
             "在工作区内执行命令（当前平台 Windows · shell={name}，cwd=工作根），带超时，返回 exit_code/stdout/stderr。\
              生成与 {name} 兼容的命令；路径用 Windows 原生写法（C:\\dir\\file）。\
              安全规则：删除/移动等破坏性操作端到端用同一种 shell 完成（禁止 PowerShell 枚举路径再交 cmd /c 删除）；\
-             递归删除/移动前先确认解析后的绝对路径在工作区内；后台进程必须隐藏窗口（PowerShell 加 -WindowStyle Hidden）"
+             递归删除/移动前先确认解析后的绝对路径在工作区内；后台进程必须隐藏窗口（PowerShell 加 -WindowStyle Hidden）；             git 写操作（commit/merge/rebase 等）一律走 git 工具——shell 内写 .git 被 .git deny 拒（提示改用 git 工具）"
         )
     } else {
         "在工作区内执行 shell 命令（当前平台 unix · shell=sh，cwd=工作根），带超时，返回 exit_code/stdout/stderr".into()
@@ -71,7 +72,17 @@ impl Tool for ShellTool {
             .get("timeout_ms")
             .and_then(|v| v.as_u64())
             .unwrap_or(proc::DEFAULT_TIMEOUT_MS);
-        let out = proc::run_cmd(cmd, cwd, timeout_ms).await;
+        // OS 沙箱（S1a）：WorkspaceWrite 档走受限令牌原生 spawn；其余档沿用既有路径。
+        let out = if ctx.sandbox == SandboxMode::WorkspaceWrite {
+            let pctx = cmx_agent_sandbox::ProcCtx {
+                sandbox: ctx.sandbox,
+                roots: ctx.allowed_roots,
+                profile: cmx_agent_sandbox::Profile::Shell,
+            };
+            proc::run_cmd_profiled(&pctx, cmd, cwd, timeout_ms).await
+        } else {
+            proc::run_cmd(cmd, cwd, timeout_ms).await
+        };
         Ok(ToolResult::ok(out))
     }
 }

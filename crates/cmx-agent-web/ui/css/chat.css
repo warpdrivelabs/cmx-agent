@@ -357,8 +357,9 @@
 .work-dur .chev{transition:transform .16s;font-size:10px;opacity:.6}
 .turn.folded .work-dur .chev{transform:rotate(-90deg)}
 /* 折叠组只留「已工作 N」+ 最终回复（.tail）：思考/工具卡/上下文组之外，中间过程的文字气泡、
-   状态注记（.iline ✕已拒绝、.meta 注脚、回合内 .turn-divider ⎋已中断）也一并收起 */
-.turn.folded .reasoning,.turn.folded .tool.tcard,.turn.folded .ctxgroup,.turn.folded .thinking-row,
+   状态注记（.iline ✕已拒绝、.meta 注脚、回合内 .turn-divider ⎋已中断）也一并收起。
+   例外：task_result 系统卡是回执内容不是过程细节，折叠态保持可见。 */
+.turn.folded .reasoning,.turn.folded .tool.tcard:not(.task-result),.turn.folded .ctxgroup,.turn.folded .thinking-row,
 .turn.folded .iline,.turn.folded .meta:not(.turn-note),.turn.folded .turn-divider,.turn.folded .bubble:not(.tail){display:none}
 
 /* ── 回合分隔条（中断）：轻量一行小字，不画贯穿横线（920px 列宽下横线太抢眼）── */
@@ -366,6 +367,8 @@
   font-size:11.5px;color:var(--muted);margin:2px 0}
 .turn-divider.int{color:var(--orange);opacity:.9}
 .meta.note.bad{color:var(--red)}
+/* 回合间隙的独立 note（计划模式开/关等状态线）：不进任何回合，比照回合分隔条的小行形态 */
+.meta.note.solo{align-self:flex-start;width:fit-content;margin:2px 0}
 
 /* ── 交互槽（ZCode 式）：提问/审批卡不进会话时间线——停靠在输入区上方专属区域，
    答完即撤；时间线只留轻量轨迹行（.iline）。卡片是当前「待办」，不是会话记录。── */
@@ -463,6 +466,10 @@
 .tool.qcard.busy .qopt,.tool.approval.busy .qopt{pointer-events:none;opacity:.6}
 /* 工具卡耗时（>2s 才显示） */
 .tc-dur{font-size:11px;color:var(--muted);font-weight:400;margin-left:2px}
+/* S3 沙箱徽标：档位 chip（双主题令牌派生，零硬编码色值）；degraded 黄标警示 */
+.tc-sbx{font-size:11px;color:var(--muted);font-weight:400;margin-left:2px}
+.tc-sbx-deg{color:var(--gold);font-weight:500}
+
 /* 拦截错误卡：红标签+正文分离（opencode ContentError 式） */
 .tcerr{display:flex;gap:8px;align-items:baseline;font-size:12px;padding:2px 0}
 .tcerr-tag{color:var(--red);flex:none;font-weight:600}

@@ -13,6 +13,7 @@ resolver = "2"
 members = [
     "crates/cmx-agent-core",
     "crates/cmx-agent-tools",
+    "crates/cmx-agent-sandbox",
     "crates/cmx-agent-connectors",
     "crates/cmx-agent-model",
     "crates/cmx-agent-mcp",
@@ -35,6 +36,7 @@ authors = ["skylake@pansoft.com"]
 # —— 域内 agent crate（纯 path）——
 cmx-agent-core = { path = "crates/cmx-agent-core", version = "0.1.0" }
 cmx-agent-tools = { path = "crates/cmx-agent-tools", version = "0.1.0" }
+cmx-agent-sandbox = { path = "crates/cmx-agent-sandbox", version = "0.1.0" }
 cmx-agent-connectors = { path = "crates/cmx-agent-connectors", version = "0.1.0" }
 cmx-agent-model = { path = "crates/cmx-agent-model", version = "0.1.0" }
 cmx-agent-mcp = { path = "crates/cmx-agent-mcp", version = "0.1.0" }

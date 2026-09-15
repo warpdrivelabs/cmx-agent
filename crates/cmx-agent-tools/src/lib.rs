@@ -23,7 +23,7 @@ mod glob_tool;
 mod job;
 mod grep;
 mod plan;
-mod proc;
+pub mod proc;
 mod repo_map;
 mod run_tests;
 mod sandbox;

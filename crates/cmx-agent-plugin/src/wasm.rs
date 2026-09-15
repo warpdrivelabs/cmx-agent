@@ -8,8 +8,6 @@
 //! 运行时可由清单 `runtime` 或环境变量 `CMX_AGENT_WASM_RUNTIME` 覆盖（默认 `wasmer`）。
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
-
 use async_trait::async_trait;
 use cmx_agent_core::{Tool, ToolCtx, ToolError, ToolResult, ToolSpec};
 use serde_json::{Value, json};
@@ -50,7 +48,7 @@ impl Tool for WasmPluginTool {
         self.manifest.tool_spec()
     }
 
-    async fn invoke(&self, input: Value, _ctx: &ToolCtx<'_>) -> Result<ToolResult, ToolError> {
+    async fn invoke(&self, input: Value, ctx: &ToolCtx<'_>) -> Result<ToolResult, ToolError> {
         let Some(module) = self.module_path() else {
             return Ok(ToolResult::err(format!("插件 {}: wasm 载体缺 module", self.manifest.name)));
         };
@@ -63,6 +61,10 @@ impl Tool for WasmPluginTool {
         }
         let runtime = self.runtime();
         let call_args: Vec<String> = self.manifest.args.iter().map(|a| subst(a, &input)).collect();
+        let timeout = self.manifest.timeout_ms.unwrap_or(60_000);
+        let Some(cwd) = crate::proc_cwd(ctx, &self.manifest) else {
+            return Ok(ToolResult::err(format!("插件 {}: 无法解析工作目录", self.manifest.name)));
+        };
 
         // 组装：<runtime> run <module> [--invoke <fn>] [-- <args...>]
         let mut argv: Vec<String> = vec!["run".into(), module.display().to_string()];
@@ -75,30 +77,38 @@ impl Tool for WasmPluginTool {
             argv.extend(call_args);
         }
 
-        let fut = tokio::process::Command::new(&runtime)
-            .args(&argv)
-            .stdin(std::process::Stdio::null())
-            .output();
-        let out = match tokio::time::timeout(Duration::from_secs(60), fut).await {
-            Ok(Ok(o)) => o,
-            Ok(Err(e)) => {
-                return Ok(ToolResult::err(format!(
-                    "插件 {}: 启动 wasm 运行时 '{runtime}' 失败 {e}（未安装？可设 CMX_AGENT_WASM_RUNTIME）",
-                    self.manifest.name
-                )));
+        // S1b：改道共享执行器（profile=Plugin）——超时钳制/截断/Job 收尸/OS 沙箱全量生效；
+        // wasmer WASI 默认 preopen cwd，manifest.working_dir 会改模块文件视图（对照表已记）。
+        let out = crate::plugin_spawn(ctx, &runtime, &argv, &cwd, timeout).await;
+        if let Some(e) = out.get("error").and_then(|e| e.as_str()) {
+            // 沙箱拒绝（denied 字段）：透传 fail-closed 文案，不套「未安装」话术（红队2 P2-5——
+            // error 键还可能来自沙箱拒绝/等待失败，统一归因运行时会指引错向）。
+            if let Some(denied) = out.get("sandbox").and_then(|sb| sb.get("denied")).and_then(|d| d.as_str()) {
+                return Ok(ToolResult::err(format!("插件 {}: {denied}", self.manifest.name)));
             }
-            Err(_) => return Ok(ToolResult::err(format!("插件 {}: 超时（>60s）", self.manifest.name))),
-        };
-        let stdout: String = String::from_utf8_lossy(&out.stdout).chars().take(8000).collect();
-        let stderr: String = String::from_utf8_lossy(&out.stderr).chars().take(2000).collect();
-        Ok(ToolResult::ok(json!({
+            // 其余 error = 普通启动失败（如未装 wasmer）：透传可行动原因。
+            return Ok(ToolResult::err(format!(
+                "插件 {}: 启动 wasm 运行时 '{runtime}' 失败 {e}（未安装？可设 CMX_AGENT_WASM_RUNTIME）",
+                self.manifest.name
+            )));
+        }
+        // 保 schema：顶层键与旧版一致，并入 sandbox/timed_out 审计字段。
+        let mut v = json!({
             "service": "cmx-plugin", "plugin": self.manifest.name, "kind": "wasm",
             "runtime": runtime,
             "module": module.display().to_string(),
             "invoke": self.manifest.invoke,
-            "exit_code": out.status.code(),
-            "stdout": stdout.trim_end(),
-            "stderr": stderr.trim_end(),
-        })))
+            "exit_code": out.get("exit_code").cloned().unwrap_or(Value::Null),
+            "stdout": out.get("stdout").cloned().unwrap_or_else(|| json!("")),
+            "stderr": out.get("stderr").cloned().unwrap_or_else(|| json!("")),
+        });
+        let m = v.as_object_mut().expect("wasm plugin result object");
+        if let Some(sb) = out.get("sandbox") {
+            m.insert("sandbox".into(), sb.clone());
+        }
+        if out.get("timed_out").and_then(|t| t.as_bool()).unwrap_or(false) {
+            m.insert("timed_out".into(), Value::Bool(true));
+        }
+        Ok(ToolResult::ok(v))
     }
 }

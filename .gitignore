@@ -19,3 +19,4 @@ node_modules/
 # minisign 更新签名私钥（方案 §8）：私钥泄露 = 任何人可签发恶意更新，绝不入库。
 # Win/Linux 打包机落位：crates/cmx-agent-shell/src-tauri/.tauri/cmx-agent.key
 /crates/cmx-agent-shell/src-tauri/.tauri/
+target-wsl/

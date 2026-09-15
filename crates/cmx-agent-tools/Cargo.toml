@@ -7,6 +7,7 @@ description = "cmx-agent 内置工具：echo/clock/add/fs_read（工具平面示
 
 [dependencies]
 cmx-agent-core.workspace = true
+cmx-agent-sandbox.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 async-trait.workspace = true

@@ -165,6 +165,14 @@ function completeToolCard(log, ev){
     closeCtxGroup(log);
     const t=el("tool"+(ev.ok?"":" denied"));
     t.innerHTML=renderToolResult(ev);
+    // S3 沙箱徽标：分页边界孤儿结果卡同样落档位（红队3 P2-5——尾加载首条结果恰走此路径）
+    const sb0=ev.output&&typeof ev.output==="object"?ev.output.sandbox:null;
+    if(sb0&&typeof sb0==="object"){
+      const chip=(sb0.degraded&&typeof sb0.degraded==="string")
+        ?`<span class="tc-sbx tc-sbx-deg" title="OS 沙箱不可用，已降级裸跑：${esc(String(sb0.degraded))}">⚠ 沙箱降级</span>`
+        :(sb0.wrapped?`<span class="tc-sbx" title="OS 沙箱内执行 · 出站网络档 ${esc(String(sb0.net||"open"))}">🔒 工作区沙箱</span>`:null);
+      if(chip) t.insertAdjacentHTML("afterbegin",chip+" ");
+    }
     ensureTurn(log).append(t);
     return;
   }
@@ -177,7 +185,16 @@ function completeToolCard(log, ev){
     const deniedLike=o2&&typeof o2==="object"&&typeof o2.error==="string";
     const t1=(typeof ev.ts==="string"?Date.parse(ev.ts):ev.ts)||null;
     if(!deniedLike&&t1&&card._t0&&t1>card._t0){ const dt=t1-card._t0;
-      if(dt>2000){ const chev=card.querySelector(".tc-chev"); if(chev) chev.insertAdjacentHTML("beforebegin",`<span class="tc-dur" title="自调用起（含人工审批等待）">· ${esc(fmtDur(dt))}</span>`); } } }
+      if(dt>2000){ const chev=card.querySelector(".tc-chev"); if(chev) chev.insertAdjacentHTML("beforebegin",`<span class="tc-dur" title="自调用起（含人工审批等待）">· ${esc(fmtDur(dt))}</span>`); } }
+    // S3 沙箱徽标（方案 §6.4）：结果带 sandbox 字段（shell/git/run_tests/插件子进程类工具）时，
+    // 触发行落档位 chip。文案口径「子进程出站」（不写「网络管控」）；degraded 黄标警示。
+    const sb=o2&&typeof o2==="object"?o2.sandbox:null;
+    if(sb&&typeof sb==="object"){
+      const mode=(sb.degraded&&typeof sb.degraded==="string")
+        ?`<span class="tc-sbx tc-sbx-deg" title="OS 沙箱不可用，已降级裸跑：${esc(String(sb.degraded))}">⚠ 沙箱降级</span>`
+        :(sb.wrapped?`<span class="tc-sbx" title="OS 沙箱内执行（受限令牌/Landlock）· 出站网络档 ${esc(String(sb.net||"open"))}">🔒 工作区沙箱</span>`:null);
+      if(mode){ const chev=card.querySelector(".tc-chev"); if(chev) chev.insertAdjacentHTML("beforebegin",mode); }
+    } }
   // fs_write 成功时内容体已在建卡时渲染（正文即记录），不回退成结果 JSON；失败照常展示被拦截原因
   const isWrite = card.dataset.tool==="fs_write" && card._input && typeof card._input.content==="string";
   // ask_user 成功：问句行原地落「已询问 N 个问题」+ Q/A 体（trigger 一并重写，状态点让位给 ? 图标）
@@ -282,7 +299,7 @@ function settlePendingCards(root){
   // 最后一个回合可能仍在实时进行（恢复挂起场景），不动它。
   const turns=root.querySelectorAll(".turn");
   turns.forEach((turn,i)=>{
-    if(i===turns.length-1||turn.querySelector(".work-dur")) return;
+    if(i===turns.length-1||turn.querySelector(".work-dur")||turn.dataset.ended) return;
     const row=el("work-dur");
     row.innerHTML=`<span class="wd-t">回合不完整（历史截断）</span><span class="chev">▾</span>`;
     row.addEventListener("click",()=>{ turn._userFold=true; turn.classList.toggle("folded"); });
@@ -721,6 +738,7 @@ function finalizeWorkDur(log){
   }
   if(!log._turn||!log._turnStartTs) return;             // 回放/无回合：一次性补静态计时行
   const turn=log._turn;                                 // 局部捕获：turn_ended 收尾即置 null，点击时不能再摸 log._turn
+  if(!turn.querySelector(".user-chip")) return;         // 无用户气泡的通知回合（task_result 回执等）：不补「已工作 0 秒」噪音行
   const row=el("work-dur");
   row.innerHTML=`<span class="wd-t">已工作 ${esc(fmtDur(Math.max(0,end-log._turnStartTs)))}</span><span class="chev">▾</span>`;
   row.addEventListener("click",()=>{ turn._userFold=true; turn.classList.toggle("folded"); });
@@ -820,9 +838,10 @@ function renderEvent(log, ev, sid){
     // 后台子智能体完成注入（阶段三）：<task_result …>…</task_result> 渲染为可折叠系统卡，
     // 不出现「用户说」气泡（重放恢复同规则）。
     if((ev.text||"").startsWith("<task_result")){
-      const m=(ev.text.match(/^<task_result\s+id="([^"]*)"(?:\s+state="([^"]*)")?([\s\S]*)<\/task_result>$/))||[];
+      const txt=ev.text.trim();   // 容忍尾部换行：$ 锚点对带换行的原文不命中，会把闭合标签漏进正文
+      const m=(txt.match(/^<task_result\s+id="([^"]*)"(?:\s+state="([^"]*)")?([\s\S]*)<\/task_result>$/))||[];
       const id2=m[1]||"", st=m[2]||"completed";
-      const body=ev.text.replace(/^<task_result[^>]*>/,"").replace(/<\/task_result>$/,"").trim();
+      const body=txt.replace(/^<task_result[^>]*>/,"").replace(/<\/task_result>$/,"").trim();
       const card=el("tool tcard done task-result"+(st==="failed"?" tr-fail":""));
       card.innerHTML=`<button class="tc-trig" type="button">`
         +`<span class="tc-st ${st==="failed"?"bad":"ok"}" title="${esc(st)}">${st==="failed"?ICON_X:ICON_CHECK}</span>`
@@ -883,6 +902,7 @@ function renderEvent(log, ev, sid){
   else if(k==="turn_ended"){
     log._sb=null; hideTyping(log); closeCtxGroup(log); closeReasoning(log); log._qwait=false;
     const turn=log._turn;
+    if(turn) turn.dataset.ended="1";   // 完整收讫标记：截断回补（settlePendingCards）据此与「故意无计时行」的回合区分
     if(ev.reason==="stopped"){
       // 用户已手动中断过（分隔条已画）→ 只关回合；否则画「已中断」分隔条（opencode interrupted）
       if(log._intMarked){ log._intMarked=false; }
@@ -911,6 +931,12 @@ function renderEvent(log, ev, sid){
     // completed：不留收尾行（参考界面仅以留白分隔，减少噪音）
     log._turn=null;
   }
-  else if(k==="note"){ log._sb=null; closeCtxGroup(log); ensureTurn(log).append(el("meta note",esc(ev.text||""))); }
+  else if(k==="note"){ log._sb=null; closeCtxGroup(log);
+    // 回合间隙的 note（计划模式开/关等状态线）不能开新回合：ensureTurn 若为它建 .turn，
+    // 下一条 user_message 会被吞进同一回合，「已工作」计时行翻到用户气泡上方、note 本体
+    // 又被折叠 CSS 藏掉（2026-09-15 排版事故）。无开启回合时比照 queueNote 挂线程根。
+    const inTurn=!!log._turn;
+    (inTurn?log._turn:log).append(el("meta note"+(inTurn?"":" solo"),esc(ev.text||"")));
+  }
   stickScroll(log);
 }

@@ -5,7 +5,7 @@
 
 ## 这是什么
 
-「形 / 核 / 体」三层混合智能体的 **核 + 多壳后端**。当前 **M2 推进中（13 crate，325 测试全绿、
+「形 / 核 / 体」三层混合智能体的 **核 + 多壳后端**。当前 **M2 推进中（14 crate，325 测试全绿、
 clippy 零告警）**：M0 内核（回合循环/守卫/会话日志/模型缝）之上已落地——会话 JSONL 落库、本地文件
 工具沙箱、JSON 前门协议（= Tauri invoke 边界）、真实模型缝（OpenAI 兼容 + 断流自愈）、企业连接器、
 MCP/LSP/办公/联网/IM/插件面（飞书/QQ/微信 ClawBot/Telegram 四通道）、Web 桌面壳与 Tauri 原生壳、
@@ -48,7 +48,8 @@ echo '{"cmd":"send","session_id":"s1","text":"算 2+3"}' | \
 | crate | 职责 |
 |---|---|
 | `cmx-agent-core` | 内核：agent/回合循环 · guard/守卫 · event/会话日志 · model/模型缝 · session · tool/注册表 |
-| `cmx-agent-tools` | 内置工具：fs_* / shell（Windows 探测链+Job Object）· grep/glob/git/run_tests · chart 等 |
+| `cmx-agent-sandbox` | OS 级进程沙箱（S0-S3）：Windows 受限令牌+ACL+原生 spawn / Linux Landlock+seccomp / 能力探测 fail-closed / 命令风险屏 / SandboxSettings |
+| `cmx-agent-tools` | 内置工具：fs_* / shell（Windows 探测链+Job Object+受限 spawn）· grep/glob/git/run_tests · chart 等 |
 | `cmx-agent-connectors` | 企业连接器：cmx-flow/rules/onto/report 微服务对接 + 门户认证 |
 | `cmx-agent-model` | 真实模型缝：OpenAI 兼容（流式 + 断流自愈重试）· 多 provider 配置 |
 | `cmx-agent-mcp` / `cmx-agent-lsp` | 外部 MCP server 接入 / LSP 代码智能 |

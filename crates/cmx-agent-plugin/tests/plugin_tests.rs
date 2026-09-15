@@ -16,7 +16,13 @@ fn tmp(tag: &str) -> PathBuf {
     std::fs::create_dir_all(&p).unwrap();
     p
 }
-fn ctx_roots() -> Vec<PathBuf> { vec![PathBuf::from("/tmp")] }
+// S1b 沙箱语义（方案 §6.1）：子进程 cwd=first_root，根必须真实存在（fail-closed 校验）——
+// Windows 上 "/tmp" 非真实路径，改用真实临时目录。
+fn ctx_roots() -> Vec<PathBuf> {
+    let d = std::env::temp_dir().join(format!("cmx-plugin-roots-{}", std::process::id()));
+    std::fs::create_dir_all(&d).unwrap();
+    vec![d]
+}
 
 #[tokio::test]
 async fn command_plugin_loads_and_runs() {

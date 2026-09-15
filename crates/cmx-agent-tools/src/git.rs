@@ -2,6 +2,7 @@
 //! 写类(add/commit/checkout/restore)需 workspace-write。比裸 shell 更安全（受控子命令）。
 
 use async_trait::async_trait;
+use cmx_agent_core::guard::SandboxMode;
 use cmx_agent_core::tool::GuardHints;
 use cmx_agent_core::{Tool, ToolCtx, ToolError, ToolResult, ToolSpec};
 use serde_json::{Value, json};
@@ -71,7 +72,17 @@ impl Tool for GitTool {
             .get("timeout_ms")
             .and_then(|v| v.as_u64())
             .unwrap_or(proc::DEFAULT_TIMEOUT_MS);
-        let out = proc::run("git", &args, cwd, timeout).await;
+        // OS 沙箱（S1a）：WorkspaceWrite 档走受限令牌原生 spawn，profile=Git（.git 合法写，无 deny）。
+        let out = if ctx.sandbox == SandboxMode::WorkspaceWrite {
+            let pctx = cmx_agent_sandbox::ProcCtx {
+                sandbox: ctx.sandbox,
+                roots: ctx.allowed_roots,
+                profile: cmx_agent_sandbox::Profile::Git,
+            };
+            proc::run_profiled(&pctx, "git", &args, cwd, timeout).await
+        } else {
+            proc::run("git", &args, cwd, timeout).await
+        };
         Ok(ToolResult::ok(out))
     }
 }

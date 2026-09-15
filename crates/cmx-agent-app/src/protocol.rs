@@ -5,6 +5,8 @@
 //! 换壳不换核。所有变体 `tag = "cmd"`，snake_case（对齐 codex/规则引擎 rename_all 约定）。
 
 use crate::app::{AgentApp, SendOutcome};
+
+use std::path::PathBuf;
 use crate::error::AppError;
 use crate::store::SessionMeta;
 
@@ -97,6 +99,22 @@ pub enum AppRequest {
     /// 运行时切换两旋钮（沙箱能力 × 审批许可；其余 Policy 项不动）。
     /// `sandbox`: `read-only|workspace-write|danger-full-access`；`approval`: `never|on-request|unless-trusted`。
     SetPolicy { sandbox: String, approval: String },
+    /// 沙箱应用级配置（S0，方案 §6.3）：读取 SandboxSettings 快照（持久化落 data_dir/settings.json）。
+    GetSandboxSettings,
+    /// 沙箱应用级配置：整体替换并持久化（与 set_policy 的内存旋钮分层——重启不丢）。
+    SetSandboxSettings {
+        net: String,
+        #[serde(default)]
+        require_os: Option<bool>,
+        #[serde(default)]
+        cmd_risk_screen: Option<bool>,
+        #[serde(default)]
+        win_cache_policy: Option<String>,
+        #[serde(default)]
+        extra_write_roots: Vec<String>,
+        #[serde(default)]
+        hardened_read: bool,
+    },
     /// B2 读取完整模型配置（api_key 脱敏），供配置面板填充表单。
     /// `id` 缺省 = 激活 provider（旧行为兼容）；有值 = 指定条目（多 provider 面板）。
     GetModelConfig {
@@ -367,6 +385,61 @@ async fn dispatch_inner(app: &AgentApp, req: AppRequest) -> Result<AppResponse, 
             let a: cmx_agent_core::ApprovalPolicy = parse_enum("approval", &approval)
                 .map_err(AppError::BadRequest)?;
             Ok(AppResponse::ok(app.set_policy(s, a)?))
+        }
+        AppRequest::GetSandboxSettings => {
+            let s = cmx_agent_sandbox::settings::get();
+            Ok(AppResponse::ok(serde_json::json!({
+                "net": s.net.as_str(),
+                "require_os": s.require_os,
+                "cmd_risk_screen": s.cmd_risk_screen,
+                "win_cache_policy": match s.win_cache_policy {
+                    cmx_agent_sandbox::WinCachePolicy::Redirect => "redirect",
+                    cmx_agent_sandbox::WinCachePolicy::Allow => "allow",
+                    cmx_agent_sandbox::WinCachePolicy::Deny => "deny",
+                },
+                "extra_write_roots": s.extra_write_roots.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
+                "hardened_read": s.hardened_read,
+            })))
+        }
+        AppRequest::SetSandboxSettings { net, require_os, cmd_risk_screen, win_cache_policy, extra_write_roots, hardened_read } => {
+            let mut s = cmx_agent_sandbox::settings::get();
+            s.net = match net.to_lowercase().as_str() {
+                "open" => cmx_agent_sandbox::NetMode::Open,
+                "poison" => cmx_agent_sandbox::NetMode::Poison,
+                "enforce" => cmx_agent_sandbox::NetMode::Enforce,
+                other => return Err(AppError::BadRequest(format!("sandbox.net 非法值 '{other}'（open|poison|enforce）"))),
+            };
+            if let Some(v) = require_os { s.require_os = v; }
+            if let Some(v) = cmd_risk_screen { s.cmd_risk_screen = v; }
+            if let Some(p) = win_cache_policy {
+                s.win_cache_policy = match p.to_lowercase().as_str() {
+                    "redirect" => cmx_agent_sandbox::WinCachePolicy::Redirect,
+                    "allow" => cmx_agent_sandbox::WinCachePolicy::Allow,
+                    "deny" => cmx_agent_sandbox::WinCachePolicy::Deny,
+                    other => return Err(AppError::BadRequest(format!("win_cache_policy 非法值 '{other}'"))),
+                };
+            }
+            // extra_write_roots 防线校验（红队3 P1-2）：`..` 穿越/根路径/超量直接拒——
+            // 该字段等价于扩写围栏，不能静默单请求拆沙箱。
+            if extra_write_roots.len() > 16 {
+                return Err(AppError::BadRequest("extra_write_roots 超过 16 条上限".into()));
+            }
+            for e in &extra_write_roots {
+                let bad = e.is_empty()
+                    || e.contains("..")
+                    || e == "/"
+                    || e == "\\"
+                    || (e.len() >= 2 && e.as_bytes()[1] == b':');
+                if bad {
+                    return Err(AppError::BadRequest(format!(
+                        "extra_write_roots 非法条目 '{e}'（空串/../盘符根/卷根不允许）"
+                    )));
+                }
+            }
+            s.extra_write_roots = extra_write_roots.into_iter().map(PathBuf::from).collect();
+            s.hardened_read = hardened_read;
+            let persisted = cmx_agent_sandbox::settings::set(s.clone()).map_err(AppError::BadRequest)?;
+            Ok(AppResponse::ok(serde_json::json!({ "saved": true, "persisted": persisted, "net": s.net.as_str() })))
         }
         AppRequest::GetModelConfig { id } => Ok(AppResponse::ok(app.get_model_config(id.as_deref()))),
         AppRequest::SetModelConfig { id, name, base_url, model, temperature, timeout_ms, api_key_action, api_key_value } => {

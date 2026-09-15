@@ -1,6 +1,7 @@
 //! `run_tests` —— 自动识别工作区构建系统并跑测试（cargo/npm/pytest/go），或执行自定义测试命令。需 workspace-write。
 
 use async_trait::async_trait;
+use cmx_agent_core::guard::SandboxMode;
 use cmx_agent_core::tool::GuardHints;
 use cmx_agent_core::{Tool, ToolCtx, ToolError, ToolResult, ToolSpec};
 use serde_json::{Value, json};
@@ -62,15 +63,31 @@ impl Tool for RunTestsTool {
             .get("timeout_ms")
             .and_then(|v| v.as_u64())
             .unwrap_or(120_000);
+        // OS 沙箱（S1a）：WorkspaceWrite 档走受限令牌原生 spawn（profile=Shell：.git deny 生效，
+        // 测试误删 .git 同样被拒；git 类操作归 git 工具）。辅助闭包：档位分路。
+        let pctx = cmx_agent_sandbox::ProcCtx {
+            sandbox: ctx.sandbox,
+            roots: ctx.allowed_roots,
+            profile: cmx_agent_sandbox::Profile::Shell,
+        };
+        let sandboxed = ctx.sandbox == SandboxMode::WorkspaceWrite;
 
         if let Some(cmd) = input.get("command").and_then(|v| v.as_str()) {
             // 与 shell 工具同一探测链/argv 模板（P0：不再硬编码 sh -c）。
-            let out = proc::run_cmd(cmd, cwd, timeout).await;
+            let out = if sandboxed {
+                proc::run_cmd_profiled(&pctx, cmd, cwd, timeout).await
+            } else {
+                proc::run_cmd(cmd, cwd, timeout).await
+            };
             return Ok(ToolResult::ok(json!({"framework":"custom","command":cmd,"result":out})));
         }
         match detect(cwd) {
             Some((prog, args, fw)) => {
-                let out = proc::run(prog, &args, cwd, timeout).await;
+                let out = if sandboxed {
+                    proc::run_profiled(&pctx, prog, &args, cwd, timeout).await
+                } else {
+                    proc::run(prog, &args, cwd, timeout).await
+                };
                 Ok(ToolResult::ok(json!({
                     "framework": fw,
                     "command": format!("{prog} {}", args.join(" ")),
