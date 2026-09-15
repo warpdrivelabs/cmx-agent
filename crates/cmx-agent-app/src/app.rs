@@ -111,6 +111,10 @@ pub struct AgentApp {
     model_resolver: Option<Arc<crate::agents::AppModelResolver>>,
     /// 阶段二：计划模式活开关注册表：session_id → flag（回合开始插入、收尾摘除并对账回写 meta）。
     turn_plan_flags: Mutex<std::collections::HashMap<String, Arc<std::sync::atomic::AtomicBool>>>,
+    /// 改造二（方案 20260914）：父会话在途回合期间到达的后台子任务回执暂存队列——
+    /// 注入器见「父忙」即挂此处，由在途回合的内核收口点经 deferred 缝吸收（折尾）；
+    /// 收口点未吸收完（race/中断/MaxSteps）由回合收尾持锁兜底 drain（降级独立回执回合）。
+    pending_receipts: Mutex<std::collections::HashMap<String, Vec<String>>>,
 }
 
 /// 落盘的登录会话（`<data_dir>/auth.json`）：启动时经 /api/auth/me 校验回放，
@@ -189,6 +193,7 @@ impl AgentApp {
             agents: None,
             model_resolver: None,
             turn_plan_flags: Mutex::new(std::collections::HashMap::new()),
+            pending_receipts: Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -327,6 +332,23 @@ impl AgentApp {
                 let weak = weak.clone();
                 Box::pin(async move {
                     if let Some(app) = weak.upgrade() {
+                        // 改造二（方案 20260914）分流：父会话在途回合 → 回执挂 pending 队列，
+                        // 由在途回合的内核收口点吸收折进当前回复（图二形态）；父空闲 → 立即
+                        // app.send 开独立回执回合（图三形态，原路径不变）。
+                        let busy = app
+                            .active_turns
+                            .lock()
+                            .expect("active turns lock")
+                            .contains_key(&parent_id);
+                        if busy {
+                            app.pending_receipts
+                                .lock()
+                                .expect("pending receipts lock")
+                                .entry(parent_id.to_string())
+                                .or_default()
+                                .push(text.to_string());
+                            return;
+                        }
                         // AgentApp::send 自动获得 session_locks 按会话排队：父会话忙则
                         // <task_result> 排在当前回合之后（不与在途回合并发写日志）。
                         if let Err(e) = app.send(&parent_id, &text).await {
@@ -1390,7 +1412,9 @@ impl AgentApp {
         result
     }
 
-    /// 已持有会话队列锁后的实际回合执行。
+    /// 已持有会话队列锁后的实际回合执行（驱动器）：执行首回合，随后把在途期间到达、
+    /// 收口点未吸收完的后台子任务回执**持锁兜底 drain**——逐条以独立回执回合续跑，
+    /// race 窗口 / 中断 / MaxSteps 漏吸收的回执也不丢（方案 20260914 改造二）。
     async fn send_inner_locked(
         &self,
         session_id: &str,
@@ -1409,8 +1433,88 @@ impl AgentApp {
             }
             Err(e) => return Err(e),
         };
+
+        // 改造二：本回合在途期间到达的后台子任务回执轮询缝——内核收口点（模型不再要工具）
+        // 每次取队首一条，作为 UserMessage 注入本回合并续跑一轮（折进当前回复末尾）。
+        let deferred = || {
+            let mut pending = self.pending_receipts.lock().expect("pending receipts lock");
+            let q = pending.get_mut(session_id)?;
+            if q.is_empty() { None } else { Some(q.remove(0)) }
+        };
+
+        let mut outcome = self
+            .execute_turn_locked(
+                &mut session,
+                session_id,
+                user_input,
+                sink,
+                subject,
+                cancel,
+                policy_override,
+                Some(&deferred),
+                true,
+            )
+            .await?;
+
+        // 收尾兜底 drain：仅在前一回合 Completed 时链式续跑（中断/出错即停，剩余回执
+        // 留在队列里，下一次回合经 deferred 缝吸收，不丢）。回执回合不再挂流式 sink
+        //（BusSink 已挂内存会话，实时广播照常）。
+        while matches!(outcome.reason, cmx_agent_core::event::StopReason::Completed) {
+            let next = {
+                let mut pending = self.pending_receipts.lock().expect("pending receipts lock");
+                let q = pending.get_mut(session_id);
+                match q {
+                    Some(q) if !q.is_empty() => Some(q.remove(0)),
+                    _ => None,
+                }
+            };
+            let Some(receipt) = next else { break };
+            let r = self
+                .execute_turn_locked(
+                    &mut session,
+                    session_id,
+                    &receipt,
+                    None,
+                    None,
+                    cancel,
+                    None,
+                    Some(&deferred),
+                    false,
+                )
+                .await?;
+            // 合并进同一 SendOutcome：IM 桥按 final_text 回消息，拼接各段不丢内容。
+            outcome.new_events.extend(r.new_events);
+            outcome.turn = r.turn;
+            outcome.reason = r.reason;
+            outcome.steps = r.steps;
+            if let Some(text) = r.final_text {
+                outcome.final_text = match outcome.final_text.take() {
+                    Some(prev) if !prev.is_empty() => Some(format!("{prev}\n\n{text}")),
+                    _ => Some(text),
+                };
+            }
+        }
+        Ok(outcome)
+    }
+
+    /// 执行一个回合并完成全部收尾（错误一致性 / 计划对账 / 墓碑 / 落库 / meta）。
+    /// send_inner_locked 的主体：首条用户输入与兜底 drain 的后台回执回合共用；
+    /// `attach_bus` 只在首回合传 true——内存会话跨回合复用，BusSink 重复挂载会广播翻倍。
+    #[allow(clippy::too_many_arguments)]
+    async fn execute_turn_locked(
+        &self,
+        session: &mut Session,
+        session_id: &str,
+        user_input: &str,
+        sink: Option<std::sync::Arc<crate::stream::ChannelSink>>,
+        subject: Option<cmx_agent_core::Subject>,
+        cancel: &TurnCancel,
+        policy_override: Option<cmx_agent_core::TurnPolicyOverride>,
+        deferred: Option<&(dyn Fn() -> Option<String> + Send + Sync)>,
+        attach_bus: bool,
+    ) -> AppResult<SendOutcome> {
         if let Some(sys) = self.current_system_prompt() {
-            session = session.with_system(sys);
+            *session = std::mem::replace(session, Session::new(session_id)).with_system(sys);
         }
 
         // 会话可能属于非当前空间（切走当前空间后回到旧任务继续）：按会话所属空间取根，
@@ -1422,7 +1526,7 @@ impl AgentApp {
         //（无绑定/空间已移除时回合根回落共享 policy 的当前空间，提示词同规回落），
         // 旧实现恒用全局当前空间，切空间后回旧会话发消息会「提示词说 A、工具落 B」。
         if let Some(sys) = self.session_system_prompt(session_id) {
-            session = session.with_system(sys);
+            *session = std::mem::replace(session, Session::new(session_id)).with_system(sys);
         }
 
         // 计划模式（阶段二）：回合开始插活开关（值 = meta.plan_mode），整个回合任务树在
@@ -1444,31 +1548,34 @@ impl AgentApp {
             // 计划模式回合追加固定章节（§7.3）：session.system 每回合都由 current_system_prompt
             // 重置，此处追加只影响本回合的模型上下文。
             let sys = self.current_system_prompt().unwrap_or_default() + PLAN_MODE_PROMPT_SECTION;
-            session = session.with_system(sys);
+            *session = std::mem::replace(session, Session::new(session_id)).with_system(sys);
         }
         // 后台子任务回执回合（阶段三注入器经 app.send 送达，桌面/IM/CLI 三通道全在 send_inner
         // 汇聚）：检测 <task_result 前缀，本回合追加转述措辞章节。放在计划模式块之后，
         // session.system() 已含该有的一切，直接续加不会互相覆盖。
         if user_input.starts_with("<task_result") {
             let sys = session.system().unwrap_or_default().to_string() + TASK_RESULT_PROMPT_SECTION;
-            session = session.with_system(sys);
+            *session = std::mem::replace(session, Session::new(session_id)).with_system(sys);
         }
 
         // 流式：加载完历史后挂 sink（历史用 push_restored 不触发 sink，故只流式本回合新事件）。
         // 同一个 sink 既是事件 EventSink（全量事件）又是 TurnObserver（文字增量）。
         let before = session.log.len();
         // U16：始终挂事件总线 sink——任何来源（本地 / IM 桥）的本回合事件都广播给 `/api/subscribe` 订阅者。
-        session.log.add_sink(Arc::new(crate::bus::BusSink::new(
-            session_id.to_string(),
-            self.event_bus.sender(),
-        )));
+        // 仅首回合挂：内存会话跨兜底 drain 回合复用，重复挂载同一广播器会让每条事件双发。
+        if attach_bus {
+            session.log.add_sink(Arc::new(crate::bus::BusSink::new(
+                session_id.to_string(),
+                self.event_bus.sender(),
+            )));
+        }
         let outcome = match (&sink, &subject) {
             (Some(s), Some(subj)) => {
                 let observed = Arc::new(s.with_cancel(cancel.clone()));
                 session.log.add_sink(observed.clone());
                 self.agent
-                    .run_turn_observed_as_cancellable_with_policy(
-                        &mut session,
+                    .run_turn_observed_as_cancellable_with_policy_deferred(
+                        &mut *session,
                         user_input,
                         Some(observed.as_ref()),
                         Some(subj),
@@ -1476,6 +1583,7 @@ impl AgentApp {
                         turn_roots.as_ref().map(std::slice::from_ref),
                         policy_override,
                         Some(plan_flag.clone()),
+                        deferred,
                     )
                     .await
             }
@@ -1483,8 +1591,8 @@ impl AgentApp {
                 let observed = Arc::new(s.with_cancel(cancel.clone()));
                 session.log.add_sink(observed.clone());
                 self.agent
-                    .run_turn_observed_as_cancellable_with_policy(
-                        &mut session,
+                    .run_turn_observed_as_cancellable_with_policy_deferred(
+                        &mut *session,
                         user_input,
                         Some(observed.as_ref()),
                         None,
@@ -1492,16 +1600,17 @@ impl AgentApp {
                         turn_roots.as_ref().map(std::slice::from_ref),
                         policy_override,
                         Some(plan_flag.clone()),
+                        deferred,
                     )
                     .await
             }
             (None, Some(subj)) => self
                 .agent
-                .run_turn_observed_as_cancellable_with_policy(&mut session, user_input, None, Some(subj), Some(cancel), turn_roots.as_ref().map(std::slice::from_ref), policy_override, Some(plan_flag.clone()))
+                .run_turn_observed_as_cancellable_with_policy_deferred(&mut *session, user_input, None, Some(subj), Some(cancel), turn_roots.as_ref().map(std::slice::from_ref), policy_override, Some(plan_flag.clone()), deferred)
                 .await,
             (None, None) => self
                 .agent
-                .run_turn_observed_as_cancellable_with_policy(&mut session, user_input, None, None, Some(cancel), turn_roots.as_ref().map(std::slice::from_ref), policy_override, Some(plan_flag.clone()))
+                .run_turn_observed_as_cancellable_with_policy_deferred(&mut *session, user_input, None, None, Some(cancel), turn_roots.as_ref().map(std::slice::from_ref), policy_override, Some(plan_flag.clone()), deferred)
                 .await,
         };
         // 出错一致性（飞书 ↔ 界面）：回合中途模型失败等会让 run_turn 提前返回 Err。若直接 `?` 抛出，
@@ -2150,3 +2259,7 @@ fn make_title(user_input: &str) -> String {
         title
     }
 }
+
+#[cfg(test)]
+#[path = "receipt_tests.rs"]
+mod receipt_tests;

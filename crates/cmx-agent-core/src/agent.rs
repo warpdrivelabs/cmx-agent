@@ -339,9 +339,26 @@ impl Agent {
         cancel: Option<&TurnCancel>,
         roots: Option<&[std::path::PathBuf]>,
     ) -> AgentResult<TurnOutcome> {
+        self.run_turn_scoped(session, user_input, observer, turn_subject, cancel, roots, None)
+            .await
+    }
+
+    /// TURN_SUBJECT 作用域 + 回合主循环的统一入口（各公开 wrapper 共用）；`deferred` 语义见
+    /// [`Self::run_turn_observed_as_cancellable_with_policy_deferred`]。
+    #[allow(clippy::too_many_arguments)]
+    async fn run_turn_scoped(
+        &self,
+        session: &mut Session,
+        user_input: &str,
+        observer: Option<&dyn crate::model::TurnObserver>,
+        turn_subject: Option<&crate::guard::Subject>,
+        cancel: Option<&TurnCancel>,
+        roots: Option<&[std::path::PathBuf]>,
+        deferred: Option<&(dyn Fn() -> Option<String> + Send + Sync)>,
+    ) -> AgentResult<TurnOutcome> {
         let subject = turn_subject.cloned();
         TURN_SUBJECT
-            .scope(subject, self.run_turn_inner(session, user_input, observer, turn_subject, cancel, roots))
+            .scope(subject, self.run_turn_inner(session, user_input, observer, turn_subject, cancel, roots, deferred))
             .await
     }
 
@@ -366,8 +383,33 @@ impl Agent {
         policy_override: Option<TurnPolicyOverride>,
         plan: Option<Arc<AtomicBool>>,
     ) -> AgentResult<TurnOutcome> {
+        self.run_turn_observed_as_cancellable_with_policy_deferred(
+            session, user_input, observer, turn_subject, cancel, roots, policy_override, plan, None,
+        )
+        .await
+    }
+
+    /// [`Self::run_turn_observed_as_cancellable_with_policy`] 的**折尾注入版**（方案
+    /// 20260914 改造二）：后台子任务回执折进当前回合。`deferred` 在回合自然收口点
+    /// （模型不再要工具、即将 Completed）轮询一次——返回 `Some(text)` 则把 text 作为
+    /// UserMessage 落日志并续跑一轮模型调用，让模型在同一回复末尾转述回执（ZCode 图二
+    /// 形态）；返回 None 行为与原方法逐字节一致。注入迭代照常计入 steps、受 max_steps
+    /// 约束（触顶未吸收的回执由调用方收尾兜底 drain 接管，不丢）。
+    #[allow(clippy::too_many_arguments)]
+    pub async fn run_turn_observed_as_cancellable_with_policy_deferred(
+        &self,
+        session: &mut Session,
+        user_input: &str,
+        observer: Option<&dyn crate::model::TurnObserver>,
+        turn_subject: Option<&crate::guard::Subject>,
+        cancel: Option<&TurnCancel>,
+        roots: Option<&[std::path::PathBuf]>,
+        policy_override: Option<TurnPolicyOverride>,
+        plan: Option<Arc<AtomicBool>>,
+        deferred: Option<&(dyn Fn() -> Option<String> + Send + Sync)>,
+    ) -> AgentResult<TurnOutcome> {
         let inner =
-            self.run_turn_observed_as_cancellable(session, user_input, observer, turn_subject, cancel, roots);
+            self.run_turn_scoped(session, user_input, observer, turn_subject, cancel, roots, deferred);
         match (policy_override, plan) {
             (Some(ov), Some(flag)) => {
                 TURN_POLICY_OVERRIDE.scope(ov, TURN_PLAN_MODE.scope(flag, inner)).await
@@ -378,6 +420,7 @@ impl Agent {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn run_turn_inner(
         &self,
         session: &mut Session,
@@ -386,6 +429,7 @@ impl Agent {
         turn_subject: Option<&Subject>,
         cancel: Option<&TurnCancel>,
         roots: Option<&[std::path::PathBuf]>,
+        deferred: Option<&(dyn Fn() -> Option<String> + Send + Sync)>,
     ) -> AgentResult<TurnOutcome> {
         let turn = session.next_turn_no();
         session.log.append(EventKind::TurnStarted {
@@ -438,8 +482,14 @@ impl Agent {
                 final_text = Some(t.clone());
             }
 
-            // 无工具调用 → 回合自然完成
+            // 无工具调用 → 优先吸收延迟注入（后台子任务回执折尾，方案 20260914 改造二）：
+            // 取到回执则作为 UserMessage 落日志并续跑一轮（模型在同一回复末尾转述）；
+            // 无注入才真正收口。注入迭代照常计入 steps，循环顶部 max_steps 仍在约束。
             if !resp.wants_tools() {
+                if let Some(text) = deferred.and_then(|f| f()) {
+                    session.log.append(EventKind::UserMessage { text });
+                    continue;
+                }
                 break StopReason::Completed;
             }
 
@@ -1070,7 +1120,7 @@ impl AgentBuilder {
 mod tests {
     use super::*;
     use crate::event::EventKind;
-    use crate::model::MockModel;
+    use crate::model::{MockModel, ModelResponse};
 
     #[tokio::test]
     async fn cancelled_turn_is_persisted_as_stopped() {
@@ -1090,5 +1140,95 @@ mod tests {
             session.log.events().last().unwrap().kind,
             EventKind::TurnEnded { reason: StopReason::Stopped, .. }
         ));
+    }
+
+    /// 改造二（方案 20260914）：折尾注入——模型第一轮给纯文本（自然收口点），deferred 吐出
+    /// 后台回执 → 作为 UserMessage 注入并续跑一轮；两条 UserMessage / 两条 ModelMessage
+    /// 落在**同一个回合**里（无新 TurnStarted），注入轮计入 steps。
+    #[tokio::test]
+    async fn deferred_receipt_folds_into_running_turn() {
+        let model = MockModel::new([
+            ModelResponse::text("北京今天晴。"),
+            ModelResponse::text("另外，后台子任务完成了：负责服务器监控与故障处理。"),
+        ]);
+        let agent = Agent::builder().model(Arc::new(model)).build().unwrap();
+        let mut session = Session::new("s-fold");
+        let queue = std::sync::Mutex::new(vec![
+            "<task_result id=\"subtask-1\">负责服务器监控与故障处理</task_result>".to_string(),
+        ]);
+        let deferred = || {
+            let mut q = queue.lock().unwrap();
+            if q.is_empty() { None } else { Some(q.remove(0)) }
+        };
+        let outcome = agent
+            .run_turn_observed_as_cancellable_with_policy_deferred(
+                &mut session,
+                "北京天气怎么样",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(&deferred),
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome.reason, StopReason::Completed);
+        assert_eq!(outcome.steps, 2, "注入轮计入 steps：2 次模型调用");
+        let events = session.log.events();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e.kind, EventKind::TurnStarted { .. }))
+                .count(),
+            1,
+            "折尾不另开回合：仍是一个 TurnStarted"
+        );
+        let user_texts: Vec<String> = events
+            .iter()
+            .filter_map(|e| match &e.kind {
+                EventKind::UserMessage { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            user_texts,
+            vec![
+                "北京天气怎么样".to_string(),
+                "<task_result id=\"subtask-1\">负责服务器监控与故障处理</task_result>".to_string()
+            ]
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e.kind, EventKind::ModelMessage { .. }))
+                .count(),
+            2,
+            "原始回复 + 折尾续写都落日志"
+        );
+        assert!(matches!(
+            events.last().unwrap().kind,
+            EventKind::TurnEnded { reason: StopReason::Completed, .. }
+        ));
+    }
+
+    /// 改造二回归：deferred 恒 None 时行为与原方法一致——单轮纯文本即收口，不注入。
+    #[tokio::test]
+    async fn deferred_none_keeps_single_step_turn() {
+        let agent = Agent::builder()
+            .model(Arc::new(MockModel::saying("就一句")))
+            .build()
+            .unwrap();
+        let mut session = Session::new("s-nofold");
+        let outcome = agent
+            .run_turn_observed_as_cancellable_with_policy_deferred(
+                &mut session, "hi", None, None, None, None, None, None, None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome.reason, StopReason::Completed);
+        assert_eq!(outcome.steps, 1);
+        assert_eq!(outcome.final_text.as_deref(), Some("就一句"));
     }
 }

@@ -844,13 +844,30 @@ function renderEvent(log, ev, sid){
   if(k==="user_message"){
     closeCtxGroup(log);
     if(log._skipUser){ log._skipUser=false; log._stick=true; stickScroll(log); return; }   // 已乐观渲染，跳过流里的回显
-    // 后台子智能体完成注入（阶段三）：<task_result …>…</task_result> 渲染为可折叠系统卡，
-    // 不出现「用户说」气泡（重放恢复同规则）。
+    // 后台子智能体完成注入（阶段三）：<task_result …>…</task_result> 三态渲染（方案 20260914
+    // 改造二）：①回执合一——后台执行中卡在场（可视化方案 S1 的 _subCards，未实施时恒空）原地
+    // 收口不建新卡；②折尾——回执落在正跑着的普通回合内（内核收口点注入，无新 TurnStarted）
+    // → 卡作为当前回合的系统卡，模型续写紧随其后（ZCode 图二形态）；③独立回执回合——现状
+    // .notify 通知卡（刷新/回放/父空闲，ZCode 图三形态）。重放与实时同形。
     if((ev.text||"").startsWith("<task_result")){
       const txt=ev.text.trim();   // 容忍尾部换行：$ 锚点对带换行的原文不命中，会把闭合标签漏进正文
       const m=(txt.match(/^<task_result\s+id="([^"]*)"(?:\s+state="([^"]*)")?([\s\S]*)<\/task_result>$/))||[];
       const id2=m[1]||"", st=m[2]||"completed";
       const body=txt.replace(/^<task_result[^>]*>/,"").replace(/<\/task_result>$/,"").trim();
+      // 态一 · 回执合一：后台卡在场 → 原地收口（✓/✕ + 结果并入卡体），不建新卡不弹通知。
+      const _scs=log._subCards;
+      const sc=_scs?(typeof _scs.get==="function"?_scs.get(id2):_scs[id2]):null;
+      if(sc){
+        try{
+          sc.classList.remove("run"); sc.classList.add(st==="failed"?"fail":"done");
+          const stEl=sc.querySelector(".tc-st");
+          if(stEl){ stEl.className="tc-st "+(st==="failed"?"bad":"ok"); stEl.textContent=st==="failed"?"✕":"✓"; }
+          const se=sc.querySelector(".tc-state"); if(se) se.textContent=st==="failed"?"后台失败":"后台完成";
+          const sb=sc.querySelector(".tc-body"); if(sb&&sb.hidden){ sb.hidden=false; sc.classList.add("open"); }
+          const term=sc.querySelector(".tterm"); if(term) term.textContent=body||"（无输出）";
+        }catch(_){ }
+        log._stick=true; stickScroll(log); return;
+      }
       const card=el("tool tcard done task-result"+(st==="failed"?" tr-fail":""));
       card.innerHTML=`<button class="tc-trig" type="button">`
         +`<span class="tc-st ${st==="failed"?"bad":"ok"}" title="${esc(st)}">${st==="failed"?ICON_X:ICON_CHECK}</span>`
@@ -863,10 +880,17 @@ function renderEvent(log, ev, sid){
       card.querySelector(".tc-trig").addEventListener("click",()=>{
         const b=card.querySelector(".tc-body"); b.hidden=!b.hidden; card.classList.toggle("open",!b.hidden);
       });
-      // 回执开头的回合是「通知」不是「干活」：掐掉本回合的「已工作」计时行（realtime 通路，
-      // 悬空的计时器行很怪）；turn_started 时随回合复位。回合打 .notify 标记：它没有用户
-      // 气泡也没有计时行做锚点，光靠默认留白与上一回合分不开，读感像两条贴在一起的渲染
-      // 异常（2026-09-15 反馈）——CSS 据此画虚线分界并加大上距，明确「这是新的一条」。
+      // 态二 · 折尾：当前回合是带用户气泡的普通回合且未收口 → 卡并入当前回合（模型转述
+      // 随后渲进同一回合）。回执回合自身是刚起的空回合（turn_started 刚建、无用户气泡），
+      // 走不进此分支——用它区分「折进在途回合」与「回执自立回合」。
+      const cur=(log._turn&&!log._closed)?log._turn:null;
+      if(cur&&cur.querySelector(":scope > .user-chip")&&!cur.classList.contains("notify")){
+        cur.append(card);
+        log._stick=true; stickScroll(log); return;
+      }
+      // 态三 · 独立回执回合：回执开头的回合是「通知」不是「干活」：掐掉本回合的「已工作」
+      // 计时行（realtime 通路，悬空的计时器行很怪）；turn_started 时随回合复位。回合打
+      // .notify 标记：CSS 画虚线分界并加大上距，明确「这是新的一条」（2026-09-15 反馈）。
       log._notifyTurn=true;
       const nt=ensureTurn(log); nt.classList.add("notify"); nt.append(card);
       log._stick=true; stickScroll(log); return;

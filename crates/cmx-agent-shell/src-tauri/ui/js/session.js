@@ -215,6 +215,7 @@ function openSessionLive(sessionId){
   const inp=t.view.querySelector(".inp2");
   attachComposer(inp);
   bindComposerButtons();
+  initSessionPermSelect(t, sessionId);
   inp.addEventListener("keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendChatTab(t);} });
   inp.addEventListener("input",e=>autoGrow(e.target));
   t.view.querySelector(".tab-send").onclick=()=>sendChatTab(t);
@@ -390,19 +391,65 @@ async function answerQuestion(btn){
   }
 }
 
-// ── 计划模式 chip（阶段二，方案 §7.1）：用户独占切换 → set_plan_mode；im-* 会话后端拒绝 ──
-async function togglePlanMode(btn){
-  const sid=CURRENT;
-  if(!sid){ showToast("请先进入一个会话"); return; }
-  if(/^im-/.test(sid)){ showToast("IM 助理会话不支持计划模式"); return; }
-  const on=!btn.classList.contains("on");
-  try{
-    const r=await call({cmd:"set_plan_mode", session_id:sid, enabled:on});
-    if(!r||r.ok===false) throw new Error((r&&r.error&&r.error.message)||"切换失败");
-    btn.classList.toggle("on",on);
-    if(_SESSION_META[sid]) _SESSION_META[sid].plan_mode=on;
-    showToast(on?"已进入计划模式（只读调研，exit_plan 批准后实施）":"已退出计划模式");
-  }catch(e){ showToast("切换计划模式失败："+(e&&e.message||e)); }
+// ── 权限三模式（方案 20260914 改造三）：模板克隆后的下拉初始化与状态回填。
+// cmx-dd 组件只在页面加载时扫文档内 select——template 克隆出来的必须手动 cmxInitDropdown；
+// im-* 会话后端拒绝进计划模式 → plan 项直接禁用置灰。──
+function initSessionPermSelect(t, sessionId){
+  const sel=t.view.querySelector("select[data-role=perm]");
+  if(!sel) return;
+  if(typeof cmxInitDropdown==="function") cmxInitDropdown(sel);
+  if(/^im-/.test(sessionId)){
+    const opt=sel.querySelector("option[value=plan]");
+    if(opt){ opt.disabled=true; opt.textContent="📋 计划模式（IM 会话不支持）"; }
+  }
+  const meta=_SESSION_META[sessionId];
+  permSetSelect(sel, (meta&&meta.plan_mode)?"plan":permMode);
+}
+
+// ── 等待队列卡片（方案 20260914 改造一）：t._queue=[{qid,text}]，按数组序全量重渲；
+// 卡片拖拽换序（HTML5 DnD）、↑ 立即（提到队首）、✎ 编辑（取回输入框）、✕ 删除。──
+function renderQueue(t){
+  const box=t.view.querySelector(".queued"); if(!box) return;
+  box.innerHTML=""; box.hidden=!(t._queue&&t._queue.length);
+  if(!t._queue||!t._queue.length) return;
+  const h=el("qhead");
+  h.innerHTML="<span>⏳ 等待队列 · "+t._queue.length+" 条</span><span class=\"qh-tip\">⋮⋮ 拖动排序 · ↑ 立即 · ✎ 编辑 · ✕ 删除</span>";
+  box.append(h);
+  t._queue.forEach(it=>{
+    const c=el("qcard"); c.draggable=true; c.dataset.qid=it.qid;
+    c.innerHTML="<span class=\"qgrip\">⋮⋮⋮</span><span class=\"qtext\" title=\""+esc(it.text)+"\">"+esc(it.text)+"</span>"
+      +"<button class=\"qa qa-now\" title=\"提到队首，当前回合结束后立即发送\">↑ 立即</button>"
+      +"<button class=\"qa qa-edit\" title=\"取出编辑\">✎</button>"
+      +"<button class=\"qa qa-del\" title=\"删除\">✕</button>";
+    c.addEventListener("dragstart",e=>{ t._qdrag=it.qid; c.classList.add("dragging");
+      e.dataTransfer.effectAllowed="move"; try{ e.dataTransfer.setData("text/plain",String(it.qid)); }catch(_){} });
+    c.addEventListener("dragend",()=>{ t._qdrag=null; c.classList.remove("dragging");
+      box.querySelectorAll(".qcard").forEach(x=>x.classList.remove("drag-over")); });
+    c.addEventListener("dragover",e=>{ e.preventDefault();
+      if(t._qdrag!=null&&t._qdrag!==it.qid) c.classList.add("drag-over"); });
+    c.addEventListener("dragleave",()=>c.classList.remove("drag-over"));
+    c.addEventListener("drop",e=>{ e.preventDefault(); c.classList.remove("drag-over");
+      const q=t._queue||[];
+      const from=q.findIndex(x=>x.qid===t._qdrag); if(from<0) return;
+      const targetIdx=q.findIndex(x=>x.qid===it.qid); if(targetIdx<0) return;
+      const [m]=q.splice(from,1);
+      let to=q.findIndex(x=>x.qid===it.qid);
+      if(from<targetIdx) to+=1;               /* 目标原在拖动项下方 → 落到其下（原下标判断） */
+      q.splice(to,0,m); renderQueue(t); });
+    c.querySelector(".qa-now").addEventListener("click",()=>{
+      const i=t._queue.findIndex(x=>x.qid===it.qid); if(i<0) return;
+      const [m]=t._queue.splice(i,1); t._queue.unshift(m); renderQueue(t);
+      showToast(t._busy?"已提到队首，当前回合结束后立即发送":"已提到队首"); });
+    c.querySelector(".qa-edit").addEventListener("click",()=>{
+      const i=t._queue.findIndex(x=>x.qid===it.qid); if(i<0) return;
+      const [m]=t._queue.splice(i,1); renderQueue(t);
+      const inp=t.view.querySelector(".inp2"); if(inp){ inp.value=m.text; autoGrow(inp); inp.focus(); }
+      showToast("已取出到输入框，改完再发"); });
+    c.querySelector(".qa-del").addEventListener("click",()=>{
+      const i=t._queue.findIndex(x=>x.qid===it.qid); if(i<0) return;
+      t._queue.splice(i,1); renderQueue(t); });
+    box.append(c);
+  });
 }
 
 // ── 在途提问恢复（刷新/重开窗口主路径）：挂起中的提问不在落库事件里（回合末才落库），
@@ -459,7 +506,8 @@ function watchRemoteTurn(t, baseTotal){
     restorePendingQuestions(t); restorePendingApprovals(t);   // 还有下一个挂起则补画交互槽卡
     t._busy=false; setSessionBusy(t,false);
     const next=(t._queue||[]).shift();
-    if(next) doSendTab(t,next);
+    renderQueue(t);
+    if(next) doSendTab(t,next.text);
   },2500);
 }
 
@@ -557,6 +605,7 @@ async function openSession(sessionId, autoPrompt){
   const inp=t.view.querySelector(".inp2");
   attachComposer(inp);
   bindComposerButtons();
+  initSessionPermSelect(t, sessionId);
   inp.addEventListener("keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendChatTab(t);} });
     inp.addEventListener("input",e=>autoGrow(e.target));
     t.view.querySelector(".tab-send").onclick=()=>sendChatTab(t);
@@ -577,12 +626,12 @@ async function openSession(sessionId, autoPrompt){
     restorePendingQuestions(t);
     restorePendingApprovals(t);
   }
-  // 计划模式 chip（阶段二）：状态 = meta.plan_mode；im-* 会话隐藏（后端拒绝进计划模式）
-  const _chip=t.view.querySelector(".plan-chip");
-  if(_chip){
+  // 权限三模式下拉（方案 20260914 改造三）：状态 = 会话 plan_mode ? plan : 全局档
+  //（im-* 会话的 plan 项已在克隆时禁用）
+  const _psel=t.view.querySelector("select[data-role=perm]");
+  if(_psel){
     const meta=_SESSION_META[sessionId];
-    _chip.classList.toggle("on", !!(meta&&meta.plan_mode));
-    _chip.style.display = /^im-/.test(sessionId) ? "none" : "";
+    permSetSelect(_psel, (meta&&meta.plan_mode)?"plan":permMode);
   }
   activateTab(tabId);
   // 打开会话后自动滚到最新消息（底部）：历史是在 tab 隐藏时渲染的，激活后才完成布局，
@@ -597,11 +646,12 @@ async function openSession(sessionId, autoPrompt){
 
 async function doSendTab(t, text){
   const log=t.view.querySelector(".log");
-  // 同会话等待队列：当前回合未结束时，后发消息按顺序排队，不并发写同一会话。
+  // 同会话等待队列（方案 20260914 改造一）：当前回合未结束时，后发消息按序排队成卡
+  //（可拖拽排序 / 立即 / 编辑 / 删除），不并发写同一会话。
   if(t._busy){
     t._queue=t._queue||[];
-    t._queue.push(text);
-    queueNote(log,"⏳ 已加入会话等待队列（第 "+t._queue.length+" 条）");
+    t._queue.push({qid:(t._qid=(t._qid||0)+1), text});
+    renderQueue(t);
     return;
   }
   // 代际守卫（红蓝审查 P2-1）：finally 置 _busy=false 后到队列推进之间隔着元数据 await，
@@ -664,10 +714,11 @@ async function doSendTab(t, text){
   scheduleRefreshTasks();
   if(myGen!==t._sendGen) return;              // 队列已被窗口期的新发送接手，本帧不得再 drain
   const next=(t._queue||[]).shift();
-  if(next && !_cancelled) doSendTab(t,next);
-  else if(_cancelled && (t._queue||[]).length){
-    t._queue=[]; queueNote(log,"🛑 已中断，等待队列已清空。");
-  }
+  renderQueue(t);
+  if(next && !_cancelled) doSendTab(t,next.text);
+  // 中断不再清空队列（改造一，对齐 ZCode）：卡片原地保留，点「↑ 立即」或再发消息手动接续；
+  // 中断后不自动 drain——刚叫停就自动发下一条很突兀。
+  else if(_cancelled && (t._queue||[]).length) queueNote(log,"🛑 已中断，等待队列已保留（点卡片「↑ 立即」逐条放行）。");
 }
 // 直接挂到 log 的提示行（回合已关闭时不新开一张空回合卡）
 function queueNote(log, text){
@@ -732,6 +783,9 @@ async function startFromHome(){
   const text=box.value.trim(); if(!text) return;
   box.value=""; autoGrow(box);
   const id="task-"+Date.now();
+  // 首页选的「📋 计划模式」前置到新会话（改造三）：先落 set_plan_mode 再打开会话，
+  // openSession 拉到的 meta 已带 plan_mode，下拉与回合守卫直接就位。
+  if(permMode==="plan"){ try{ await call({cmd:"set_plan_mode", session_id:id, enabled:true}); }catch(_){} }
   await openSession(id, text);
 }
 // 文本域自动增高（随内容 26→200px）

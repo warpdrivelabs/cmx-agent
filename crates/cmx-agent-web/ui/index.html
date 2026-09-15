@@ -491,6 +491,11 @@
           <button class="tool-ic" title="附件（占位）"><span>＋</span></button>
           <button class="tool-ic" title="引用文件（@ 搜索工作空间文件）"><span>@</span></button>
           <button class="tool-ic" title="调用技能（/ 唤起技能菜单）"><span>/</span></button>
+          <div class="selbtn"><select data-role="perm" title="默认权限：变更前确认 · 计划模式 · 完全访问">
+            <option value="confirm">🛡 变更前确认</option>
+            <option value="plan">📋 计划模式</option>
+            <option value="full">⚡ 完全访问</option>
+          </select></div>
           <div class="sp"></div>
           <button class="model" data-act="openModelMenu" title="模型选择"><span class="mdot">◎</span> <span class="mlabel">未配置</span> ▾</button>
           <button class="tool-ic voice" data-act="toggleVoice" title="语音输入（占位）"><span>🎙</span></button>
@@ -501,13 +506,6 @@
         <button id="workspace-btn" class="selbtn workspace-btn" title="选择工作空间 = 沙箱工作区根">
           <span class="wi">🗂</span><span id="workspace-label">加载中…</span><span class="chev">▾</span>
         </button>
-        <div class="selbtn">🛡
-          <select id="perm" title="默认权限 = 两旋钮：沙箱能力 × 审批许可">
-            <option value="workspace-write/on-request">默认权限：工作区可写 · 按需审批</option>
-            <option value="read-only/on-request">只读 · 按需审批</option>
-            <option value="danger-full-access/never">完全访问 · 从不打断（危险）</option>
-          </select>
-        </div>
       </div>
     </section>
 
@@ -534,6 +532,8 @@
         <button class="jump-btm" type="button" hidden>↓ 回到底部</button>
         <!-- 交互槽（ZCode 式）：提问/审批卡片挂这里，不进会话时间线，答完即撤；空时隐藏 -->
         <div class="interact"></div>
+        <!-- 等待队列卡片区（方案 20260914 改造一）：回合忙碌时后发消息按序成卡，拖拽排序 / 立即 / 编辑 / 删除 -->
+        <div class="queued" hidden></div>
         <div class="chatfoot">
           <div class="composer chat-composer">
             <textarea class="inp2" placeholder="继续对话…  @ 引用文件 · / 调用技能 · ⏎ 发送 · ⇧⏎ 换行" rows="1"></textarea>
@@ -541,7 +541,11 @@
               <button class="tool-ic" title="附件（占位）"><span>＋</span></button>
               <button class="tool-ic" title="引用文件（@ 搜索工作空间文件）"><span>@</span></button>
               <button class="tool-ic" title="调用技能（/ 唤起技能菜单）"><span>/</span></button>
-              <button class="plan-chip" data-act="togglePlanMode" title="计划模式：只读调研，exit_plan 提交计划批准后才能写">📋 计划</button>
+              <div class="selbtn"><select data-role="perm" title="默认权限：变更前确认 · 计划模式 · 完全访问">
+                <option value="confirm">🛡 变更前确认</option>
+                <option value="plan">📋 计划模式</option>
+                <option value="full">⚡ 完全访问</option>
+              </select></div>
               <div class="sp"></div>
               <button class="model" data-act="openModelMenu" title="模型选择"><span class="mdot">◎</span> <span class="mlabel">未配置</span> ▾</button>
               <button class="tool-ic voice" data-act="toggleVoice" title="语音输入（占位）"><span>🎙</span></button>

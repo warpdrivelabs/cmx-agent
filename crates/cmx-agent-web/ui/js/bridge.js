@@ -8,25 +8,63 @@ async function call(req){
   const r = await fetch("/api",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(req)});
   return await r.json();
 }
-// ── 默认权限（两旋钮）：🛡 下拉切换沙箱能力 × 审批许可（前门 set_policy，立即生效）。
-// 选择记在 localStorage，启动时恢复（后端默认 workspace-write/on-request，由前端补投上次选择）──
-document.addEventListener('change', async e => {
+// ── 权限三模式（方案 20260914 改造三）：输入框下拉「🛡 变更前确认 / 📋 计划模式 / ⚡ 完全访问」。
+// confirm = 工作区可写 + 按需审批（原默认档）；plan = 安全档 + 会话级计划模式（守卫白名单默认拒，
+// 比旧「只读」档更强）；full = 完全访问 + 从不打断。切档 = set_policy（全局两旋钮）+ 会话内联动
+// set_plan_mode；选择记 localStorage（旧两旋钮值自动迁移），首页选择由 startFromHome 前置到新会话。──
+const PERM_MAP = {
+  confirm: { sandbox: "workspace-write", approval: "on-request", plan: false },
+  plan:    { sandbox: "workspace-write", approval: "on-request", plan: true },
+  full:    { sandbox: "danger-full-access", approval: "never", plan: false },
+};
+let permMode = "confirm";   // 全局当前档（plan 态本身按会话独立，见 _SESSION_META[...].plan_mode）
+function permMigrate(v){
+  if (v && PERM_MAP[v]) return v;
+  if (v === "danger-full-access/never") return "full";
+  if (v) return "confirm";            // 旧 workspace-write/on-request / read-only/on-request → confirm
+  return null;
+}
+function permSaved(){ let v=null; try{ v=localStorage.getItem("cmx-perm"); }catch(_){} return permMigrate(v); }
+/** 把某实例下拉回填到指定档（不落盘不广播；im-* 会话由调用方先禁 plan 项） */
+function permSetSelect(sel, mode){ if (sel && PERM_MAP[mode] && !sel.querySelector("option[value='"+mode+"']:disabled")) sel.value = mode; }
+/** 应用一个权限档：全局两旋钮 +（给 sessionId 时）联动会话级计划模式；成功后落盘并广播同步 */
+async function applyPermMode(mode, sessionId){
+  const m = PERM_MAP[mode]; if (!m) return false;
+  const r = await call({cmd:"set_policy", sandbox:m.sandbox, approval:m.approval});
+  if (!r || r.ok === false) { showToast("切换权限失败：" + (r && r.error ? r.error.message : "未知错误")); return false; }
+  if (sessionId != null){
+    const p = await call({cmd:"set_plan_mode", session_id:sessionId, enabled:m.plan});
+    if (!p || p.ok === false) { showToast("切换计划模式失败：" + (p && p.error ? p.error.message : "未知错误")); return false; }
+    if (_SESSION_META[sessionId]) _SESSION_META[sessionId].plan_mode = m.plan;
+  }
+  permMode = mode;
+  try { localStorage.setItem("cmx-perm", mode); } catch(_){}
+  document.dispatchEvent(new CustomEvent("cmx-perm-changed", { detail:{ mode } }));
+  return true;
+}
+document.addEventListener("change", async e => {
   const sel = e.target;
-  if (!sel || sel.id !== 'perm') return;
-  const [sandbox, approval] = sel.value.split('/');
-  try { localStorage.setItem('cmx-perm', sel.value); } catch (_) {}
-  const r = await call({cmd:'set_policy', sandbox, approval});
-  if (!r || r.ok === false) showToast('切换权限失败：' + (r && r.error ? r.error.message : '未知错误'));
+  if (!sel || sel.getAttribute("data-role") !== "perm") return;
+  // 用 contains 定位所属 tab（t.view 是 .tabview，select 在其内的 .session-view 里，不能直接比较）
+  const t = TABS.find(x => x.view.contains(sel));
+  await applyPermMode(sel.value, t ? t.sessionId : undefined);
 });
+// 各实例下拉同步：非计划态的会话下拉与首页下拉跟随全局档；计划中的会话保持「📋 计划模式」。
+document.addEventListener("cmx-perm-changed", () => {
+  document.querySelectorAll("select[data-role=perm]").forEach(sel => {
+    const t = TABS.find(x => x.view.contains(sel));
+    const isPlan = t && _SESSION_META[t.sessionId] && _SESSION_META[t.sessionId].plan_mode;
+    if (!isPlan) permSetSelect(sel, permMode);
+  });
+});
+// 启动恢复：上次选择补投后端（后端缺省 confirm 档）；各在册下拉回填。
 (function restorePerm(){
-  const sel = document.getElementById('perm');
-  let saved = null;
-  try { saved = localStorage.getItem('cmx-perm'); } catch (_) {}
-  if (!sel || !saved || ![...sel.options].some(o => o.value === saved)) return;
-  sel.value = saved;
-  const [sandbox, approval] = saved.split('/');
-  call({cmd:'set_policy', sandbox, approval}).then(r => {
-    if (!r || r.ok === false) console.warn('恢复权限档失败', r);
+  const mode = permSaved() || "confirm";
+  permMode = mode;
+  document.querySelectorAll("select[data-role=perm]").forEach(sel => permSetSelect(sel, mode));
+  const m = PERM_MAP[mode];
+  call({cmd:"set_policy", sandbox:m.sandbox, approval:m.approval}).then(r => {
+    if (!r || r.ok === false) console.warn("恢复权限档失败", r);
   });
 })();
 // ── 流式对话桥（同核多壳）：原生 Tauri 壳走 invoke("send_stream")+事件；Web 壳走 POST /api/stream 的 SSE。──
