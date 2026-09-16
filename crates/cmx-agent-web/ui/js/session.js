@@ -536,7 +536,7 @@ async function restoreActiveSubtasks(t){
       ensureTurn(log).append(card);
       cards.set(a.task_id, card);
       startSubTicker(card, a.background?"后台执行中":"执行中");
-      loadSubEvents(card, a.task_id, null);     // 立即拉已有过程（含提示词行），后续事件续流
+      loadSubEvents(card, a.task_id);           // 立即拉已有过程（含提示词行），后续事件续流
       call({cmd:"list_pending_approvals", session_id:a.task_id}).then(rr=>{
         const pend=((rr&&rr.ok&&rr.data)||{}).pending||[];
         pend.forEach(p=>{

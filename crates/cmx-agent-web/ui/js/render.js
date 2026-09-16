@@ -285,29 +285,34 @@ function trimSubLines(card){
   let f=mini.querySelector(":scope > .subfold");
   if(!f){
     f=el("subfold"); f.type="button";
-    f.addEventListener("click",()=>{ card._subFolded=true;
-      mini.querySelectorAll(":scope > .reasoning, :scope > .tool, :scope > .ctxgroup, :scope > .bubble, :scope > .subprompt, :scope > .iline")
-        .forEach(x=>{ x.style.display=""; });
-      f.remove();
-    });
+    f.addEventListener("click",()=>untrimSub(card));
     mini.prepend(f);
   }
   f.textContent=`⋯ 前面 ${hidden} 步（点开全量，含提示词 / 思考）`;
 }
-// 子会话日志懒加载（回放/刷新态）：get_events 对 subtask- 会话本就无读取门（仅列表过滤前缀），
-// 后端零改动。加载后子会话首条 user_message 自然渲染成提示词行，与实时形态一致。
+// 解除裁尾：全量过程跟随卡片展开/折叠态展示（实时卡事件已全在 DOM；回放卡由懒加载补齐后同样全量）。
+function untrimSub(card){
+  card._subFolded=true;
+  const mini=card._mini; if(!mini) return;
+  mini.querySelectorAll(":scope > *").forEach(x=>{ x.style.display=""; });
+  const f=mini.querySelector(":scope > .subfold"); if(f) f.remove();
+}
+// 子会话过程懒加载（回放/刷新态）：get_events 对 subtask- 会话本就无读取门（仅列表过滤前缀），
+// 后端零改动。不挂独立「查看完整过程」入口行——展开卡片即自动加载全量子日志，折叠即随卡体
+// 隐藏（用户定稿 2026-09-16）。加载后子会话首条 user_message 自然渲染成提示词行，与实时形态一致。
 function armSubLazy(card, taskId){
   if(!taskId||card._subLazy||!card._mini) return;
   card._subLazy=true;
-  const body=card.querySelector(".tc-body"); if(!body) return;
-  const btn=el("sublazy"); btn.type="button"; btn.textContent="🧵 查看完整过程（懒加载子会话日志）";
-  body.after(btn);
-  btn.addEventListener("click",()=>loadSubEvents(card, taskId, btn));
+  // 监听器晚于 bindToolCard 注册：触发时 body.hidden 已被翻转，读到 false 即本次点击为「展开」。
+  // （run 态 bindToolCard 直接 return 不翻转，运行中不会误触发。）
+  card.querySelector(".tc-trig").addEventListener("click",()=>{
+    const body=card.querySelector(".tc-body");
+    if(body&&!body.hidden&&!card._subLoaded) loadSubEvents(card, taskId);
+  });
 }
-async function loadSubEvents(card, taskId, btn){
+async function loadSubEvents(card, taskId){
   if(card._subLoaded||!card._mini) return;
   card._subLoaded=true;
-  if(btn) btn.remove();
   const mini=card._mini;
   const sk=el("skel","<i></i><i></i><i></i><i></i>"); mini.append(sk);
   try{
@@ -315,8 +320,9 @@ async function loadSubEvents(card, taskId, btn){
     sk.remove();
     const evs=(r&&r.ok&&r.data&&r.data.events)||[];
     evs.forEach(ev=>renderSubEvent(card, ev, taskId));
-    card._subFolded=true;                                  // 全量历史一次到位，不再裁尾
-    mini.querySelectorAll(":scope > *").forEach(x=>{ x.style.display=""; });
+    untrimSub(card);                                       // 全量历史一次到位，不再裁尾
+    const note=mini.querySelector(":scope > .meta.note");  // 回放先落的「N 步」收尾注记挪回末尾，与实时态同序
+    if(note) mini.append(note);
   }catch(e){
     sk.remove();
     mini.append(el("tcempty","（子会话过程暂不可见："+esc(String(e&&e.message||e))+"；任务结束后重开会话可回看）"));
@@ -353,11 +359,12 @@ function completeTaskCard(log, card, ev){
     }
   }
   if(live){
-    const body=card.querySelector(".tc-body");             // 完成自动折叠（ZCode 式），点卡头可回看全过程
+    untrimSub(card);                                       // 收口前解除裁尾：再展开即全过程（事件已全在 DOM）
+    const body=card.querySelector(".tc-body");             // 完成自动折叠（ZCode 式），点卡头展开回看全过程
     if(body) body.hidden=true;
     card.classList.remove("open");
   } else {
-    armSubLazy(card, o.task_id);                           // 回放：过程不在父日志里，懒加载补
+    armSubLazy(card, o.task_id);                           // 回放：卡体默认折叠，展开时自动懒加载全过程
   }
 }
 // <task_result> 收口既有后台运行卡（F2 回执合一）的收口逻辑内联在 renderEvent 的态一分支
@@ -1045,7 +1052,7 @@ function renderEvent(log, ev, sid){
           setToolStatus(sc, st==="failed"?"bad":"ok", st);
           subStateText(sc, st==="failed"?"失败":"已完成");
           if(st==="failed"&&sc._mini&&body) sc._mini.append(el("tterm tterr", esc(body)));
-          if(!log._history) armSubLazy(sc, id2);
+          if(!log._history) untrimSub(sc);   // 后台卡原地收口：解除裁尾，全过程随展开态可见
         }catch(_){ }
         log._stick=true; stickScroll(log); return;
       }

@@ -565,9 +565,6 @@
 .subfold{ background:none;border:0;color:var(--muted);font-size:11px;padding:1px 0;width:fit-content;
   text-align:left;font-family:inherit; }
 .subfold:hover{ color:var(--gold); }
-.sublazy{ display:flex;align-items:center;gap:6px;background:none;border:0;color:var(--gold);font-size:11px;
-  padding:2px 0 0 24px;width:fit-content;font-family:inherit; }
-.sublazy:hover{ text-decoration:underline; }
 /* 最终结果段：纯文本（无框），与过程行共用同一条对齐脊线 */
 .subfinal{ margin:4px 0 2px 6px;padding:2px 0 4px 20px;color:var(--ink);font-size:12.5px;line-height:1.6;
   white-space:pre-wrap;word-break:break-word;border-left:2px solid var(--border); }
