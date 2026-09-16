@@ -349,10 +349,14 @@
 @keyframes shimmerSlide{to{background-position:-200% 0}}
 
 /* ── 回合计时行 + 折叠 ── */
-.work-dur{display:flex;align-items:center;gap:6px;margin:0 -7px 4px;padding:2px 7px;
-  font-size:12px;color:var(--muted);cursor:pointer;user-select:none;width:fit-content;
-  border-radius:7px;transition:background .12s}
+.work-dur{display:flex;align-items:center;gap:6px;margin:0 0 8px;padding:2px 7px 7px;
+  font-size:12px;color:var(--muted);cursor:pointer;user-select:none;
+  border-bottom:1px solid var(--border2);border-radius:7px;transition:background .12s}
 .work-dur:hover{background:var(--hover);color:var(--ink2)}
+/* 回执自立回合的头部标题：任务描述 + 分隔线（贴 ZCode 参考图，占「已工作」行的位置） */
+.receipt-title{ display:flex;align-items:center;gap:7px;margin:0 0 8px;padding:2px 7px 7px;
+  font-size:13.5px;color:var(--ink2);border-bottom:1px solid var(--border2) }
+.receipt-title .rt-g{ font-size:12px;opacity:.85 }
 .work-dur .chev{transition:transform .16s;font-size:10px;opacity:.6}
 .turn.folded .work-dur .chev{transform:rotate(-90deg)}
 /* 折叠组只留「已工作 N」+ 最终回复（.tail）：思考/工具卡/上下文组之外，中间过程的文字气泡、
@@ -481,7 +485,7 @@
 .log>.loadmore{width:fit-content}
 
 /* ── 回到底部悬浮钮（近底检测联动，opencode 式）── */
-.jump-btm{position:absolute;right:18px;bottom:120px;z-index:30;padding:6px 14px;border-radius:16px;
+.jump-btm{position:absolute;right:18px;bottom:152px;z-index:30;padding:6px 14px;border-radius:16px;
   border:1px solid var(--border);background:var(--panel);color:var(--muted);font-size:12px;cursor:pointer;
   box-shadow:0 4px 14px rgba(0,0,0,.35)}
 .jump-btm:hover{color:var(--ink);border-color:var(--ink2)}
@@ -534,9 +538,11 @@
 .task-result.tr-fail .tc-name{ color:var(--red); }
 .task-result .tc-body .tterm{ white-space:pre-wrap;word-break:break-word; }
 
-/* 回执回合（render.js 打 .notify）：无用户气泡/计时行做锚点，光靠默认留白与上一回合
-   分不开，读感像两条贴在一起的渲染异常（2026-09-15 反馈）——画虚线分界 + 加大上距。 */
-.turn.notify{ margin-top:22px;padding-top:12px;border-top:1px dashed var(--border2); }
+/* 回执回合（render.js 打 .notify）：标题行自带分隔线后不再画虚线顶界（用户反馈 2026-09-16
+   「标题上面多了条横线」），仅保留加大上距表达「这是新的一条」。 */
+/* 回执回合（render.js 打 .notify）：标题行自带分隔线后不再画虚线顶界（用户反馈 2026-09-16
+   「标题上面多了条横线」），仅保留加大上距表达「这是新的一条」。 */
+.turn.notify{ margin-top:22px; }
 
 /* ── 子智能体子任务卡（方案 20260915 可视化，原型 v3+ 定稿）──
    嵌套金脊：过程体左侧 2px 金色脊线（var(--gold) 派生）——「父回合里嵌着一个隔离子会话」

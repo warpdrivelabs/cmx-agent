@@ -622,7 +622,7 @@ function makeLoadMore(log, sid, start, total){
   log.innerHTML=""; log._tools=new Map(); log._turn=null; log._typing=null;
   log._sb=null; log._raw=""; log._raf=null; log._rsb=null; log._rraw=""; log._rraf=null;
   log._rcard=null; log._ctx=null; log._intMarked=false;   // 全量渲染前清状态，防旧引用串场
-  log._subCards=new Map(); log._subPending=new Map(); log._subOrphans={};  // 子任务卡状态同清（旧卡已随 innerHTML 擦除）
+  log._subCards=new Map(); log._subPending=new Map(); log._subOrphans={}; log._taskDescs=new Map();  // 子任务卡状态同清（旧卡已随 innerHTML 擦除）
   log._qwait=false;                                        // 孤立 asked 行勿把计时行留成「等待回答」
   stopWorkDurTick(log); log._durRow=null; log._durTick=null; log._turnStartTs=null;  // 实时计时行一并清（防旧 interval 改新 DOM）
   log._closed=false; log._live=false;                      // 整屏权威重画后回到「无实时残留」基态

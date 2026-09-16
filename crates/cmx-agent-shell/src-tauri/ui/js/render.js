@@ -157,6 +157,7 @@ function ensureToolCard(log, call){
     if(prompt) body.append(promptLine(prompt));
     body.append(mini);
     card._mini=mini; card._subPrompt=prompt.trim();
+    card._desc=typeof call.input.description==="string"?call.input.description.trim():"";   // 简要标题（回执卡复用）
     if(live){
       body.hidden=false; card.classList.add("open");
       startSubTicker(card, call.input.background?"后台执行中":"执行中");
@@ -297,6 +298,20 @@ function untrimSub(card){
   mini.querySelectorAll(":scope > *").forEach(x=>{ x.style.display=""; });
   const f=mini.querySelector(":scope > .subfold"); if(f) f.remove();
 }
+// 按 task_id 反查子任务描述（回执标题用）：日志级描述表 → 在场卡 → 会话视图内 DOM 反查
+// （历史重放的映射留在临时容器，卡元素却带着 _desc 挂在视图里）。都查不到返回空串。
+function subTaskDesc(log, id2){
+  const _rm=log._subCards; const _rc=_rm?(typeof _rm.get==="function"?_rm.get(id2):_rm[id2]):null;
+  let desc=(log._taskDescs&&log._taskDescs.get(id2))||(_rc&&typeof _rc._desc==="string"?_rc._desc:"")||"";
+  if(!desc){
+    const host=log.closest?log.closest(".session-view"):null;
+    if(host){
+      const c2=[...host.querySelectorAll(".tool.tcard.subcard")].find(c=>c._taskId===id2);
+      if(c2&&typeof c2._desc==="string") desc=c2._desc;
+    }
+  }
+  return String(desc).trim();
+}
 // 子会话过程懒加载（回放/刷新态）：get_events 对 subtask- 会话本就无读取门（仅列表过滤前缀），
 // 后端零改动。不挂独立「查看完整过程」入口行——展开卡片即自动加载全量子日志，折叠即随卡体
 // 隐藏（用户定稿 2026-09-16）。加载后子会话首条 user_message 自然渲染成提示词行，与实时形态一致。
@@ -334,6 +349,9 @@ function completeTaskCard(log, card, ev){
   if(o.task_id){                                           // B3 锚点：task_id → 卡（回执收口/恢复共用）
     (log._subCards=log._subCards||new Map()).set(o.task_id, card);
     card._taskId=o.task_id;
+    if(card._desc){                                        // 日志级 task_id→描述表：态三独立回执卡
+      (log._taskDescs=log._taskDescs||new Map()).set(o.task_id, card._desc);   // 反查标题用（原卡可能已不在场）
+    }
   }
   if(log._subPending&&card._subPrompt!=null) log._subPending.delete(card._subPrompt);  // 防跨回合误配
   const live=!log._history;
@@ -386,7 +404,7 @@ function buildSubCardShell(a){
   const body=card.querySelector(".tc-body");
   const mini=el("sublog"); mini._history=true; mini._turn=mini;
   body.append(mini);
-  card._mini=mini; card._taskId=a.task_id;
+  card._mini=mini; card._taskId=a.task_id; card._desc=String(a.description||"");
   bindToolCard(card);
   return card;
 }
@@ -1054,13 +1072,25 @@ function renderEvent(log, ev, sid){
           if(st==="failed"&&sc._mini&&body) sc._mini.append(el("tterm tterr", esc(body)));
           if(!log._history) untrimSub(sc);   // 后台卡原地收口：解除裁尾，全过程随展开态可见
         }catch(_){ }
+        // 回执自立回合（父空闲时回执自起新回合，此刻 log._turn 为空）：回合头落「任务描述」
+        // 标题行（贴 ZCode 参考图——回执回合的头是描述不是「已工作」），并掐掉本回合计时行。
+        // 折尾进在途回合（态二，回合带用户气泡有自己的「已工作」头）不走这里。
+        if(!log._turn&&!log._closed){
+          log._notifyTurn=true;
+          const nt=ensureTurn(log); nt.classList.add("notify");
+          nt.append(el("receipt-title",
+            `<span class="rt-g">🛰</span><span class="rt-t">${esc(subTaskDesc(log,id2)||"后台子任务")}</span>`));
+        }
         log._stick=true; stickScroll(log); return;
       }
       const card=el("tool tcard done task-result"+(st==="failed"?" tr-fail":""));
+      // 简要标题（贴 ZCode 参考图）：按 task_id 反查 description（subTaskDesc 三层兜底）。
+      // id 缩略挂 tc-sub，点开可见原始回执报文。
+      const desc=subTaskDesc(log,id2);
       card.innerHTML=`<button class="tc-trig" type="button">`
         +`<span class="tc-st ${st==="failed"?"bad":"ok"}" title="${esc(st)}">${st==="failed"?ICON_X:ICON_CHECK}</span>`
         +`<span class="tc-g">🛰</span>`
-        +`<span class="tc-name">后台子任务完成</span>`
+        +`<span class="tc-name">${esc(desc||"后台子任务完成")}</span>`
         +(id2?`<span class="tc-sub" title="${esc(id2)}">${esc(id2.length>24?id2.slice(0,12)+"…"+id2.slice(-5):id2)}</span>`:"")
         +`<span class="tc-badge">${esc(st==="failed"?"失败":"完成")}</span>`
         +`<span class="tc-chev">▾</span></button>`
