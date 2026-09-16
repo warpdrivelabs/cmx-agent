@@ -212,13 +212,15 @@
                 </div>
                 <div class="mcfg-row">
                   <label>工具</label>
-                  <select id="agents-tools-mode" onchange="void 0">
+                  <select id="agents-tools-mode">
                     <option value="all">全部工具</option>
-                    <option value="allow">白名单（多选）</option>
+                    <option value="allow">白名单（仅所选）</option>
+                    <option value="deny">黑名单（排除所选）</option>
                   </select>
                 </div>
                 <div class="mcfg-row" id="agents-tools-row" style="display:none">
-                  <label>工具白名单</label>
+                  <label id="agents-tools-label">工具白名单（仅所选）</label>
+                  <input id="agents-tools-filter" type="text" placeholder="筛选工具名…">
                   <div id="agents-tools-box" class="ag-tools-box"></div>
                 </div>
                 <div class="mcfg-row">
@@ -240,7 +242,7 @@
               <button data-act="agentsDelete" id="agents-del-btn" class="mcfg-danger">删除</button>
               <span style="flex:1"></span>
               <button data-act="closeSettings">取消</button>
-              <button class="mcfg-save" data-act="agentsSave">保存</button>
+              <button class="mcfg-save" data-act="agentsSave" id="agents-save-btn">保存</button>
             </div>
           </section>
           <!-- ── IM 遥控分区（原设置面板 DOM 平移，scfg-* id 全保留，js/im.js 零逻辑改动）── -->

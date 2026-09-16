@@ -2,9 +2,12 @@
 //!
 //! - [`AgentRegistry`]：`<data_dir>/agents.json` 读写（自定义 + 内置覆盖项）。内置两条编译进
 //!   core（`builtin_specs()`），文件只存 custom 与 builtin 的 model/enabled 覆盖；文件损坏降级
-//!   为只用内置（对齐 `read_meta` 降级先例），不炸启动。合并后的生效清单放在
-//!   `Arc<RwLock<Vec<AgentSpec>>>` 与 task 工具共享——内核每步 `specs()` 现调 `TaskTool::spec()`
-//!   动态拼枚举，故保存/删除即热生效，零额外同步路径。
+//!   为只用内置并**先把损坏文件备份成 agents.json.bad**（否则下一次保存用空清单落盘，证据全无），
+//!   不炸启动。每次变更**落盘前重读文件做合并写入**（只 upsert/删除本次涉及的条目）——桌面壳与
+//!   Web 壳同数据根双开时各自持内存清单，整文件覆盖会让后写者抹掉先写者的其余条目
+//!   （2026-09-15 设置页审查 P2）。合并后的生效清单放在 `Arc<RwLock<Vec<AgentSpec>>>` 与
+//!   task 工具共享——内核每步 `specs()` 现调 `TaskTool::spec()` 动态拼枚举，故保存/删除即热生效，
+//!   零额外同步路径。
 //! - [`AppModelResolver`]：core [`ModelResolver`] 缝的 app 实现。`None` → 父当前模型槽
 //!   （`ModelSlot` 本体实现 `ModelSeam`，clone 共享内部指针，热切自动跟随）；`Some(id)` →
 //!   在 `providers_lock` 下走 `load_providers()`（内含 per-user 目录回落与同网关 key 继承），
@@ -53,14 +56,20 @@ pub struct AgentRegistry {
 }
 
 impl AgentRegistry {
-    /// 加载（或初始化）注册表。文件损坏 → warn + 只用内置两条，不炸启动。
+    /// 加载（或初始化）注册表。文件损坏 → 备份成 agents.json.bad + warn + 只用内置两条，不炸启动。
     pub fn load_or_init(data_dir: &std::path::Path) -> Self {
         let path = data_dir.join("agents.json");
         let (custom, overrides) = match std::fs::read_to_string(&path) {
             Ok(raw) => match serde_json::from_str::<AgentsFile>(&raw) {
                 Ok(f) => (f.custom, f.builtin_overrides),
                 Err(e) => {
-                    eprintln!("[agents] agents.json 解析失败，降级只用内置两条（{}）：{e}", path.display());
+                    // 先备份再降级：损坏文件可能还有抢救价值，不能让下一次保存直接覆盖掉。
+                    let backup = path.with_extension("json.bad");
+                    let _ = std::fs::rename(&path, &backup);
+                    eprintln!(
+                        "[agents] agents.json 解析失败，降级只用内置两条（原文件备份→{}）：{e}",
+                        backup.display()
+                    );
                     (Vec::new(), HashMap::new())
                 }
             },
@@ -94,6 +103,27 @@ impl AgentRegistry {
         self.custom.read().expect("agents custom lock").clone()
     }
 
+    /// 读文件当前内容（读不到/解析失败 = 空基座；解析失败的备份在 load_or_init 已做过）。
+    fn read_file(&self) -> AgentsFile {
+        std::fs::read_to_string(&self.path)
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default()
+    }
+
+    fn write_file(&self, f: &AgentsFile) -> AppResult<()> {
+        let json = serde_json::to_string_pretty(f)?;
+        write_atomic(&self.path, json.as_bytes())?;
+        Ok(())
+    }
+
+    /// 文件内容发布到内存（custom/overrides/合并 specs），写入成功后调用。
+    fn publish(&self, f: &AgentsFile) {
+        *self.custom.write().expect("agents custom lock") = f.custom.clone();
+        *self.overrides.write().expect("agents overrides lock") = f.builtin_overrides.clone();
+        self.rebuild();
+    }
+
     fn rebuild(&self) {
         let overrides = self.overrides.read().expect("agents overrides lock").clone();
         let mut merged: Vec<AgentSpec> = builtin_specs()
@@ -110,18 +140,9 @@ impl AgentRegistry {
         *self.specs.write().expect("agents specs lock") = merged;
     }
 
-    fn persist(&self, custom: &[AgentSpec], overrides: &HashMap<String, BuiltinOverride>) -> AppResult<()> {
-        let file = AgentsFile {
-            custom: custom.to_vec(),
-            builtin_overrides: overrides.clone(),
-        };
-        let json = serde_json::to_string_pretty(&file)?;
-        write_atomic(&self.path, json.as_bytes())?;
-        Ok(())
-    }
-
     /// upsert 一个自定义类型（name 冲突内置 → 拒绝；name 唯一）。保存后热生效。
-    pub fn upsert_custom(&self, spec: AgentSpec) -> AppResult<()> {
+    /// 落盘前重读文件合并写入：只动本条，不覆盖其它进程刚写入的其余条目。
+    pub fn upsert_custom(&self, mut spec: AgentSpec) -> AppResult<()> {
         let name = spec.name.trim().to_string();
         if !valid_name(&name) {
             return Err(AppError::BadRequest(format!(
@@ -136,16 +157,14 @@ impl AgentRegistry {
         if spec.title.trim().is_empty() {
             return Err(AppError::BadRequest("显示名不能为空".into()));
         }
-        let mut custom = self.custom.write().expect("agents custom lock");
-        match custom.iter_mut().find(|a| a.name == name) {
-            Some(existing) => *existing = spec,
-            None => custom.push(spec),
+        spec.name = name;
+        let mut f = self.read_file();
+        match f.custom.iter_mut().find(|a| a.name == spec.name) {
+            Some(existing) => *existing = spec.clone(),
+            None => f.custom.push(spec.clone()),
         }
-        let snapshot = custom.clone();
-        drop(custom);
-        let overrides = self.overrides.read().expect("agents overrides lock").clone();
-        self.persist(&snapshot, &overrides)?;
-        self.rebuild();
+        self.write_file(&f)?;
+        self.publish(&f);
         Ok(())
     }
 
@@ -154,16 +173,11 @@ impl AgentRegistry {
         if !builtin_specs().iter().any(|b| b.name == name) {
             return Err(AppError::NotFound(format!("内置子智能体 '{name}'")));
         }
-        let mut overrides = self.overrides.write().expect("agents overrides lock");
-        overrides.insert(
-            name.to_string(),
-            BuiltinOverride { model, enabled },
-        );
-        let snapshot = overrides.clone();
-        drop(overrides);
-        let custom = self.custom.read().expect("agents custom lock").clone();
-        self.persist(&custom, &snapshot)?;
-        self.rebuild();
+        let mut f = self.read_file();
+        f.builtin_overrides
+            .insert(name.to_string(), BuiltinOverride { model, enabled });
+        self.write_file(&f)?;
+        self.publish(&f);
         Ok(())
     }
 
@@ -172,18 +186,40 @@ impl AgentRegistry {
         if builtin_specs().iter().any(|b| b.name == name) {
             return Err(AppError::BadRequest("内置子智能体不可删除".into()));
         }
-        let mut custom = self.custom.write().expect("agents custom lock");
-        let before = custom.len();
-        custom.retain(|a| a.name != name);
-        if custom.len() == before {
+        let mut f = self.read_file();
+        let before = f.custom.len();
+        f.custom.retain(|a| a.name != name);
+        if f.custom.len() == before {
             return Err(AppError::NotFound(format!("子智能体 '{name}'")));
         }
-        let snapshot = custom.clone();
-        drop(custom);
-        let overrides = self.overrides.read().expect("agents overrides lock").clone();
-        self.persist(&snapshot, &overrides)?;
-        self.rebuild();
+        self.write_file(&f)?;
+        self.publish(&f);
         Ok(())
+    }
+
+    /// 删除 provider 后清引用：custom 与内置覆盖项里指向该 provider 的专属模型置回继承默认——
+    /// 悬空引用会让该类型每次派发都报「provider 不存在」（2026-09-15 设置页审查 P2）。
+    /// 返回是否有实际修改。
+    pub fn clear_model_ref(&self, provider_id: &str) -> AppResult<bool> {
+        let mut f = self.read_file();
+        let mut changed = false;
+        for a in &mut f.custom {
+            if a.model.as_deref() == Some(provider_id) {
+                a.model = None;
+                changed = true;
+            }
+        }
+        for o in f.builtin_overrides.values_mut() {
+            if o.model.as_deref() == Some(provider_id) {
+                o.model = None;
+                changed = true;
+            }
+        }
+        if changed {
+            self.write_file(&f)?;
+            self.publish(&f);
+        }
+        Ok(changed)
     }
 }
 
@@ -331,6 +367,86 @@ mod tests {
         assert!(reg.upsert_custom(mk("1abc")).is_err());
         assert!(reg.upsert_custom(mk("general-purpose")).is_err(), "撞内置名拒绝");
         assert!(reg.upsert_custom(mk("ok_name2")).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 双进程同数据根（桌面壳 + Web 壳）：各自内存清单互不同步，落盘必须合并写——
+    /// 后写者只叠加/替换自己动过的条目，不得整文件覆盖抹掉先写者的其余条目。
+    #[test]
+    fn parallel_registries_merge_on_write() {
+        let dir = tmp_dir("merge");
+        let r1 = AgentRegistry::load_or_init(&dir);
+        let r2 = AgentRegistry::load_or_init(&dir);
+        let mk = |name: &str, title: &str| AgentSpec {
+            name: name.into(),
+            title: title.into(),
+            description: String::new(),
+            tools: Default::default(),
+            model: None,
+            system_prompt: String::new(),
+            enabled: true,
+            builtin: false,
+        };
+        r1.upsert_custom(mk("agent_a", "A")).unwrap();
+        // r2 在写入前重读文件 → 看得到 r1 刚落的 agent_a
+        r2.upsert_custom(mk("agent_b", "B")).unwrap();
+        let fresh = AgentRegistry::load_or_init(&dir);
+        let names: Vec<String> = fresh.customs().iter().map(|a| a.name.clone()).collect();
+        assert!(
+            names.contains(&"agent_a".into()) && names.contains(&"agent_b".into()),
+            "后写者不得抹掉先写者：实际 {names:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 损坏文件降级前先备份：否则下一次保存用空清单落盘，用户自定义项无迹可寻。
+    #[test]
+    fn corrupt_file_backed_up_and_degraded() {
+        let dir = tmp_dir("corrupt-bak");
+        std::fs::write(dir.join("agents.json"), "{ not json").unwrap();
+        let reg = AgentRegistry::load_or_init(&dir);
+        assert_eq!(reg.list().len(), 2, "降级只用内置两条");
+        assert!(dir.join("agents.json.bad").exists(), "损坏原文件已备份");
+        // 备份后照常可写，不再被坏文件绊住
+        let mk = AgentSpec {
+            name: "after_corrupt".into(),
+            title: "t".into(),
+            description: String::new(),
+            tools: Default::default(),
+            model: None,
+            system_prompt: String::new(),
+            enabled: true,
+            builtin: false,
+        };
+        reg.upsert_custom(mk).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 删 provider 清引用：custom 与内置覆盖项里指向该 provider 的 model 置回继承默认。
+    #[test]
+    fn clear_model_ref_resets_custom_and_override() {
+        let dir = tmp_dir("clear-ref");
+        let reg = AgentRegistry::load_or_init(&dir);
+        reg.upsert_custom(AgentSpec {
+            name: "with_ref".into(),
+            title: "t".into(),
+            description: String::new(),
+            tools: Default::default(),
+            model: Some("p-gone".into()),
+            system_prompt: String::new(),
+            enabled: true,
+            builtin: false,
+        })
+        .unwrap();
+        reg.set_builtin_override("explore", Some("p-gone".into()), true)
+            .unwrap();
+        assert!(reg.clear_model_ref("p-gone").unwrap());
+        assert!(!reg.clear_model_ref("p-gone").unwrap(), "二次清理无变化");
+        let list = reg.list();
+        let custom = list.iter().find(|a| a.name == "with_ref").unwrap();
+        assert_eq!(custom.model, None);
+        let explore = list.iter().find(|a| a.name == "explore").unwrap();
+        assert_eq!(explore.model, None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

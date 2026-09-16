@@ -274,17 +274,27 @@ impl TaskTool {
             .read()
             .map_err(|_| "子智能体注册表不可用".to_string())?;
         let available: Vec<String> = list.iter().filter(|a| a.enabled).map(|a| a.name.clone()).collect();
+        let avail_txt = if available.is_empty() {
+            "（无已启用类型）".to_string()
+        } else {
+            available.join("、")
+        };
         match list.iter().find(|a| a.name == name) {
             Some(s) if s.enabled => Ok(s.clone()),
-            Some(_) => Err(format!(
-                "task: 子智能体类型 '{name}' 已停用。可用：{}",
-                available.join("、")
-            )),
-            None => Err(format!(
-                "task: 未知子智能体类型 '{name}'。可用：{}",
-                available.join("、")
-            )),
+            Some(_) => Err(format!("task: 子智能体类型 '{name}' 已停用。可用：{avail_txt}")),
+            None => Err(format!("task: 未知子智能体类型 '{name}'。可用：{avail_txt}")),
         }
+    }
+
+    /// 缺省子智能体类型：第一个启用类型（清单序，内置在前）。全停用时回落 GENERAL_PURPOSE，
+    /// 由 lookup 给出带可用清单的明确报错——缺省值不能硬编码，否则停用 general-purpose 后
+    /// 「模型不带 subagent_type 调 task」必踩死路（2026-09-15 设置页审查 P1）。
+    fn default_type(&self) -> String {
+        self.specs
+            .read()
+            .ok()
+            .and_then(|l| l.iter().find(|a| a.enabled).map(|a| a.name.clone()))
+            .unwrap_or_else(|| cmx_agent_core::agents::GENERAL_PURPOSE.to_string())
     }
 }
 
@@ -292,7 +302,9 @@ impl TaskTool {
 impl Tool for TaskTool {
     fn spec(&self) -> ToolSpec {
         // 动态枚举：每步 model_context 现调本方法 → agents.json 增删改即时进模型工具清单。
-        let (types, desc_list) = match self.specs.read() {
+        // 缺省类型同样动态：取第一个启用类型，描述与 schema 文案跟随，避免「描述让你缺省
+        // general-purpose、枚举里却没有」的自相矛盾。
+        let (types, desc_list, default) = match self.specs.read() {
             Ok(list) => {
                 let enabled: Vec<&AgentSpec> = list.iter().filter(|a| a.enabled).collect();
                 let types: Vec<Value> = enabled
@@ -307,9 +319,17 @@ impl Tool for TaskTool {
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
-                (types, descs)
+                let default = enabled
+                    .first()
+                    .map(|a| a.name.clone())
+                    .unwrap_or_else(|| cmx_agent_core::agents::GENERAL_PURPOSE.to_string());
+                (types, descs, default)
             }
-            Err(_) => (Vec::new(), String::new()),
+            Err(_) => (
+                Vec::new(),
+                String::new(),
+                cmx_agent_core::agents::GENERAL_PURPOSE.to_string(),
+            ),
         };
         let description = format!(
             "把一个独立子任务交给指定类型的子智能体完成（隔离上下文、可多步用工具），返回其最终结果。\
@@ -317,7 +337,7 @@ impl Tool for TaskTool {
              可选类型：\n{desc_list}\n缺省 {default}。background=true 时后台执行：立即返回，\
              完成后结果以 <task_result> 消息自动送达本会话——不要轮询。\
              prompt 必须自包含（子智能体看不到本对话历史）。",
-            default = cmx_agent_core::agents::GENERAL_PURPOSE,
+            default = default,
         );
         ToolSpec::new("task", description)
             .schema(json!({
@@ -325,7 +345,7 @@ impl Tool for TaskTool {
                 "properties": {
                     "prompt": { "type": "string", "description": "交给子智能体的完整子任务描述（自包含）" },
                     "description": { "type": "string", "description": "可选：子任务 3-5 词短描述（便于展示）" },
-                    "subagent_type": { "type": "string", "enum": types, "description": "子智能体类型；缺省 general-purpose" },
+                    "subagent_type": { "type": "string", "enum": types, "description": format!("子智能体类型；缺省 {default}") },
                     "background": { "type": "boolean", "description": "true = 后台执行（立即返回，完成后自动通知）；缺省 false 前台等待结果" }
                 },
                 "required": ["prompt"]
@@ -348,7 +368,8 @@ impl Tool for TaskTool {
         let stype = input
             .get("subagent_type")
             .and_then(|v| v.as_str())
-            .unwrap_or(cmx_agent_core::agents::GENERAL_PURPOSE);
+            .map(String::from)
+            .unwrap_or_else(|| self.default_type());
         let background = input.get("background").and_then(|v| v.as_bool()).unwrap_or(false);
 
         // 递归深度闸门：防子智能体无限自我 fan-out。深度取自 task-local（随调用链下传），
@@ -366,7 +387,7 @@ impl Tool for TaskTool {
         };
 
         // 类型解析（未知/停用 → 报错列出可用）。
-        let spec = match self.lookup(stype) {
+        let spec = match self.lookup(&stype) {
             Ok(s) => s,
             Err(e) => return Ok(ToolResult::err(e)),
         };

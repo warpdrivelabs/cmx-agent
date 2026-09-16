@@ -119,6 +119,16 @@
 .ag-tool:hover{ border-color:var(--violet);color:var(--ink); }
 .ag-tool.on{ border-color:var(--violet);color:var(--violet);background:color-mix(in srgb, var(--violet) 10%, transparent); }
 .ag-tool input{ display:none; }
+/* 内置类型名单禁选（工具集编译进代码，勾了也不落盘） */
+.ag-tool.dis{ opacity:.55;cursor:not-allowed; }
+/* 名单筛选框：与 textarea 同族（surface 底 + 边框），收窄留给下方名单滚动区 */
+#agents-tools-filter{
+  width:100%;box-sizing:border-box;background:var(--surface);color:var(--ink);
+  border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:12px;margin-bottom:6px;
+}
+#agents-tools-filter:focus{ outline:none;border-color:var(--violet); }
+/* 列表「已停用」徽标：红调弱化（对照 modals.css 的 .lp-badge 中性灰） */
+.lp-badge-off{ color:var(--red);border-color:var(--red);opacity:.75 }
 #settings-sec-agents textarea{
   width:100%;box-sizing:border-box;background:var(--surface);color:var(--ink);
   border:1px solid var(--border);border-radius:8px;padding:8px 10px;font-size:12.5px;

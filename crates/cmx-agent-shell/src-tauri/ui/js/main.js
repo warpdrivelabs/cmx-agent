@@ -122,7 +122,9 @@ const ACTIONS = { newTask, openConnectors, openAssistant, startFromHome, toggleS
   closeSettings, scfgSecretLock: scfgToggleSecretLock, scfgQqLock: scfgToggleQqLock, scfgQqLogin, scfgSelect: scfgSelectChannel, scfgWechatLogin, imcfgSave,
   mcfgClose: closeModelConfig, mcfgKeyLock: mcfgToggleKeyLock, mcfgSave: saveModelConfig,
   mcfgNew: mcfgNew, mcfgDelete: deleteModelProvider,
-  agentsSelect, agentsNew, agentsSave, agentsDelete,
+  // agentsSelect 收 data-name（调度器统一传 el，包装转换——直接传 el 会让 agentsFind 永不命中，列表点击整体失效）
+  agentsSelect: el=>agentsSelect(el.dataset.name),
+  agentsNew, agentsSave, agentsDelete,
   userChangePassword, pwdClose, pwdExit, pwdSave, logoutCancel, logoutConfirm };
 document.addEventListener("click", e=>{
   const el = e.target.closest("[data-act]");

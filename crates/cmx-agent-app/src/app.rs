@@ -983,6 +983,11 @@ impl AgentApp {
             pf.active = pf.providers.first().map(|p| p.id.clone());
         }
         pf.save(&dir).map_err(|e| AppError::BadRequest(format!("持久化失败：{e}")))?;
+        // 子智能体专属模型引用联动清理（2026-09-15 设置页审查 P2）：被删 provider 若被
+        // agents.json 引用，置回继承默认——否则该类型每次派发都报「provider 不存在」。
+        if let Some(reg) = &self.agents {
+            reg.clear_model_ref(id)?;
+        }
         // 热换：删除激活条目 → 换成新激活条目（或回 demo）。
         if was_active && let Some(slot) = &self.model_slot {
             let model = match pf.active().filter(|p| !p.config.base_url.is_empty()) {

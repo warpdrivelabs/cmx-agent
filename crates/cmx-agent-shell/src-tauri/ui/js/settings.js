@@ -8,7 +8,7 @@ const SETTINGS_SECTIONS = {
   account:    { title: "账户",     desc: "登录账号、密码与退出" },
   models:     { title: "模型",     desc: "模型服务（Provider）管理：内置预设 + 自定义" },
   im:         { title: "IM 遥控",  desc: "飞书 / QQ / 微信 机器人接入，保存热重载即时生效" },
-  agents:     { title: "子智能体", desc: "子智能体类型管理：内置 + 自定义（工具白名单 / 提示词 / 专属模型），保存热生效" },
+  agents:     { title: "子智能体", desc: "子智能体类型管理：内置 + 自定义（工具名单 / 提示词 / 专属模型），保存即对新增子任务生效" },
   appearance: { title: "外观",     desc: "主题外观" },
   general:    { title: "通用",     desc: "数据目录" },
   about:      { title: "关于",     desc: "版本与更新" },
