@@ -40,8 +40,11 @@
 .cmx-dd-item .dd-check{margin-left:auto;flex-shrink:0;opacity:0}
 .cmx-dd-item.active .dd-check{opacity:1}
 
-/* .selbtn 场景：壳是 chip 本体，trigger 全透明融入（悬停反馈由壳给出） */
-.selbtn .cmx-dd-trigger{background:none;border:none;border-radius:0;padding:0;color:inherit;font-size:inherit}
+/* .selbtn 场景：壳是 chip 本体，trigger 全透明融入（悬停反馈由壳给出）。
+   trigger 必须撑满壳——壳的 padding 区也是有效点击区，否则出现「看着能点、点了没反应」的死区 */
+.selbtn>.cmx-dd{flex:1;align-self:stretch;justify-content:center}
+.selbtn .cmx-dd-trigger{background:none;border:none;border-radius:0;padding:0;color:inherit;font-size:inherit;
+  flex:1;align-self:stretch;justify-content:center}
 .selbtn .cmx-dd-trigger:hover{background:none;border:none;color:var(--ink)}
 
 /* .mcfg-row 的下拉覆盖已随模态样式移交 modals.css（原此处有一条未闭合注释吞掉规则，已清理） */

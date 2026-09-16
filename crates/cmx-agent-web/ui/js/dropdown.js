@@ -135,6 +135,19 @@ document.addEventListener("click", (e) => {
     if (!wrap.contains(e.target) && wrap._cmxClose) wrap._cmxClose();
   });
 });
+// ── 壳死区点击转发：.selbtn 等 chip 壳带 padding 且有 hover 反馈（视觉上整块可点），
+// 但布局上 trigger 不一定盖满壳——点击落在壳内、又不在 trigger 上时，转发给 trigger
+// 走同一套开关逻辑。capture + stopPropagation：先于上方全局关闭器执行，避免
+// 「关闭器先收起、转发又打开」的抖动；trig.click() 事件里 target=trigger，
+// 本监听的 contains 短路防递归。──
+document.addEventListener("click", (e) => {
+  const shell = e.target.closest ? e.target.closest(".selbtn") : null;
+  if (!shell) return;
+  const trig = shell.querySelector(".cmx-dd-trigger");
+  if (!trig || trig.contains(e.target)) return;
+  e.stopPropagation();
+  trig.click();
+}, true);
 // 悬浮列表挂 body + fixed 定位：容器滚动 / 窗口缩放会让坐标失准 → 统一关闭（capture 捕获容器内滚动）。
 window.addEventListener("scroll", () => {
   document.querySelectorAll(".cmx-dd.on").forEach(w => w._cmxClose && w._cmxClose());
