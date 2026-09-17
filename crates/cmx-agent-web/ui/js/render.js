@@ -1134,14 +1134,14 @@ function renderEvent(log, ev, sid){
     if(zone) renderApprovalCard(zone, ev, sid);
   }
   else if(k==="approval_resolved"){
+    // 放行/拒绝都不留轨迹行：被拒调用的工具卡一直都在（先 tool_invoked 后审批），回执会
+    // 原地把状态打成 ✕——工具行本身就是这次拒绝的记录，再画一行「✕ 已拒绝」是重复
+    // （用户反馈 2026-09-16，旧注释「拒绝没有工具卡跟随」的前提已不成立）。
+    // 仅当同 call_id 找不到工具卡时才补「✕ 已拒绝」行兜底，防异常流丢痕迹。
     const ok=!!ev.approved;
-    if(ok){
-      // 放行不留「已允许」行（ZCode 式）：紧随其后的工具卡（写入内容/命令输出）即完整记录。
-      removeInteractLine(log,"callid",ev.call_id||"");
-    } else {
-      // 拒绝没有工具卡跟随，「✕ 已拒绝」是唯一痕迹，保留。
-      markInteractLine(log,"callid",ev.call_id||"","✕ 已拒绝",false);
-    }
+    const hasCard=!!(log&&[...log.querySelectorAll(".tool.tcard")].some(c=>c.dataset.callid===ev.call_id));
+    if(ok||hasCard) removeInteractLine(log,"callid",ev.call_id||"");
+    else markInteractLine(log,"callid",ev.call_id||"","✕ 已拒绝",false);
     removeInteractCard(".approval","callid",ev.call_id||"",log);
   }
   else if(k==="question_asked"){ log._sb=null; closeCtxGroup(log); hideTyping(log);
