@@ -388,11 +388,14 @@
 .queued[hidden]{display:none}
 .qhead{display:flex;align-items:baseline;gap:10px;font-size:11px;color:var(--muted)}
 .qhead .qh-tip{margin-left:auto;opacity:.8}
-.qcard{display:flex;align-items:center;gap:9px;background:var(--surface);border:1px solid var(--border);
+/* 作用域收窄到 .queued（2026-09-17）：裸 .qcard 会误伤提问卡（.tool.qcard 同类名），
+   display:flex 横排把问题/选项/按钮拍成一行——提问卡回归竖排 */
+.queued .qcard{display:flex;align-items:center;gap:9px;background:var(--surface);border:1px solid var(--border);
   border-radius:10px;padding:7px 11px;font-size:13px;cursor:grab;user-select:none;
   transition:border-color .12s,opacity .12s}
-.qcard.dragging{opacity:.4}
-.qcard.drag-over{border-color:var(--gold)}
+.queued .qcard[hidden]{display:none}
+.queued .qcard.dragging{opacity:.4}
+.queued .qcard.drag-over{border-color:var(--gold)}
 .qgrip{color:var(--muted);font-size:12px;letter-spacing:-2px;flex:0 0 auto}
 .qtext{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .qa{flex:0 0 auto;background:none;border:1px solid transparent;border-radius:7px;color:var(--muted);
@@ -503,10 +506,12 @@
 .jump-btm:hover{color:var(--ink);border-color:var(--ink2)}
 /* 提交/审批置忙：选项行禁点（.qopt 是 label，disabled 属性无效，用 pointer-events） */
 .tool.qcard.busy .qopt,.tool.approval.busy .qopt{pointer-events:none;opacity:.6}
-/* 工具卡耗时（>2s 才显示） */
-.tc-dur{font-size:11px;color:var(--muted);font-weight:400;margin-left:2px}
+/* 工具卡耗时（>2s 才显示）；沙箱徽标同理——两者禁止内部换行，长命令的收缩由
+   .tc-sub 省略号承担（2026-09-17：挂工作区后徽标出现，长命令下「16 秒」「工作区
+   沙箱」各自内折成两行） */
+.tc-dur{font-size:11px;color:var(--muted);font-weight:400;margin-left:2px;white-space:nowrap;flex:0 0 auto}
 /* S3 沙箱徽标：档位 chip（双主题令牌派生，零硬编码色值）；degraded 黄标警示 */
-.tc-sbx{font-size:11px;color:var(--muted);font-weight:400;margin-left:2px}
+.tc-sbx{font-size:11px;color:var(--muted);font-weight:400;margin-left:2px;white-space:nowrap;flex:0 0 auto}
 .tc-sbx-deg{color:var(--gold);font-weight:500}
 
 /* 拦截错误卡：红标签+正文分离（opencode ContentError 式） */

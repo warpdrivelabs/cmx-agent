@@ -388,11 +388,14 @@
 .queued[hidden]{display:none}
 .qhead{display:flex;align-items:baseline;gap:10px;font-size:11px;color:var(--muted)}
 .qhead .qh-tip{margin-left:auto;opacity:.8}
-.qcard{display:flex;align-items:center;gap:9px;background:var(--surface);border:1px solid var(--border);
+/* 作用域收窄到 .queued（2026-09-17）：裸 .qcard 会误伤提问卡（.tool.qcard 同类名），
+   display:flex 横排把问题/选项/按钮拍成一行——提问卡回归竖排 */
+.queued .qcard{display:flex;align-items:center;gap:9px;background:var(--surface);border:1px solid var(--border);
   border-radius:10px;padding:7px 11px;font-size:13px;cursor:grab;user-select:none;
   transition:border-color .12s,opacity .12s}
-.qcard.dragging{opacity:.4}
-.qcard.drag-over{border-color:var(--gold)}
+.queued .qcard[hidden]{display:none}
+.queued .qcard.dragging{opacity:.4}
+.queued .qcard.drag-over{border-color:var(--gold)}
 .qgrip{color:var(--muted);font-size:12px;letter-spacing:-2px;flex:0 0 auto}
 .qtext{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .qa{flex:0 0 auto;background:none;border:1px solid transparent;border-radius:7px;color:var(--muted);

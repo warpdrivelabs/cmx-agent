@@ -1009,6 +1009,9 @@ function renderEvent(log, ev, sid){
   if(log._emptyCard){ log._emptyCard.remove(); log._emptyCard=null; }   // 首条事件：撤空会话占位卡
   if(ev.ts) log._lastTs = (typeof ev.ts==="string" ? Date.parse(ev.ts) : ev.ts) || log._lastTs;
   if(k==="turn_started"){
+    // 通知回合（后台回执自立回合）到此封口：新回合若沿用仍开着的通知回合，用户消息/回复
+    // 会全部粘进回执区域（2026-09-17「展示又乱了」）。
+    if(log._turn&&log._turn.classList.contains("notify")) log._turn=null;
     stopWorkDurTick(log); log._durRow=null;             // 新回合：上一回合的实时计时行已定格，清引用
     log._closed=false; log._liveR=false; log._notifyTurn=false;   // 思考对账/回执计时豁免标记随回合重置
     log._turnStartTs=log._lastTs||Date.now(); return;   // 只记起点（计时行随首个内容事件出现）
@@ -1099,6 +1102,7 @@ function renderEvent(log, ev, sid){
         if(!log._turn&&!log._closed){
           log._notifyTurn=true;
           const nt=ensureTurn(log); nt.classList.add("notify");
+          nt.querySelectorAll(":scope > .work-dur").forEach(x=>x.remove());   // 掐掉误拉起的「已工作」（通知回合不计时）
           nt.append(el("receipt-title",
             `<span class="rt-g">🛰</span><span class="rt-t">${esc(subTaskDesc(log,id2)||"后台子任务")}</span>`));
         }
@@ -1132,8 +1136,11 @@ function renderEvent(log, ev, sid){
       // .notify 标记：CSS 画虚线分界并加大上距，明确「这是新的一条」（2026-09-15 反馈）。
       log._notifyTurn=true;
       const nt=ensureTurn(log); nt.classList.add("notify"); nt.append(card);
+      nt.querySelectorAll(":scope > .work-dur").forEach(x=>x.remove());   // 掐掉误拉起的「已工作」（态一已确保，此处兜底）
       log._stick=true; stickScroll(log); return;
     }
+    // 双保险：即便 turn_started 缺席（回放顺序差异），用户开口也必须从通知回合另起新回合。
+    if(log._turn&&log._turn.classList.contains("notify")) log._turn=null;
     log._sb=null; closeReasoning(log); ensureTurn(log).append(el("user-chip", esc(ev.text))); log._stick=true; stickScroll(log);
   }
   else if(k==="model_message"){

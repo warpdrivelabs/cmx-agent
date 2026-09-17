@@ -780,12 +780,13 @@ async function doSendTab(t, text){
   if(m){ t.title=m.title||t.sessionId; renderTabs(); }
   scheduleRefreshTasks();
   if(myGen!==t._sendGen) return;              // 队列已被窗口期的新发送接手，本帧不得再 drain
-  const next=(t._queue||[]).shift();
-  renderQueue(t);
-  if(next && !_cancelled) doSendTab(t,next.text);
   // 中断不再清空队列（改造一，对齐 ZCode）：卡片原地保留，点「↑ 立即」或再发消息手动接续；
-  // 中断后不自动 drain——刚叫停就自动发下一条很突兀。
-  else if(_cancelled && (t._queue||[]).length) queueNote(log,"🛑 已中断，等待队列已保留（点卡片「↑ 立即」逐条放行）。");
+  // 中断后不自动 drain——刚叫停就自动发下一条很突兀。⚠ 队首只能在**放行**时弹出：
+  // 先 shift 再因 _cancelled 放弃 = 该消息凭空消失（2026-09-17 E2E 实测）。
+  const next=(!_cancelled&&(t._queue||[]).length)?t._queue.shift():null;
+  renderQueue(t);
+  if(next) doSendTab(t,next.text);
+  else if(_cancelled&&(t._queue||[]).length) queueNote(log,"🛑 已中断，等待队列已保留（点卡片「↑ 立即」逐条放行）。");
 }
 // 直接挂到 log 的提示行（回合已关闭时不新开一张空回合卡）
 function queueNote(log, text){
