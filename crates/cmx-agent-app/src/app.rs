@@ -789,34 +789,63 @@ impl AgentApp {
         cmx_agent_model::ProviderFile::load_with_inherit(dir, inherit)
     }
 
-    /// 取一个命名 provider 的面板回填 JSON（掩码 key + 候选模型）。None = id 不存在。
-    fn provider_config_json(pf: &cmx_agent_model::ProviderFile, p: &cmx_agent_model::NamedProvider) -> serde_json::Value {
-        let candidates: Vec<String> = p.config.candidate_models().iter().map(|s| s.to_string()).collect();
-        serde_json::json!({
+    /// 取一个命名 provider 的面板回填 JSON（掩码 key + 模型清单）。None = id 不存在。
+    /// `reveal=true`（方案：点眼睛展示完整字符串，用户拍板 2026-09-17）时 api_key 给明文——
+    /// 本机应用，providers.json 本就明文落盘；password 框掩码展示，点眼睛看全串。
+    fn provider_config_json(pf: &cmx_agent_model::ProviderFile, p: &cmx_agent_model::NamedProvider, reveal: bool) -> serde_json::Value {
+        let models: Vec<serde_json::Value> = p
+            .models
+            .iter()
+            .map(|m| serde_json::json!({ "id": m.id, "enabled": m.enabled, "reasoning": m.reasoning,
+                "context_window": m.context_window, "max_output_tokens": m.max_output_tokens,
+                "input_types": m.input_types, "capabilities": m.capabilities,
+                "reasoning_levels": m.reasoning_levels, "reasoning_params": m.reasoning_params }))
+            .collect();
+        // 候选（聊天选择器口径）= 仅启用项；当前模型保证在列。
+        let mut cands: Vec<serde_json::Value> = p
+            .models
+            .iter()
+            .filter(|m| m.enabled)
+            .map(|m| serde_json::json!({ "model": m.id, "label": m.id, "reasoning": m.reasoning }))
+            .collect();
+        if !p.config.model.is_empty() && !cands.iter().any(|c| c["model"] == p.config.model.as_str()) {
+            cands.insert(0, serde_json::json!({ "model": p.config.model, "label": p.config.model }));
+        }
+        let mut v = serde_json::json!({
             "configured": !p.config.api_key.is_empty() || !p.config.base_url.is_empty(),
             "id": p.id,
             "name": p.name,
             "builtin": p.builtin,
             "active": pf.active_id() == Some(p.id.as_str()),
+            "kind": p.kind,
+            "preset": p.preset,
+            "api_key_url": p.api_key_url,
             "base_url": p.config.base_url,
             "api_key_masked": p.config.masked_api_key(),
             "model": p.config.model,
             "temperature": p.config.temperature,
             "timeout_ms": p.config.timeout_ms,
-            "candidates": candidates,
-        })
+            "models": models,
+            "candidates": cands,
+        });
+        if reveal {
+            v["api_key"] = serde_json::json!(p.config.api_key);
+        }
+        v
     }
 
-    /// B2：读取完整模型配置（api_key 脱敏），供前端配置面板填充表单。
+    /// B2：读取完整模型配置，供前端配置面板填充表单。
     /// `id` 为空取当前激活 provider（旧行为兼容）；有 id 取指定条目（多 provider 面板）。
-    pub fn get_model_config(&self, id: Option<&str>) -> serde_json::Value {
+    /// `reveal=true` 时 api_key 给**明文**（用户拍板「点眼睛展示完整字符串」：本机应用，
+    /// providers.json 本就明文落盘、接口有登录门；password 框掩码展示、点眼睛看全串）。
+    pub fn get_model_config(&self, id: Option<&str>, reveal: bool) -> serde_json::Value {
         let _g = self.providers_lock.lock().expect("providers lock");
         if let Some((_, pf)) = self.load_providers() {
             let target = id
                 .and_then(|i| pf.get(i))
                 .or_else(|| pf.active());
             if let Some(p) = target {
-                return Self::provider_config_json(&pf, p);
+                return Self::provider_config_json(&pf, p, reveal);
             }
             if id.is_some() {
                 return serde_json::json!({ "configured": false, "error": "provider 不存在" });
@@ -839,8 +868,12 @@ impl AgentApp {
     /// payload 字段：
     /// - `id`：可选。缺省/空 = 新建（自动生成 `p-<nanos>`）；有值 = 更新该条目（不存在则报错）
     /// - `name`：用户可见名称。新建必填非空且不得与其他条目重名；更新时空缺沿用旧名
-    /// - `base_url` / `model`：必填
-    /// - `temperature`：浮点（可选，缺省 0.2）；`timeout_ms`：整数（可选，缺省 60000）
+    /// - `base_url`：必填；`kind`：P1 仅 "openai"；`preset`：来源模板 id；`api_key_url`：http(s) 外链
+    /// - `models`：候选清单 `[{id, enabled, reasoning}]`（方案 20260917 §5.1），至少一条且
+    ///   至少一条启用；缺省时由 `model` 播种单条（旧前端兼容）
+    /// - `model`：**可选**——「当前使用中模型」语义，配置页不提供选择；沿用旧值，不在启用
+    ///   清单（被删/被停用/新建）时自动回落第一个启用项
+    /// - `temperature`：浮点（可选，缺省 0.2）；`timeout_ms`：整数（可选，缺省 60000，范围 5000–300000）
     /// - `api_key_action`："keep"（沿用该条目已存 key）| "set"（使用 `api_key_value`）
     ///
     /// 新建不自动激活；更新激活条目时热换模型槽立即生效。内置条目可编辑、不可由此删除。
@@ -849,11 +882,94 @@ impl AgentApp {
         let base_url = get_str("base_url")
             .filter(|s| !s.is_empty())
             .ok_or_else(|| AppError::BadRequest("base_url 不能为空".into()))?;
-        let model = get_str("model")
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| AppError::BadRequest("model 不能为空".into()))?;
-        let temperature = payload.get("temperature").and_then(|v| v.as_f64()).map(|f| f as f32).unwrap_or(0.2);
-        let timeout_ms = payload.get("timeout_ms").and_then(|v| v.as_u64()).unwrap_or(60_000);
+        let kind = get_str("kind").unwrap_or_else(|| "openai".into());
+        if kind != "openai" {
+            return Err(AppError::BadRequest(format!(
+                "暂不支持协议类型「{kind}」（当前仅 OpenAI 兼容端点）"
+            )));
+        }
+        let preset = get_str("preset").unwrap_or_default();
+        let api_key_url = get_str("api_key_url").unwrap_or_default();
+        if !api_key_url.is_empty()
+            && !api_key_url.starts_with("http://")
+            && !api_key_url.starts_with("https://")
+        {
+            return Err(AppError::BadRequest("「获取 API Key」链接须以 http(s):// 开头".into()));
+        }
+        // 模型清单（方案 §5.3 清单管理）：id 非空去重；enabled 缺省 true。
+        let mut models: Vec<cmx_agent_model::ModelEntry> = Vec::new();
+        if let Some(arr) = payload.get("models").and_then(|v| v.as_array()) {
+            for (i, m) in arr.iter().enumerate() {
+                let id = m
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_default();
+                if id.is_empty() {
+                    return Err(AppError::BadRequest(format!("第 {} 个模型 ID 不能为空", i + 1)));
+                }
+                if models.iter().any(|x| x.id == id) {
+                    return Err(AppError::BadRequest(format!("模型「{id}」在清单中重复")));
+                }
+                // ZCode 式模型编辑弹窗的扩展字段（全部可选；值域白名单校验）。
+                let parse_list = |key: &str, allowed: &[&str]| -> Result<Vec<String>, AppError> {
+                    let mut out = Vec::new();
+                    if let Some(arr) = m.get(key).and_then(|v| v.as_array()) {
+                        for it in arr {
+                            let s = it.as_str().unwrap_or_default().trim().to_string();
+                            if s.is_empty() { continue; }
+                            if !allowed.contains(&s.as_str()) {
+                                return Err(AppError::BadRequest(format!("模型「{id}」的 {key} 含非法值「{s}」")));
+                            }
+                            if !out.contains(&s) { out.push(s); }
+                        }
+                    }
+                    Ok(out)
+                };
+                let input_types = parse_list("input_types", cmx_agent_model::MODEL_INPUT_TYPES)?;
+                let capabilities = parse_list("capabilities", cmx_agent_model::MODEL_CAPABILITIES)?;
+                let mut reasoning_levels: Vec<String> = Vec::new();
+                if let Some(arr) = m.get("reasoning_levels").and_then(|v| v.as_array()) {
+                    for it in arr {
+                        let s = it.as_str().unwrap_or_default().trim().to_string();
+                        if !s.is_empty() && !reasoning_levels.contains(&s) { reasoning_levels.push(s); }
+                    }
+                }
+                // 「从低到高」归一：预置档（low<high|max 常见序）按白名单顺序排，自定义档保持追加在后。
+                reasoning_levels.sort_by_key(|l| {
+                    cmx_agent_model::MODEL_REASONING_ORDER
+                        .iter()
+                        .position(|p| p == l)
+                        .unwrap_or(cmx_agent_model::MODEL_REASONING_ORDER.len())
+                });
+                let reasoning_params = m.get("reasoning_params").and_then(|v| v.as_str()).map(|s| s.trim().to_string()).unwrap_or_default();
+                if !reasoning_params.is_empty()
+                    && serde_json::from_str::<serde_json::Value>(&reasoning_params).is_err()
+                {
+                    return Err(AppError::BadRequest(format!("模型「{id}」的推理参数映射不是合法 JSON")));
+                }
+                models.push(cmx_agent_model::ModelEntry {
+                    id,
+                    enabled: m.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true),
+                    // 推理等级非空 ⇔ 思考标记（reasoning 由弹窗推导，旧布尔字段保留兼容）。
+                    reasoning: !reasoning_levels.is_empty(),
+                    context_window: m.get("context_window").and_then(|v| v.as_u64()),
+                    max_output_tokens: m.get("max_output_tokens").and_then(|v| v.as_u64()),
+                    input_types,
+                    capabilities,
+                    reasoning_levels,
+                    reasoning_params,
+                });
+            }
+        }
+        let model_in = get_str("model").unwrap_or_default();
+        if models.is_empty() && !model_in.is_empty() {
+            // 旧前端兼容：无 models 清单时由 model 字段播种单条启用项。
+            models.push(cmx_agent_model::ModelEntry { id: model_in, enabled: true, ..Default::default() });
+        }
+        if models.is_empty() {
+            return Err(AppError::BadRequest("至少添加一个模型".into()));
+        }
         let action = get_str("api_key_action").unwrap_or_else(|| "keep".into());
         let target_id = get_str("id").filter(|s| !s.is_empty());
         let name_in = get_str("name").filter(|s| !s.is_empty());
@@ -865,7 +981,11 @@ impl AgentApp {
         let mut pf = self.provider_file_inherited(&dir);
 
         // 更新已有条目：沿用旧 name/key；新建：name 必填 + 重名校验、key 可空（keyless 端点）。
-        let (name, api_key, builtin, is_active) = match &target_id {
+        // 温度/超时：主表单已去掉「高级」区（ZCode 化），更新时 payload 缺省即**沿用旧值**，
+        // 仅新建用默认——避免 UI 不传字段悄悄重置用户已有配置。
+        let temperature_in = payload.get("temperature").and_then(|v| v.as_f64()).map(|f| f as f32);
+        let timeout_in = payload.get("timeout_ms").and_then(|v| v.as_u64());
+        let (name, api_key, builtin, is_active, old_model, old_temp, old_timeout) = match &target_id {
             Some(id) => {
                 let p = pf
                     .get(id)
@@ -875,6 +995,9 @@ impl AgentApp {
                     if action == "set" { get_str("api_key_value").unwrap_or_default() } else { p.config.api_key.clone() },
                     p.builtin,
                     pf.active_id() == Some(id.as_str()),
+                    p.config.model.clone(),
+                    p.config.temperature,
+                    p.config.timeout_ms,
                 )
             }
             None => {
@@ -883,8 +1006,23 @@ impl AgentApp {
                 if pf.name_taken(&name, None) {
                     return Err(AppError::BadRequest(format!("名称「{name}」已存在，换一个")));
                 }
-                (name, get_str("api_key_value").unwrap_or_default(), false, false)
+                (name, get_str("api_key_value").unwrap_or_default(), false, false, String::new(), 0.2_f32, 60_000_u64)
             }
+        };
+        let temperature = temperature_in.unwrap_or(old_temp);
+        let timeout_ms = timeout_in.unwrap_or(old_timeout);
+        if !(5000..=300_000).contains(&timeout_ms) {
+            return Err(AppError::BadRequest("超时时间需在 5000 – 300000 毫秒之间".into()));
+        }
+
+        // 「当前使用中模型」自动回落（方案 §5.3）：仍在启用清单 → 沿用；被删/被停用/新建
+        // → 回落第一个启用项；全部停用 → 拒存（选择器会变空，等于废配置）。
+        let model = if !old_model.is_empty() && models.iter().any(|m| m.enabled && m.id == old_model) {
+            old_model
+        } else if let Some(first) = models.iter().find(|m| m.enabled) {
+            first.id.clone()
+        } else {
+            return Err(AppError::BadRequest("至少保留一个「启用」的模型（当前清单全部停用）".into()));
         };
 
         let id = target_id.unwrap_or_else(cmx_agent_model::new_id);
@@ -895,7 +1033,16 @@ impl AgentApp {
             temperature,
             timeout_ms,
         };
-        pf.upsert(cmx_agent_model::NamedProvider { id: id.clone(), name: name.clone(), builtin, config: cfg.clone() });
+        pf.upsert(cmx_agent_model::NamedProvider {
+            id: id.clone(),
+            name: name.clone(),
+            builtin,
+            kind,
+            preset,
+            models,
+            api_key_url,
+            config: cfg.clone(),
+        });
         let persisted = pf.save(&dir).is_ok();
         // 仅激活条目热换（新建/非激活条目只落盘，切换由 set_active_provider 负责）。
         if is_active && let Some(slot) = &self.model_slot {
@@ -919,7 +1066,8 @@ impl AgentApp {
     }
 
     /// 多 provider：列出全部条目（模型菜单分组 + 配置面板左列共用）。
-    /// `active` 标出当前激活条目；`candidates` 为该 provider 的候选模型（自定义 URL 可能为空，仅显示当前模型）。
+    /// `active` 标出当前激活条目；`candidates` = 启用中的候选模型（聊天选择器）；
+    /// `models` = 完整清单（配置页清单管理，含停用项）。
     pub fn list_providers(&self) -> serde_json::Value {
         let _g = self.providers_lock.lock().expect("providers lock");
         let (dir, pf) = match self.load_providers() {
@@ -931,15 +1079,21 @@ impl AgentApp {
             .providers
             .iter()
             .map(|p| {
-                let candidates: Vec<String> =
-                    p.config.candidate_models().iter().map(|s| s.to_string()).collect();
-                let mut cands: Vec<serde_json::Value> = candidates
+                let models: Vec<serde_json::Value> = p
+                    .models
                     .iter()
-                    .map(|m| serde_json::json!({ "model": m, "label": m }))
+                    .map(|m| serde_json::json!({ "id": m.id, "enabled": m.enabled, "reasoning": m.reasoning }))
                     .collect();
-                // 当前模型保证在候选里（自定义模型名/未知 provider 时）。
+                let mut cands: Vec<serde_json::Value> = p
+                    .models
+                    .iter()
+                    .filter(|m| m.enabled)
+                    .map(|m| serde_json::json!({ "model": m.id, "label": m.id, "reasoning": m.reasoning,
+                        "input_types": m.input_types }))
+                    .collect();
+                // 当前模型保证在候选里（清单未含时——如停用了当前模型被回落前的旧快照）。
                 if !p.config.model.is_empty()
-                    && !candidates.iter().any(|m| m == &p.config.model)
+                    && !cands.iter().any(|c| c["model"] == p.config.model.as_str())
                 {
                     cands.insert(0, serde_json::json!({ "model": p.config.model, "label": p.config.model }));
                 }
@@ -948,10 +1102,14 @@ impl AgentApp {
                     "name": p.name,
                     "builtin": p.builtin,
                     "active": pf.active_id() == Some(p.id.as_str()),
+                    "kind": p.kind,
+                    "preset": p.preset,
+                    "api_key_url": p.api_key_url,
                     "base_url": p.config.base_url,
                     "api_key_masked": p.config.masked_api_key(),
                     "configured_key": !p.config.api_key.is_empty(),
                     "model": p.config.model,
+                    "models": models,
                     "candidates": cands,
                 })
             })
@@ -961,6 +1119,64 @@ impl AgentApp {
             .map(|p| p.config.model.clone())
             .unwrap_or_else(|| "demo".to_string());
         serde_json::json!({ "service": "cmx-model", "current": current, "providers": providers })
+    }
+
+    /// P1（方案 20260917 §5.2）：内置供应商模板目录——「＋ 新增 Provider」目录卡数据源。
+    /// 真源在后端 `PROVIDER_PRESETS` 常量（前端两份硬编码已下线，随应用版本分发）。
+    pub fn list_provider_presets(&self) -> serde_json::Value {
+        serde_json::json!({ "service": "cmx-model", "presets": cmx_agent_model::provider_presets_json() })
+    }
+
+    /// P1（方案 §5.4）：测试连接——真实发 `max_tokens=1` 探测，同时验证 key、URL、模型名。
+    /// 入参 = 表单暂存（明文 key **只进内存不落盘**）或 `id` + keep（沿用已存 key）。
+    /// 错误按七类分类返回（不打 AppError，前端直接展示友好话术）。
+    pub async fn test_model_config(&self, payload: serde_json::Value) -> AppResult<serde_json::Value> {
+        let get_str = |k: &str| payload.get(k).and_then(|v| v.as_str()).map(|s| s.trim().to_string());
+        let target_id = get_str("id").filter(|s| !s.is_empty());
+        let (base_url, api_key, model, timeout_ms) = match &target_id {
+            Some(id) => {
+                let p = {
+                    let _g = self.providers_lock.lock().expect("providers lock");
+                    self.load_providers().and_then(|(_, pf)| pf.get(id).cloned())
+                }
+                .ok_or_else(|| AppError::BadRequest("Provider 不存在（可能已被删除）".into()))?;
+                let key = if get_str("api_key_action").as_deref() == Some("set") {
+                    get_str("api_key_value").unwrap_or_default()
+                } else {
+                    p.config.api_key
+                };
+                (
+                    get_str("base_url").filter(|s| !s.is_empty()).unwrap_or(p.config.base_url),
+                    key,
+                    get_str("model").filter(|s| !s.is_empty()).unwrap_or(p.config.model),
+                    payload.get("timeout_ms").and_then(|v| v.as_u64()).unwrap_or(p.config.timeout_ms),
+                )
+            }
+            None => (
+                get_str("base_url")
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| AppError::BadRequest("base_url 不能为空".into()))?,
+                get_str("api_key_value").unwrap_or_default(),
+                get_str("model")
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| AppError::BadRequest("model 不能为空".into()))?,
+                payload.get("timeout_ms").and_then(|v| v.as_u64()).unwrap_or(60_000),
+            ),
+        };
+        let cfg = cmx_agent_model::ModelProviderConfig {
+            base_url: base_url.trim_end_matches('/').to_string(),
+            api_key,
+            model,
+            temperature: 0.2,
+            // 探测超时上限 30s：表单可填 300s，但「测试」不该让用户等 5 分钟。
+            timeout_ms: timeout_ms.clamp(3_000, 30_000),
+        };
+        match cmx_agent_model::OpenAiCompatModel::new(cfg).ping().await {
+            Ok(ms) => Ok(serde_json::json!({ "service": "cmx-model", "ok": true, "latency_ms": ms })),
+            Err(e) => Ok(serde_json::json!({
+                "service": "cmx-model", "ok": false, "err_kind": e.kind, "message": e.message,
+            })),
+        }
     }
 
     /// 多 provider：删除一个自定义条目。内置条目不可删；删除激活条目时激活回落到剩余第一条
@@ -1043,16 +1259,25 @@ impl AgentApp {
     }
 
     /// B2：列出可选模型（前门 list_models → 模型选择器）。
-    /// `current` = 当前生效模型（真实 provider 的 model，或 demo）；`candidates` = 同 provider 候选 + demo。
+    /// `current` = 当前生效模型（真实 provider 的 model，或 demo）；
+    /// `candidates` = 激活 provider 的启用模型清单（providers.json models，方案 20260917
+    /// 关键词硬编码已下线）+ demo；展示名优先激活条目的用户命名。
     pub fn list_models(&self) -> serde_json::Value {
         let cfg = cmx_agent_model::resolve_active(self.effective_model_config_dir().as_deref());
+        // 展示名：providers.json 激活条目的用户命名优先（env / model.json 路径回落 provider_label）。
+        let named = self.load_providers().and_then(|(_, pf)| {
+            pf.active().map(|p| {
+                if p.name.is_empty() { provider_label(&p.config.base_url) } else { p.name.clone() }
+            })
+        });
+        let enabled = self.load_providers().and_then(|(_, pf)| pf.active().map(|p| p.enabled_models()));
         let (current, provider, base_url) = match &cfg {
-            Some(c) => (c.model.clone(), provider_label(&c.base_url), c.base_url.clone()),
+            Some(c) => (c.model.clone(), named.unwrap_or_else(|| provider_label(&c.base_url)), c.base_url.clone()),
             None => ("demo".to_string(), "离线演示".to_string(), String::new()),
         };
         let mut candidates: Vec<serde_json::Value> = Vec::new();
-        if let Some(c) = &cfg {
-            for m in c.candidate_models() {
+        if cfg.is_some() {
+            for m in enabled.unwrap_or_default() {
                 candidates.push(serde_json::json!({ "model": m, "label": m }));
             }
             // 保证当前模型在列表里（provider 未识别或自定义模型名时）
@@ -1099,14 +1324,20 @@ impl AgentApp {
         p.config.model = model.to_string();
         let cfg = p.config.clone();
         let name = p.name.clone();
-        let is_active = pf.active_id() == Some(id.as_str());
+        // 选模型即隐式激活该 provider（2026-09-17 修复：未配置态下拉直选模型时目标还不是
+        // 激活条目，旧逻辑 is_active=false 跳过热换 → 配置存了但回合仍走 DemoModel）。
+        if pf.active_id() != Some(id.as_str()) {
+            pf.active = Some(id.to_string());
+        }
         let persisted = pf.save(&dir).is_ok();
-        if is_active {
+        if cfg.base_url.is_empty() {
+            slot.swap(std::sync::Arc::new(crate::DemoModel));
+        } else {
             slot.swap(std::sync::Arc::new(cmx_agent_model::OpenAiCompatModel::new(cfg.clone())));
         }
         let note = if persisted { "已切换并持久化，立即生效" } else { "已切换（本次会话；持久化失败）" };
         Ok(serde_json::json!({ "service": "cmx-model", "current": model, "provider": name,
-            "persisted": persisted, "note": note }))
+            "active": id, "persisted": persisted, "note": note }))
     }
 
     /// 运行时切换两旋钮（前门 set_policy）：沙箱能力 × 审批许可。
@@ -1648,7 +1879,7 @@ impl AgentApp {
         let outcome = match outcome {
             Ok(o) => o,
             Err(e) => {
-                let msg = format!("⚠ 处理出错：{e}");
+                let msg = format!("{TURN_ERROR_NOTE_PREFIX}{e}");
                 session.log.append(cmx_agent_core::event::EventKind::Note {
                     text: msg.clone(),
                 });
@@ -2185,7 +2416,13 @@ fn agent_spec_json(a: &cmx_agent_core::agents::AgentSpec) -> serde_json::Value {
     })
 }
 
-/// B2：按 base_url 推断 provider 展示名（模型选择器用）。
+/// 回合错误 note 的统一前缀。**前后端契约**：Web/Tauri 壳的 render.js 以
+/// `startsWith("⚠ 处理出错")` 识别错误行（豁免回合折叠、红字强化），改这里必须同步改
+/// render.js 的判定（报错可见性方案 20260917 A 项）。
+pub(crate) const TURN_ERROR_NOTE_PREFIX: &str = "⚠ 处理出错：";
+
+/// B2：按 base_url 推断 provider 展示名（模型选择器用；providers.json 有用户命名时优先，
+/// 此函数仅 env / model.json 兜底路径）。
 fn provider_label(base_url: &str) -> String {    let b = base_url.to_ascii_lowercase();
     if b.contains("mlamp") {
         "MLamp 网关".into()

@@ -67,20 +67,25 @@ async function logoutConfirm(){
 }
 
 // ── 结果操作按钮（复制/分享/点赞/差评）：仅图标 + 原生 tooltip（title）。
-// 挂在回合最终回复的气泡底部——挂载时机在 turn_ended（render.js），工具执行行保持素净，不再注入按钮。──
+// 挂载时机在 turn_ended（render.js）：一回合唯一一份，挂在回合最底（工具行/报错行之后），
+// 不再塞进回复气泡——气泡后面还有工具行时按钮行会把时间线拦腰截断（用户多次反馈）。
 const TOOL_ACT_BTNS =
   `<button class="tcact" data-act="toolCopy" title="复制" aria-label="复制"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>`+
   `<button class="tcact" data-act="toolShare" title="分享" aria-label="分享"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg></button>`+
   `<button class="tcact" data-act="toolLike" title="点赞" aria-label="点赞"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg></button>`+
   `<button class="tcact" data-act="toolDislike" title="差评" aria-label="差评"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"/></svg></button>`;
-// 最终回复气泡：把同款操作按钮作为底部行追加（气泡无表头，放底部）
-function addBubbleActions(bubble){
-  if(!bubble || !bubble.innerText.trim() || bubble.querySelector(":scope > .tcacts")) return;
-  const acts=document.createElement("div"); acts.className="tcacts bubble-acts"; acts.innerHTML=TOOL_ACT_BTNS;
-  bubble.appendChild(acts);
+// 回合操作行：挂回合元素最底（唯一落款）；_for 回指末条回复气泡，复制/分享取正文用它
+// （按钮行本体不在气泡里，closest(".bubble") 够不到）。
+function addTurnActions(turn, tail){
+  if(!turn || !tail || !tail.innerText.trim()) return;
+  turn.querySelectorAll(":scope > .tcacts").forEach(a=>a.remove());   // 幂等
+  const acts=document.createElement("div"); acts.className="tcacts bubble-acts";
+  acts.innerHTML=TOOL_ACT_BTNS; acts._for=tail;
+  turn.appendChild(acts);
 }
-// 复制/分享取正文文本（去掉操作按钮本身）；工具卡取正文块，气泡取全文
+// 复制/分享取正文：回合操作行经 _for 回指末条回复气泡；工具卡取正文块，气泡取全文
 function panelText(box){
+  if(!box) return "";
   const clone=box.cloneNode(true); clone.querySelectorAll(".tcacts").forEach(a=>a.remove());
   const parts=[...clone.querySelectorAll(".tterm,.tcode,.tcsub,.tcempty")].map(e=>e.innerText.trim()).filter(Boolean);
   if(parts.length) return parts.join("\n\n");
@@ -91,9 +96,9 @@ async function copyText(txt){
   try{ await navigator.clipboard.writeText(txt); return true; }
   catch(e){ try{ const ta=document.createElement("textarea"); ta.value=txt; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); return true; }catch(_){ return false; } }
 }
-async function toolCopy(btn){ const ok=await copyText(panelText(btn.closest(".tool,.bubble"))); showToast(ok?"已复制到剪贴板":"复制失败"); }
+async function toolCopy(btn){ const ok=await copyText(panelText(btn.closest(".tcacts")?._for || btn.closest(".tool,.bubble"))); showToast(ok?"已复制到剪贴板":"复制失败"); }
 async function toolShare(btn){
-  const txt=panelText(btn.closest(".tool,.bubble"));
+  const txt=panelText(btn.closest(".tcacts")?._for || btn.closest(".tool,.bubble"));
   if(navigator.share){ try{ await navigator.share({text:txt}); return; }catch(e){ if(e&&e.name==="AbortError") return; } }
   const ok=await copyText(txt); showToast(ok?"已复制，可粘贴分享":"分享失败");
 }
@@ -113,15 +118,35 @@ function showToast(msg){
   t.textContent=msg; t.classList.add("on");
   clearTimeout(showToast._t); showToast._t=setTimeout(()=>t.classList.remove("on"),1600);
 }
+// 敏感字段掩码切换（ZCode 同款：password 圆点 + 线性眼睛图标，用户 2026-09-17 定稿）：
+// 切换同容器 input 的 type；脏检测不受影响——非空且 ≠ 回填脱敏值才 set（dataset.masked）。
+const ICON_EYE=`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+const ICON_EYE_OFF=`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`;
+function secretToggle(btn){
+  // 通用约定：eye-btn 与 input 是同容器直接子级（.mcfg-key-wrap / .pwd-wrap 均满足）。
+  const inp=btn.parentElement.querySelector("input");
+  if(!inp) return;
+  const show=inp.type==="password";
+  inp.type=show?"text":"password";
+  btn.innerHTML=show?ICON_EYE_OFF:ICON_EYE;
+  btn.title=show?"隐藏":"显示";
+}
+// 所有 .eye-btn 启动时落默认图标（模型 API Key / IM Secret / 登录注册改密码——同一机制，零重复）。
+document.querySelectorAll(".eye-btn").forEach(b=>{ b.innerHTML=ICON_EYE; });
 
 // 内联 onclick 属性全被拦截。用委托（监听在 document 上，由 nonce'd 脚本注册）在两壳都工作。
 // 重构：toggleMenu/toggleUserMenu（原两浮层菜单）删除；menuSettings/menuAbout/userProfile/userSwitch/
 // userWorkspace/userLogout 收拢进设置中心（js/settings.js 的 openSettings/toggleSettings + acc* 动作）。
 const ACTIONS = { newTask, openConnectors, openAssistant, startFromHome, toggleSidebar, toggleTheme, applyUpdate: updateBtnClick, toggleSettings, openSettingsSection, settingsSection, setThemeCard, accChangePassword, accLogout, aboutCheckUpdate, toggleVoice,
   toggleTabOverflow, tabCtxClose, tabCtxCloseOthers, tabCtxCloseRight, tabCtxCloseAll, winMinimize, winToggleMaximize, winClose,
-  closeSettings, scfgSecretLock: scfgToggleSecretLock, scfgQqLock: scfgToggleQqLock, scfgQqLogin, scfgSelect: scfgSelectChannel, scfgWechatLogin, imcfgSave,
-  mcfgClose: closeModelConfig, mcfgKeyLock: mcfgToggleKeyLock, mcfgSave: saveModelConfig,
+  closeSettings, scfgQqLogin, scfgSelect: scfgSelectChannel, scfgWechatLogin, imcfgSave,
+  mcfgClose: closeModelConfig, mcfgSave: saveModelConfig,
   mcfgNew: mcfgNew, mcfgDelete: deleteModelProvider,
+  // 模型分区（ZCode 化 P1）：供应商目录 / 清单行内管理 + 模型编辑弹窗
+  // （底部「测试连接」按钮已删——每行烧瓶单测已覆盖，2026-09-17）
+  mcfgCatClose: mcfgCatalogClose, mcfgCatPick: mcfgCatalogPick,
+  mcfgModelAdd, mcfgModelDel, mcfgModelEdit, mcfgModelTest,
+  medClose, medSave, medLevelAdd,
   // agentsSelect 收 data-name（调度器统一传 el，包装转换——直接传 el 会让 agentsFind 永不命中，列表点击整体失效）
   agentsSelect: el=>agentsSelect(el.dataset.name),
   agentsNew, agentsSave, agentsDelete,
@@ -149,6 +174,7 @@ document.addEventListener("click", e=>{
   } else if(act === "toolDislike"){ toolDislike(el);
   } else if(act === "pluginSelect"){ pluginSelect(el);
   } else if(act === "pluginOpenHomepage"){ pluginOpenHomepage(el);
+  } else if(act === "secretToggle"){ secretToggle(el);
   } else if(act === "pluginInstall"){ pluginInstall(el);
   } else if(act === "pluginUninstall"){ pluginUninstall(el);
   } else if(act === "pluginToggle"){ pluginToggle(el);
@@ -176,13 +202,23 @@ document.addEventListener("click", e=>{
   const _scfgKind = document.getElementById("scfg-kind");
   if(_scfgKind) _scfgKind.addEventListener("change", scfgSwitchKind);
 }
-// 模型分区：preset 下拉 / base-url 输入 / 温度滑杆的事件（内联 on* 被两壳 CSP 拦截，显式监听）。
-// 遮罩关闭由设置中心统一接管（js/settings.js 的 #settings-overlay 遮罩点击/Esc）。
-document.getElementById("mcfg-preset").addEventListener("change", e => mcfgApplyPreset(e.target.value));
-document.getElementById("mcfg-base-url").addEventListener("input", mcfgRefreshCandidates);
-document.getElementById("mcfg-temp").addEventListener("input", e => {
-  document.getElementById("mcfg-temp-val").textContent = parseFloat(e.target.value).toFixed(2);
-});
+// 模型分区：模型清单行内编辑写回（行动态渲染，容器委托）/ 添加框回车（内联 on* 被两壳 CSP
+// 拦截，显式监听）。遮罩关闭由设置中心统一接管（js/settings.js 的 #settings-overlay 遮罩点击/Esc）；
+// 供应商目录弹层点击遮罩空白关闭。
+{
+  const modelsBox = document.getElementById("mcfg-models");
+  modelsBox.addEventListener("change", e=>{
+    const row=e.target.closest(".ml-row"); if(!row) return;
+    const m=_mcfgModels[+row.dataset.i]; if(!m) return;
+    if(e.target.type==="checkbox") m.enabled=e.target.checked;
+  });
+  // API 格式下拉：当前仅 openai 可选（其余为禁用占位），选择即写回保存载荷。
+  document.getElementById("mcfg-kind").addEventListener("change", e=>{ _mcfgKind=e.target.value; });
+  const catOv = document.getElementById("mcfg-cat-overlay");
+  catOv.addEventListener("click", e=>{ if(e.target===catOv) mcfgCatalogClose(); });
+  const medOv = document.getElementById("med-overlay");
+  medOv.addEventListener("click", e=>{ if(e.target===medOv) medClose(); });
+}
 // 修改密码框：三个输入框回车即提交（改密弹框不点遮罩关闭——强制提醒场景避免误关）。
 ["pwd-old","pwd-new","pwd-confirm"].forEach(id=>document.getElementById(id).addEventListener("keydown", e=>{
   if(e.key==="Enter") pwdSave();

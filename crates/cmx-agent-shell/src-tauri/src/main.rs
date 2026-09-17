@@ -144,24 +144,26 @@ fn start_im_if_configured(rt: &'static tokio::runtime::Runtime, app: Arc<AgentAp
     }
 }
 
-/// IM 遥控配置（设置 → IM 遥控 面板）。`action` = `get`（脱敏读 im.json）/
+/// IM 遥控配置（设置 → IM 遥控 面板）。`action` = `get`（读 im.json；`reveal=true` 时
+/// secret 给明文——用户拍板 2026-09-17「点眼睛展示完整字符串」，password 框掩码展示）/ 
 /// `set`（保存 im.json + **热重载桥**，立即生效）。
 ///
 /// 返回与 `dispatch_json` 同形的 JSON 串（`{ok,data}` / `{ok:false,error:{message}}`），
 /// 前端按统一信封解析。配置 schema 见 `cmx_agent_im::ImRemoconConfig`（secret keep/set 语义
-/// 照模型配置面板：面板只回显掩码，不回传明文）。身份模式固定个人（`personal=true`），
+/// 照模型配置面板）。身份模式固定个人（`personal=true`），
 /// 白名单不进面板（im.json 手工维护，GUI set 不触碰已有值）。
 #[tauri::command]
 async fn im_config(
     action: String,
     payload: Option<String>,
+    reveal: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let data_dir = cmx_agent_app::shared_data_dir();
     match action.as_str() {
         "get" => {
             let data = cmx_agent_im::load_im_config(&data_dir)
-                .map(|c| c.masked())
+                .map(|c| c.view(reveal.unwrap_or(false)))
                 .unwrap_or_else(|| {
                     serde_json::json!({
                         "configured": false,

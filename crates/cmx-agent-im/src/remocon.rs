@@ -187,6 +187,19 @@ impl ImRemoconConfig {
         })
     }
 
+    /// 面板回显视图。`reveal=true`（用户拍板 2026-09-17「点眼睛展示完整字符串」）时
+    /// secret/token 追加**明文**字段——本机应用，im.json 本就明文落盘；password 框掩码
+    /// 展示、点眼睛看全串。`false` = 旧脱敏视图（masked() 别名语义保留）。
+    pub fn view(&self, reveal: bool) -> Value {
+        let mut v = self.masked();
+        if reveal {
+            v["app_secret"] = json!(self.feishu.app_secret);
+            v["qq_secret"] = json!(self.qq.app_secret);
+            v["wechat_token"] = json!(self.wechat.bot_token);
+        }
+        v
+    }
+
     /// 单个 provider（按 kind 标签）→ 运行装配件。凭证缺失返回 Err（带缺哪个）。
     fn resolve_one(&self, kind: &str) -> Result<(ImKind, Arc<dyn ImProvider>), String> {
         let kind = parse_kind(kind).map_err(|e| format!("im.json {e}"))?;
@@ -612,6 +625,22 @@ mod tests {
         assert_eq!(m["app_secret_masked"], ""); // 未配置 → 空串
         assert_eq!(m["qq_secret_masked"], "...abcd");
         assert!(!m.to_string().contains("1234567890abcd"));
+    }
+
+    #[test]
+    fn view_reveal_exposes_plaintext() {
+        // reveal=true：secret 给明文（用户拍板「点眼睛展示完整字符串」）；false=脱敏视图不带明文键。
+        let cfg = ImRemoconConfig {
+            feishu: FeishuCreds { app_id: "cli_1".into(), app_secret: "fs-plaintext".into(), base: String::new() },
+            qq: QqCreds { app_secret: "qq-plaintext".into(), ..Default::default() },
+            ..Default::default()
+        };
+        let rev = cfg.view(true);
+        assert_eq!(rev["app_secret"], "fs-plaintext");
+        assert_eq!(rev["qq_secret"], "qq-plaintext");
+        let masked = cfg.view(false);
+        assert!(masked.get("app_secret").is_none(), "非 reveal 不得带明文键");
+        assert!(!masked.to_string().contains("fs-plaintext"));
     }
 
     #[test]

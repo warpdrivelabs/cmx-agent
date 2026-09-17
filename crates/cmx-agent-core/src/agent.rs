@@ -176,7 +176,7 @@ impl Default for Policy {
         Self {
             sandbox: SandboxMode::WorkspaceWrite,
             approval: ApprovalPolicy::OnRequest,
-            max_steps: 16,
+            max_steps: 500,
             allowed_roots: vec![],
             subject: Subject::new("anon"),
         }

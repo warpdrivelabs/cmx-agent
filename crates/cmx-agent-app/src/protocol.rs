@@ -96,6 +96,25 @@ pub enum AppRequest {
     DeleteProvider { id: String },
     /// 多 provider：整体切换激活条目（持久化 + 热换模型槽）。
     SetActiveProvider { id: String },
+    /// P1（方案 20260917 §5.2）：内置供应商模板目录（「＋ 新增」的目录卡数据源）。
+    ListProviderPresets,
+    /// P1（方案 §5.4）：测试连接——真实发 max_tokens=1 探测；错误按七类分类
+    /// （auth/network/timeout/model_not_found/rate_limit/server/unknown）返回友好话术。
+    /// `api_key_action=="set"` 时用 `api_key_value`（明文只进内存），否则沿用已存 key。
+    TestModelConfig {
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        base_url: Option<String>,
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
+        #[serde(default)]
+        api_key_action: Option<String>,
+        #[serde(default)]
+        api_key_value: Option<String>,
+    },
     /// 运行时切换两旋钮（沙箱能力 × 审批许可；其余 Policy 项不动）。
     /// `sandbox`: `read-only|workspace-write|danger-full-access`；`approval`: `never|on-request|unless-trusted`。
     SetPolicy { sandbox: String, approval: String },
@@ -115,21 +134,28 @@ pub enum AppRequest {
         #[serde(default)]
         hardened_read: bool,
     },
-    /// B2 读取完整模型配置（api_key 脱敏），供配置面板填充表单。
+    /// B2 读取完整模型配置，供配置面板填充表单。
     /// `id` 缺省 = 激活 provider（旧行为兼容）；有值 = 指定条目（多 provider 面板）。
+    /// `reveal=true`（用户拍板 2026-09-17「点眼睛展示完整字符串」）：api_key 给**明文**——
+    /// 本机应用，providers.json 本就明文落盘，接口有登录门；password 框掩码展示、点眼睛看全串。
     GetModelConfig {
         #[serde(default)]
         id: Option<String>,
+        #[serde(default)]
+        reveal: Option<bool>,
     },
     /// B2 保存模型配置（配置面板「保存」调用）——按 id upsert 多 provider 条目。
     /// `id` 缺省/空 = 新建（name 必填）；`name` 更新时空缺沿用旧名。
+    /// `model` 可选（方案 20260917：当前使用中模型由聊天 ◎ 维护，配置页不再上传；
+    /// 缺省时后端按「沿用旧值 → 回落第一个启用项」推导）。
     SetModelConfig {
         #[serde(default)]
         id: Option<String>,
         #[serde(default)]
         name: Option<String>,
         base_url: String,
-        model: String,
+        #[serde(default)]
+        model: Option<String>,
         #[serde(default)]
         temperature: Option<f32>,
         #[serde(default)]
@@ -139,6 +165,19 @@ pub enum AppRequest {
         api_key_action: String,
         #[serde(default)]
         api_key_value: Option<String>,
+        /// 候选模型清单 `[{id,enabled,reasoning}]`（方案 20260917 §5.1；Value 透传，
+        /// 结构校验在 app 层做——错误信息能带上具体第几条）。
+        #[serde(default)]
+        models: Option<serde_json::Value>,
+        /// 协议类型（P1 恒 "openai"）。
+        #[serde(default)]
+        kind: Option<String>,
+        /// 来源模板 id。
+        #[serde(default)]
+        preset: Option<String>,
+        /// 「获取 API Key」外链。
+        #[serde(default)]
+        api_key_url: Option<String>,
     },
     /// 登录（对接门户 /api/auth/login）。成功后前门持有当前用户。
     Login { username: String, password: String },
@@ -403,6 +442,17 @@ async fn dispatch_inner(app: &AgentApp, req: AppRequest) -> Result<AppResponse, 
         AppRequest::ListProviders => Ok(AppResponse::ok(app.list_providers())),
         AppRequest::DeleteProvider { id } => Ok(AppResponse::ok(app.delete_provider(&id)?)),
         AppRequest::SetActiveProvider { id } => Ok(AppResponse::ok(app.set_active_provider(&id)?)),
+        AppRequest::ListProviderPresets => Ok(AppResponse::ok(app.list_provider_presets())),
+        AppRequest::TestModelConfig { id, base_url, model, timeout_ms, api_key_action, api_key_value } => {
+            let mut payload = serde_json::Map::new();
+            if let Some(i) = id { payload.insert("id".into(), serde_json::json!(i)); }
+            if let Some(b) = base_url { payload.insert("base_url".into(), serde_json::json!(b)); }
+            if let Some(m) = model { payload.insert("model".into(), serde_json::json!(m)); }
+            if let Some(ms) = timeout_ms { payload.insert("timeout_ms".into(), serde_json::json!(ms)); }
+            if let Some(a) = api_key_action { payload.insert("api_key_action".into(), serde_json::json!(a)); }
+            if let Some(k) = api_key_value { payload.insert("api_key_value".into(), serde_json::json!(k)); }
+            Ok(AppResponse::ok(app.test_model_config(serde_json::Value::Object(payload)).await?))
+        }
         AppRequest::SetPolicy { sandbox, approval } => {
             let s: cmx_agent_core::SandboxMode = parse_enum("sandbox", &sandbox)
                 .map_err(AppError::BadRequest)?;
@@ -465,18 +515,24 @@ async fn dispatch_inner(app: &AgentApp, req: AppRequest) -> Result<AppResponse, 
             let persisted = cmx_agent_sandbox::settings::set(s.clone()).map_err(AppError::BadRequest)?;
             Ok(AppResponse::ok(serde_json::json!({ "saved": true, "persisted": persisted, "net": s.net.as_str() })))
         }
-        AppRequest::GetModelConfig { id } => Ok(AppResponse::ok(app.get_model_config(id.as_deref()))),
-        AppRequest::SetModelConfig { id, name, base_url, model, temperature, timeout_ms, api_key_action, api_key_value } => {
+        AppRequest::GetModelConfig { id, reveal } => {
+            Ok(AppResponse::ok(app.get_model_config(id.as_deref(), reveal.unwrap_or(false))))
+        }
+        AppRequest::SetModelConfig { id, name, base_url, model, temperature, timeout_ms, api_key_action, api_key_value, models, kind, preset, api_key_url } => {
             let mut payload = serde_json::json!({
                 "base_url": base_url,
-                "model": model,
                 "api_key_action": api_key_action,
             });
             if let Some(i) = id { payload["id"] = serde_json::json!(i); }
             if let Some(n) = name { payload["name"] = serde_json::json!(n); }
+            if let Some(m) = model { payload["model"] = serde_json::json!(m); }
             if let Some(t) = temperature { payload["temperature"] = serde_json::json!(t); }
             if let Some(ms) = timeout_ms { payload["timeout_ms"] = serde_json::json!(ms); }
             if let Some(k) = api_key_value { payload["api_key_value"] = serde_json::json!(k); }
+            if let Some(m) = models { payload["models"] = m; }
+            if let Some(k) = kind { payload["kind"] = serde_json::json!(k); }
+            if let Some(p) = preset { payload["preset"] = serde_json::json!(p); }
+            if let Some(u) = api_key_url { payload["api_key_url"] = serde_json::json!(u); }
             Ok(AppResponse::ok(app.set_model_config(payload)?))
         }
         AppRequest::Login { username, password } => {

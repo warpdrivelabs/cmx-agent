@@ -136,30 +136,6 @@ impl ModelProviderConfig {
         std::fs::write(dir.join("model.json"), self.to_json_string())
     }
 
-    /// 按 base_url 推断 provider 的候选模型名（模型选择器下拉用；未知 provider 返回空）。
-    pub fn candidate_models(&self) -> Vec<&'static str> {
-        let b = self.base_url.to_ascii_lowercase();
-        if b.contains("mlamp") {
-            vec![
-                "mlamp/deepseek-v4-flash",
-                "mlamp/qwen3-coder-next-fp8",
-                "mlamp/deepseek-v4-pro",
-                "mlamp/glm-5.2",
-                "mlamp/kimi-k3",
-                "mlamp/qwen3.8-27b",
-                "mlamp/minimax-h3",
-            ]
-        } else if b.contains("deepseek") {
-            vec!["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-r1", "deepseek-chat"]
-        } else if b.contains("openai") {
-            vec!["gpt-4o", "gpt-4o-mini", "o1", "o1-mini"]
-        } else if b.contains("dashscope") || b.contains("qwen") || b.contains("aliyun") {
-            vec!["qwen-max", "qwen-plus", "qwen-turbo"]
-        } else {
-            vec![]
-        }
-    }
-
     /// API Key 脱敏展示（前端配置面板用）：末 4 位明文，其余 `sk-...`；短于 8 字符全 `*`。
     pub fn masked_api_key(&self) -> String {
         let k = &self.api_key;

@@ -1,5 +1,4 @@
 // ── 设置 → IM 遥控连接配置（后端 im.json；Tauri 壳 invoke("im_config"）· 多通道：飞书/QQ/微信 可同时在线 ──
-let _scfgSecretUnlocked=false, _scfgQqUnlocked=false;
 let _scfgSel="feishu"; // 当前选中的通道（左列高亮 + 右侧详情），独立于勾选启用态
 // 各通道勾选启用态（暂存源：勾选框在左列动态生成，每次重渲染按此回填）。
 let _scfgEnabled = { feishu:false, qq:false, wechat:false };
@@ -17,9 +16,10 @@ async function scfgOpen(){
     showSettingsSection("account");
     infoDialog("IM 遥控", "当前仅在桌面版（Tauri 壳）可配置：Web 壳未装配 IM 桥。");
     return;
-  }  scfgResetLocks();
+  }
+  scfgResetSecretFields();
   let r=null;
-  try{ r = JSON.parse(await window.__TAURI__.core.invoke("im_config",{action:"get"})); }catch(e){ showToast("读取失败："+e); return; }
+  try{ r = JSON.parse(await window.__TAURI__.core.invoke("im_config",{action:"get", reveal:true})); }catch(e){ showToast("读取失败："+e); return; }
   if(!r||!r.ok){ showToast("读取 IM 配置失败："+((r&&r.error&&r.error.message)||"未知")); return; }
   const d=r.data;
   // 多通道：回显 active 勾选；旧文件无 active 时按 kind 单通道回显。
@@ -30,10 +30,16 @@ async function scfgOpen(){
   // 无人值守全权（默认开）：旧配置无该字段时后端 masked()/默认 JSON 均回 true。
   document.getElementById("scfg-full-access").checked = d.full_access!==false;
   document.getElementById("scfg-app-id").value  = d.app_id||"";
-  document.getElementById("scfg-app-secret").value = d.app_secret_masked||"";
+  // 明文回填（用户拍板「点眼睛展示完整字符串」）：password 型平时掩码成圆点，点眼睛见全串；
+  // dataset.masked 基准=明文——未动=keep，编辑=set 新值。
+  const fsSecret=document.getElementById("scfg-app-secret");
+  fsSecret.value = d.app_secret || "";
+  fsSecret.dataset.masked = d.app_secret || "";
   document.getElementById("scfg-base").value    = d.base||"";
   document.getElementById("scfg-qq-app-id").value = d.qq_app_id||"";
-  document.getElementById("scfg-qq-secret").value = d.qq_secret_masked||"";
+  const qqSecret=document.getElementById("scfg-qq-secret");
+  qqSecret.value = d.qq_secret || "";
+  qqSecret.dataset.masked = d.qq_secret || "";
   document.getElementById("scfg-wx-bot-id").value = d.wechat_bot_id||"";
   // 微信/QQ 扫码 UI 复位（上次会话的二维码/状态不残留）。
   document.getElementById("scfg-wx-qr-wrap").style.display="none";
@@ -87,22 +93,13 @@ function scfgSwitchKind(){
   });
 }
 function closeSettings(){ _scfgWxPolling=false; _scfgQqPolling=false; document.getElementById("settings-overlay").classList.add("hidden"); }
-function scfgResetLocks(){
-  _scfgSecretUnlocked=false; _scfgQqUnlocked=false;
-  const s=document.getElementById("scfg-app-secret"), sb=document.getElementById("scfg-secret-lock");
-  const q=document.getElementById("scfg-qq-secret"), qb=document.getElementById("scfg-qq-lock");
-  s.readOnly=true; s.type="password"; s.value=""; sb.textContent="🔒";
-  q.readOnly=true; q.type="password"; q.value=""; qb.textContent="🔒";
-}
-function scfgToggleSecretLock(){
-  const input=document.getElementById("scfg-app-secret"), btn=document.getElementById("scfg-secret-lock");
-  if(_scfgSecretUnlocked){ input.readOnly=true; input.type="password"; input.value=""; btn.textContent="🔒"; _scfgSecretUnlocked=false; }
-  else { input.readOnly=false; input.type="text"; input.value=""; btn.textContent="🔓"; _scfgSecretUnlocked=true; input.focus(); }
-}
-function scfgToggleQqLock(){
-  const input=document.getElementById("scfg-qq-secret"), btn=document.getElementById("scfg-qq-lock");
-  if(_scfgQqUnlocked){ input.readOnly=true; input.type="password"; input.value=""; btn.textContent="🔒"; _scfgQqUnlocked=false; }
-  else { input.readOnly=false; input.type="text"; input.value=""; btn.textContent="🔓"; _scfgQqUnlocked=true; input.focus(); }
+// 密码框：打开面板清空输入与回填痕迹（scfgOpen 随后按已配置态回填脱敏值）。
+// 保存时按「非空且 ≠ 回填脱敏值」判定改动（见 imcfgSave）。
+function scfgResetSecretFields(){
+  const s=document.getElementById("scfg-app-secret");
+  const q=document.getElementById("scfg-qq-secret");
+  s.value=""; s.dataset.masked=""; s.placeholder="粘贴 App Secret";
+  q.value=""; q.dataset.masked=""; q.placeholder="粘贴 AppSecret";
 }
 // 通道勾选/选中切换由 scfgRenderList / scfgSelectChannel 负责（左列动态生成，显式监听）。
 // ── 扫码登录共用：内容 → 二维码图（GIF data-url；组件未加载/编码失败在状态行兜底提示）。
@@ -206,7 +203,9 @@ async function scfgQqLogin(){
       wrap.style.display="none";
       st.textContent="✓ 凭证已获取";
       document.getElementById("scfg-qq-app-id").value=(p.data.app_id||"");
-      document.getElementById("scfg-qq-secret").value="（已写入，无需填写）";
+      const qqSecret=document.getElementById("scfg-qq-secret");
+      qqSecret.value=""; // 凭证已由后端落盘；占位提示代替回填（密码框语义）
+      qqSecret.placeholder="✓ 已扫码写入，无需填写";
       _scfgEnabled.qq=true; scfgRenderList(); // 左列 QQ 自动勾选
       showToast("✓ QQ 登录成功："+((p.data&&p.data.note)||"已启用"));
       break;
@@ -216,8 +215,16 @@ async function scfgQqLogin(){
   }
   btn.disabled=false;
 }
+// 密码框改动判定：非空且 ≠ 回填脱敏值 → 用户填了新值（保存时提交 set），否则 keep。
+function scfgSecretChanged(el){
+  const v=el.value.trim(), o=(el.dataset.masked||"").trim();
+  return !!v && v!==o;
+}
 async function imcfgSave(){
   const active=SCFG_CHANNELS.filter(ch=>_scfgEnabled[ch.id]).map(ch=>ch.id);
+  const fsSecret=document.getElementById("scfg-app-secret");
+  const qqSecret=document.getElementById("scfg-qq-secret");
+  const fsSet=scfgSecretChanged(fsSecret), qqSet=scfgSecretChanged(qqSecret);
   const payload={
     kind:active[0]||"",
     active,
@@ -226,12 +233,12 @@ async function imcfgSave(){
     full_access:document.getElementById("scfg-full-access").checked,
     app_id:document.getElementById("scfg-app-id").value.trim(),
     base:document.getElementById("scfg-base").value,
-    app_secret_action:_scfgSecretUnlocked?"set":"keep",
+    app_secret_action:fsSet?"set":"keep",
     qq_app_id:document.getElementById("scfg-qq-app-id").value.trim(),
-    qq_secret_action:_scfgQqUnlocked?"set":"keep",
+    qq_secret_action:qqSet?"set":"keep",
   };
-  if(_scfgSecretUnlocked) payload.app_secret_value=document.getElementById("scfg-app-secret").value.trim();
-  if(_scfgQqUnlocked)     payload.qq_secret_value=document.getElementById("scfg-qq-secret").value.trim();
+  if(fsSet) payload.app_secret_value=fsSecret.value.trim();
+  if(qqSet) payload.qq_secret_value=qqSecret.value.trim();
   if(document.getElementById("scfg-enabled").checked && active.length===0){
     showToast("请至少勾选一个 IM 通道（或取消「启用遥控」）"); return;
   }

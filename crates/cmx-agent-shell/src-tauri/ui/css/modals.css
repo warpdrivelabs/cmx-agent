@@ -14,6 +14,9 @@
   .modelmenu .mm-item{cursor:pointer}
   .modelmenu .mm-item.on{color:var(--aqua)}
   .modelmenu .mm-ck{width:14px;text-align:center;color:var(--aqua)}
+  /* 模型能力文字 tag（ZCode 同款 pill，与设置页模型清单 .ml-tag 一致） */
+  .modelmenu .mm-tag{display:inline-block;margin-left:6px;padding:0 5px;font-size:10.5px;line-height:16px;
+    color:var(--muted);border:1px solid var(--border2);border-radius:6px;white-space:nowrap}
   .modelmenu
   .model .mdot{color:var(--aqua)} .model .mlabel{font-weight:600}
 
@@ -33,10 +36,21 @@
   .mcfg-row input[type=password]:focus{outline:none;border-color:var(--aqua)}
   .pwd-warn{display:none;align-items:flex-start;gap:8px;background:rgba(255,180,0,.08);border:1px solid rgba(255,180,0,.35);border-radius:8px;padding:8px 10px;font-size:12px;color:var(--ink);line-height:1.5;margin-bottom:13px}
   .pwd-err{display:none;background:rgba(229,72,77,.08);border:1px solid rgba(229,72,77,.4);border-radius:8px;padding:8px 10px;font-size:12px;color:var(--red);line-height:1.5;margin-bottom:13px;word-break:break-all}
-  .mcfg-key-wrap{display:flex;gap:6px;align-items:center}
-  .mcfg-key-wrap input{flex:1}
-  .mcfg-key-wrap button{background:var(--bg);border:1px solid var(--border2);border-radius:8px;padding:6px 10px;color:var(--muted);cursor:pointer;font-size:15px;flex:0 0 auto}
-  .mcfg-key-wrap button:hover{color:var(--aqua);border-color:var(--aqua)}
+  /* 密码框（ZCode 同款）：容器本身即输入框外观，input 无边框内嵌，眼睛贴右缘**在框内** */
+  .mcfg-key-row{display:flex;gap:6px;align-items:center}
+  .mcfg-key-wrap{display:flex;align-items:center;flex:1;min-width:0;background:var(--bg);
+    border:1px solid var(--border2);border-radius:8px}
+  .mcfg-key-wrap:focus-within{border-color:var(--aqua)}
+  /* 覆盖需带 [type=…]：明文态 input 变 type=text，会命中 .mcfg-row input[type=text]
+     的通用边框样式（specificity 更高），在文字与眼睛之间画出一条竖线（用户截图问题）。 */
+  .mcfg-key-wrap input{flex:1;min-width:0;background:none;border:none;outline:none;
+    color:var(--ink);font-size:13px;padding:7px 10px;font-family:inherit}
+  .mcfg-row .mcfg-key-wrap input[type=password],
+  .mcfg-row .mcfg-key-wrap input[type=text]{background:none;border:none;padding:7px 10px}
+  .mcfg-key-wrap button{background:none;border:none;padding:0 8px 0 4px;color:var(--muted);
+    cursor:pointer;font-size:15px;flex:0 0 auto;display:flex;align-items:center}
+  .mcfg-key-wrap button:hover{color:var(--ink);border:none}
+  .mcfg-key-wrap button.eye-btn svg{width:16px;height:16px;display:block}
   .mcfg-temp-row{display:flex;align-items:center;gap:10px}
   .mcfg-temp-row input[type=range]{flex:1;accent-color:var(--aqua)}
   .mcfg-temp-val{min-width:36px;text-align:right;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
@@ -59,7 +73,72 @@
   .mcfg-list-new:hover{color:var(--aqua);border-color:var(--aqua)}
   .mcfg-detail{flex:1;min-width:0;overflow-y:auto;padding-right:2px}
   .mcfg-hint{font-size:11.5px;color:var(--muted);line-height:1.5;margin-top:2px}
+  .mcfg-hint.err{color:var(--red)}
   .mcfg-actions .mcfg-danger{color:var(--red);border-color:#e5484d;background:none}
   .mcfg-actions .mcfg-danger:hover{background:rgba(229,72,77,.08)}
   .mcfg-actions .mcfg-danger:disabled{opacity:.35;cursor:not-allowed}
+  /* ── 模型分区（ZCode 化 P1，方案 20260917 §5.3）：Key 获取外链 / 测试连接 / 模型清单管理 ── */
+  .mcfg-key-url{flex:0 0 auto;font-size:11.5px;color:var(--aqua);cursor:pointer;white-space:nowrap;text-decoration:none}
+  .mcfg-key-url:hover{text-decoration:underline}
+  /* 模型清单行：ID 文本 / 单测(线描 SVG) / ✎ 编辑 / ✕ 删除 / 启用开关（放最后，用户定稿）。
+     动作列固定宽度逐行对齐（ZCode 式规整）：各列 22px。 */
+  .ml-list{display:flex;flex-direction:column;gap:4px;margin-bottom:6px}
+  .ml-row{display:flex;align-items:center;gap:6px;background:var(--bg);border:1px solid var(--border2);border-radius:8px;padding:4px 6px}
+  .ml-row .ml-id{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink);font-size:12.5px}
+  .ml-row .ml-tag{flex:0 0 auto;font-size:10.5px;color:var(--muted);border:1px solid var(--border2);border-radius:6px;padding:0 5px;line-height:16px;white-space:nowrap}
+  .ml-row button{background:none;border:none;cursor:pointer;font-size:12px;color:var(--muted);padding:2px 0;border-radius:5px;font-family:inherit;display:flex;align-items:center;justify-content:center}
+  .ml-row button svg{display:block;width:13px;height:13px}
+  .ml-row button:hover{background:var(--hover);color:var(--ink)}
+  .ml-row .ml-t,.ml-row .ml-e,.ml-row .ml-del{flex:0 0 22px}
+  .ml-row .ml-t{margin-left:auto}   /* 动作组整体右对齐：名字长短不一，按钮列右缘恒对齐（2026-09-17） */
+  /* 单测进行中：烧瓶原位换同尺寸转圈（不用文字，防撑高行） */
+  .ml-row .ml-t .tc-spin{width:11px;height:11px;border-radius:50%;border:1.5px solid var(--border2);
+    border-top-color:var(--aqua);animation:tcsSpin .8s linear infinite;display:block}
+  /* 单测悬浮条（ZCode 同款）：进行中=转圈+文案，结束=✓/✗ 结果；fixed 底部居中（同 .cmx-toast 通道） */
+  .mcfg-float{position:fixed;left:50%;bottom:88px;transform:translateX(-50%);z-index:60;
+    display:flex;align-items:center;gap:8px;max-width:min(640px,86vw);
+    background:var(--panel);border:1px solid var(--border2);border-radius:10px;padding:9px 16px;
+    font-size:12.5px;color:var(--ink2);box-shadow:0 8px 28px rgba(0,0,0,.4)}
+  .mcfg-float[hidden]{display:none}
+  .mcfg-float .tc-spin{width:13px;height:13px;flex:0 0 auto;border-radius:50%;border:2px solid var(--border2);
+    border-top-color:var(--aqua);animation:tcsSpin .8s linear infinite;display:block}
+  .mcfg-float .mf-ico{flex:0 0 auto;font-weight:700}
+  .mcfg-float .mf-ico.ok{color:var(--aqua)}
+  .mcfg-float .mf-ico.bad{color:var(--red)}
+  .mcfg-float span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ml-row .ml-del:hover{color:var(--red)}
+  .ml-row .ml-en{display:flex;align-items:center;gap:4px;font-size:11px;color:var(--ink2);white-space:nowrap;cursor:pointer;flex:0 0 auto}
+  .ml-empty{font-size:11.5px;color:var(--muted);padding:6px 2px}
+  .ml-add{display:flex;gap:6px}
+  .ml-add button{padding:6px 14px;border-radius:8px;font-size:12.5px;cursor:pointer;border:1px dashed var(--border2);background:none;color:var(--muted);flex:0 0 auto;font-family:inherit}
+  .ml-add button:hover{border-color:var(--aqua);color:var(--aqua)}
+  /* 高级折叠区（模型编辑弹窗内） */
+  .mcfg-adv{margin-bottom:10px;font-size:12px;color:var(--muted)}
+  .mcfg-adv summary{cursor:pointer;user-select:none;padding:3px 0}
+  .mcfg-adv[open] summary{margin-bottom:8px}
+  /* ── 模型编辑弹窗（ZCode 图二式）：chip 多选 + 自定义等级输入 ── */
+  .med-box{width:min(520px,94vw);max-height:86vh;display:flex;flex-direction:column}
+  .med-body{overflow-y:auto;flex:1;min-height:0;padding-right:2px}
+  .med-body .mcfg-row input[type=textarea],.med-body textarea{background:var(--bg);border:1px solid var(--border2);border-radius:8px;padding:7px 10px;color:var(--ink);font-size:12.5px;width:100%;box-sizing:border-box;font-family:inherit;resize:vertical}
+  .med-body .mcfg-row input:focus,.med-body textarea:focus{outline:none;border-color:var(--aqua)}
+  .chip-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .med-chip{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border2);border-radius:8px;
+    padding:5px 11px;font-size:12px;color:var(--ink2);cursor:pointer;user-select:none;background:var(--bg)}
+  .med-chip input[type=checkbox]{margin:0;accent-color:var(--aqua);cursor:pointer}
+  .med-chip.on{border-color:var(--aqua);color:var(--ink)}
+  .med-chip.custom{border-style:dashed}
+  #med-reasoning-levels input[type=text]{background:var(--bg);border:1px solid var(--border2);border-radius:8px;
+    padding:4px 8px;color:var(--ink);font-size:12px;width:96px;font-family:inherit}
+  #med-reasoning-levels input[type=text]:focus{outline:none;border-color:var(--aqua)}
+  #med-reasoning-levels button{background:none;border:1px solid var(--border2);border-radius:8px;color:var(--muted);
+    cursor:pointer;font-size:12px;padding:4px 10px;font-family:inherit}
+  #med-reasoning-levels button:hover{color:var(--aqua);border-color:var(--aqua)}
+  /* 供应商目录弹层（「＋ 新增」先选模板） */
+  .mcfg-cat-box{width:min(560px,94vw)}
+  .mcfg-cat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:8px;margin:6px 0 10px;max-height:46vh;overflow-y:auto}
+  .cat-card{display:flex;flex-direction:column;gap:3px;text-align:left;background:var(--bg);border:1px solid var(--border2);border-radius:10px;padding:10px 12px;cursor:pointer;font-family:inherit}
+  .cat-card:hover{border-color:var(--aqua)}
+  .cat-name{font-size:13px;font-weight:600;color:var(--ink)}
+  .cat-desc{font-size:11px;color:var(--muted);line-height:1.45}
+  .cat-meta{font-size:10.5px;color:var(--aqua)}
 

@@ -213,7 +213,7 @@ impl DesktopAppBuilder {
         let policy = Policy {
             sandbox: self.sandbox,
             approval: self.approval,
-            max_steps: 16,
+            max_steps: 500,
             allowed_roots: vec![self.workdir.clone()],
             subject: self.subject,
         };

@@ -142,3 +142,11 @@
   /* 登录页整页可拖动窗口（Tauri data-tauri-drag-region 由 JS 补挂到 .login-page 顶部 40px 条） */
   .login-drag-strip{position:fixed;top:0;left:0;right:60px;height:38px;z-index:99;
     -webkit-app-region:drag}
+  /* 密码框小眼睛（复用全局 secretToggle：eye-btn 与 input 同容器、启动统一落图标） */
+  .pwd-wrap { position: relative; display: block; }
+  .pwd-wrap input { padding-right: 42px; }
+  .pwd-wrap .eye-btn { position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+    width: 28px; height: 28px; border: none; background: none; padding: 0; cursor: pointer;
+    color: var(--muted); display: flex; align-items: center; justify-content: center; }
+  .pwd-wrap .eye-btn:hover { color: var(--ink); }
+  .pwd-wrap .eye-btn svg { width: 16px; height: 16px; display: block; }

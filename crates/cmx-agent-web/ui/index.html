@@ -140,7 +140,10 @@
             </div>
             <button class="settings-btn settings-danger acc-logout" data-act="accLogout">⎋ 退出登录</button>
           </section>
-          <!-- ── 模型分区（原模型配置面板 DOM 平移，mcfg-* id 全保留，js/model.js 零逻辑改动）── -->
+          <!-- ── 模型分区（ZCode 化 P1，方案 20260917 §5.3）：左列表 + 右表单。
+               无「主模型」选择——model 字段=当前使用中模型，仅由聊天 ◎ 选择器维护；
+               模型清单行内管理（🧪单测图标为线描 SVG/✎ 编辑/✕ 删除/启用开关）；
+               新增先弹供应商目录（模板由 list_provider_presets 后端下发）。── -->
           <section class="settings-sec" id="settings-sec-models">
             <div class="mcfg-body">
               <div class="mcfg-list" id="mcfg-list"></div>
@@ -150,48 +153,48 @@
                   <input id="mcfg-name" type="text" placeholder="如 我的Kimi / 公司网关">
                 </div>
                 <div class="mcfg-row">
-                  <label>预设 Provider（新增时快速填充）</label>
-                  <select id="mcfg-preset">
-                    <option value="">自定义</option>
-                    <option value="mlamp">MLamp（llmgw-bz.mlamp.cn/v1）</option>
-                  </select>
-                </div>
-                <div class="mcfg-row">
                   <label>Base URL</label>
                   <input id="mcfg-base-url" type="text" placeholder="https://api.xxx.com/v1">
                 </div>
                 <div class="mcfg-row">
+                  <label>API 格式</label>
+                  <select id="mcfg-kind">
+                    <!-- 可选项=当前实际支持的格式（用户定稿：支持几种选几种）；其余列为禁用占位（P2 规划） -->
+                    <option value="openai">Chat Completions（OpenAI 兼容 · /chat/completions）</option>
+                    <option value="anthropic" disabled>Anthropic Messages（/v1/messages）— 暂不支持</option>
+                    <option value="responses" disabled>Responses（/responses）— 暂不支持</option>
+                  </select>
+                </div>
+                <div class="mcfg-row">
                   <label>API Key</label>
-                  <div class="mcfg-key-wrap">
-                    <input id="mcfg-api-key" type="password" placeholder="（脱敏；点 🔓 解锁编辑）" readonly>
-                    <button id="mcfg-key-lock-btn" data-act="mcfgKeyLock" title="解锁/锁定 API Key">🔒</button>
+                  <div class="mcfg-key-row">
+                    <div class="mcfg-key-wrap">
+                      <input id="mcfg-api-key" type="password" placeholder="sk-…" autocomplete="new-password">
+                      <button type="button" class="eye-btn" data-act="secretToggle" title="显示/隐藏"></button>
+                    </div>
+                    <a id="mcfg-key-url" class="mcfg-key-url" data-act="pluginOpenHomepage" style="display:none" title="打开供应商控制台获取 API Key">获取 API Key ↗</a>
                   </div>
                 </div>
                 <div class="mcfg-row">
-                  <label>模型</label>
-                  <input id="mcfg-model" type="text" list="mcfg-model-list" placeholder="如 mlamp/deepseek-v4-flash">
-                  <datalist id="mcfg-model-list"></datalist>
-                </div>
-                <div class="mcfg-row">
-                  <label>Temperature</label>
-                  <div class="mcfg-temp-row">
-                    <input id="mcfg-temp" type="range" min="0" max="1" step="0.01" value="0.2">
-                    <span class="mcfg-temp-val" id="mcfg-temp-val">0.20</span>
+                  <label>模型清单（点「编辑」设置上下文窗口 / 输入类型 / 推理等级等；开关关 = 保留配置但不进聊天选择器）</label>
+                  <div id="mcfg-models" class="ml-list"></div>
+                  <div class="ml-add">
+                    <button type="button" data-act="mcfgModelAdd">＋ 新增模型</button>
                   </div>
-                </div>
-                <div class="mcfg-row">
-                  <label>超时 (ms)</label>
-                  <input id="mcfg-timeout" type="number" min="5000" max="300000" step="1000" value="60000">
                 </div>
                 <div class="mcfg-hint" id="mcfg-hint"></div>
               </div>
             </div>
             <div class="mcfg-actions">
               <button data-act="mcfgDelete" id="mcfg-del-btn" class="mcfg-danger">删除</button>
+              <!-- 底部「测试连接」已删（2026-09-17）：每行烧瓶单测已覆盖，按钮重复 -->
+
               <span style="flex:1"></span>
               <button data-act="closeSettings">取消</button>
               <button class="mcfg-save" data-act="mcfgSave">保存</button>
             </div>
+            <!-- 单测悬浮条（ZCode 同款）：进行中=转圈+「正在测试 供应商/模型」，结束=✓/✗ 结果 -->
+            <div class="mcfg-float" id="mcfg-float" hidden></div>
           </section>
           <!-- ── 子智能体分区（阶段一，方案 20260914 §6.7）：内置两条 + 自定义增删改，保存热生效 ── -->
           <section class="settings-sec" id="settings-sec-agents">
@@ -258,8 +261,8 @@
                   <div class="mcfg-row">
                     <label>App Secret</label>
                     <div class="mcfg-key-wrap">
-                      <input id="scfg-app-secret" type="password" placeholder="（脱敏；点 🔓 解锁填写）" readonly>
-                      <button id="scfg-secret-lock" data-act="scfgSecretLock" title="解锁/锁定 App Secret">🔒</button>
+                      <input id="scfg-app-secret" type="password" placeholder="粘贴 App Secret" autocomplete="new-password">
+                      <button type="button" class="eye-btn" data-act="secretToggle" title="显示/隐藏"></button>
                     </div>
                   </div>
                   <div class="mcfg-row">
@@ -288,8 +291,8 @@
                   <div class="mcfg-row">
                     <label>AppSecret</label>
                     <div class="mcfg-key-wrap">
-                      <input id="scfg-qq-secret" type="password" placeholder="（脱敏；点 🔓 解锁填写）" readonly>
-                      <button id="scfg-qq-lock" data-act="scfgQqLock" title="解锁/锁定 AppSecret">🔒</button>
+                      <input id="scfg-qq-secret" type="password" placeholder="粘贴 AppSecret" autocomplete="new-password">
+                      <button type="button" class="eye-btn" data-act="secretToggle" title="显示/隐藏"></button>
                     </div>
                   </div>
                   <div style="font-size:11.5px;color:var(--muted);margin:2px 0 6px;line-height:1.5">
@@ -367,65 +370,58 @@
       </div>
     </div>
   </div>
-  <!-- 模型选择弹层（点 composer 的 ◎ 模型按钮弹出；锚在按钮上方，点外部关闭）。 -->
-  <div class="cmxmenu modelmenu" id="modelmenu"></div>
-  <!-- 模型配置面板（Modal）：多 provider 列表+详情（内置预设不可删 + 自定义命名条目可增删）。
-       交互走 data-act 委托 + 显式 addEventListener（内联 onclick/onchange 被 Tauri 壳 CSP 拦截，勿用）。 -->
-  <div class="mcfg-overlay hidden" id="mcfg-overlay">
-    <div class="mcfg-box mcfg-wide">
-      <div class="mcfg-head">⚙ 模型配置 <button data-act="mcfgClose">✕</button></div>
-      <div class="mcfg-body">
-        <div class="mcfg-list" id="mcfg-list"></div>
-        <div class="mcfg-detail">
-          <div class="mcfg-row">
-            <label>名称</label>
-            <input id="mcfg-name" type="text" placeholder="如 我的Kimi / 公司网关">
-          </div>
-          <div class="mcfg-row">
-            <label>预设 Provider（新增时快速填充）</label>
-            <select id="mcfg-preset">
-              <option value="">自定义</option>
-              <option value="mlamp">MLamp（llmgw-bz.mlamp.cn/v1）</option>
-            </select>
-          </div>
-          <div class="mcfg-row">
-            <label>Base URL</label>
-            <input id="mcfg-base-url" type="text" placeholder="https://api.xxx.com/v1">
-          </div>
-          <div class="mcfg-row">
-            <label>API Key</label>
-            <div class="mcfg-key-wrap">
-              <input id="mcfg-api-key" type="password" placeholder="（脱敏；点 🔓 解锁编辑）" readonly>
-              <button id="mcfg-key-lock-btn" data-act="mcfgKeyLock" title="解锁/锁定 API Key">🔒</button>
-            </div>
-          </div>
-          <div class="mcfg-row">
-            <label>模型</label>
-            <input id="mcfg-model" type="text" list="mcfg-model-list" placeholder="如 mlamp/deepseek-v4-flash">
-            <datalist id="mcfg-model-list"></datalist>
-          </div>
-          <div class="mcfg-row">
-            <label>Temperature</label>
-            <div class="mcfg-temp-row">
-              <input id="mcfg-temp" type="range" min="0" max="1" step="0.01" value="0.2">
-              <span class="mcfg-temp-val" id="mcfg-temp-val">0.20</span>
-            </div>
-          </div>
-          <div class="mcfg-row">
-            <label>超时 (ms)</label>
-            <input id="mcfg-timeout" type="number" min="5000" max="300000" step="1000" value="60000">
-          </div>
-          <div class="mcfg-hint" id="mcfg-hint"></div>
+  <!-- 供应商目录弹层（「＋ 新增 Provider」先选模板预填；模板由 list_provider_presets 后端下发，
+       方案 20260917 §5.3。选卡回填名称/地址/Key 链接/模型清单到模型分区表单）-->
+  <div class="mcfg-overlay hidden" id="mcfg-cat-overlay">
+    <div class="mcfg-box mcfg-cat-box">
+      <div class="mcfg-head">选择供应商模板 <button data-act="mcfgCatClose" title="关闭">✕</button></div>
+      <div class="mcfg-cat-grid" id="mcfg-cat-grid"></div>
+      <div class="mcfg-hint">选模板预填地址与模型清单，填 Key 即可用；也可选「自定义端点」从零配置。</div>
+    </div>
+  </div>
+  <!-- 模型编辑弹窗（ZCode 式：清单行「编辑」/「＋ 新增模型」进入；设置项对齐 ZCode 模型编辑表单）-->
+  <div class="mcfg-overlay hidden" id="med-overlay">
+    <div class="mcfg-box med-box">
+      <div class="mcfg-head" id="med-title">编辑模型 <button data-act="medClose" title="关闭">✕</button></div>
+      <div class="med-body">
+        <div class="mcfg-row">
+          <label>模型 ID</label>
+          <input id="med-id" type="text" placeholder="如 mlamp/glm-5.2">
         </div>
+        <div class="mcfg-row">
+          <label>上下文窗口</label>
+          <input id="med-ctx" type="number" min="1" step="1" placeholder="如 1000000（可留空）">
+        </div>
+        <div class="mcfg-row">
+          <label>最大输出 Token</label>
+          <input id="med-maxout" type="number" min="1" step="1" placeholder="如 131072（可留空）">
+        </div>
+        <details class="mcfg-adv">
+          <summary>高级配置</summary>
+          <div class="mcfg-row">
+            <label>输入类型</label>
+            <div class="chip-row" id="med-input-types"></div>
+          </div>
+          <!-- 模型能力 chips 已删（2026-09-17 用户拍板）：无编辑入口，存量值保存时原样透传 -->
+        </details>
+        <div class="mcfg-row">
+          <label>推理等级（从低到高）</label>
+          <div class="chip-row" id="med-reasoning-levels"></div>
+        </div>
+        <div class="mcfg-row">
+          <label>推理参数映射（JSON，可选）</label>
+          <textarea id="med-params" rows="4" placeholder='{ "reasoning_effort": "high" }'></textarea>
+        </div>
+        <div class="mcfg-hint" id="med-hint"></div>
       </div>
       <div class="mcfg-actions">
-        <button data-act="mcfgDelete" id="mcfg-del-btn" class="mcfg-danger">删除</button>
-        <span style="flex:1"></span>
-        <button data-act="mcfgClose">取消</button>
-        <button class="mcfg-save" data-act="mcfgSave">保存</button>
+        <button data-act="medClose">取消</button>
+        <button class="mcfg-save" data-act="medSave">保存</button>
       </div>
     </div>
   </div>
+  <!-- 模型选择弹层（点 composer 的 ◎ 模型按钮弹出；锚在按钮上方，点外部关闭）。 -->
+  <div class="cmxmenu modelmenu" id="modelmenu"></div>
   <!-- 修改密码弹框（Modal）：登录后 must_change_password=true **强制弹出且不可关闭**（无 ✕ / 稍后再说，
        唯一出口 =「退出登录」回登录页或关 app），改密前不能操作；用户菜单「修改密码」也走这里（可关闭）。
        对接门户 /api/auth/change-password；成功后全端 token 吊销 → 返回登录页。交互走 data-act 委托（CSP 禁内联）。 -->
@@ -636,7 +632,10 @@
             </div>
             <div class="login-form__item">
               <label for="password">密码</label>
-              <input id="password" name="password" type="password" autocomplete="current-password" placeholder="请输入密码" required />
+              <span class="pwd-wrap">
+                <input id="password" name="password" type="password" autocomplete="current-password" placeholder="请输入密码" required />
+                <button type="button" class="eye-btn" data-act="secretToggle" title="显示/隐藏"></button>
+              </span>
             </div>
             <button class="login-submit" id="submit" type="submit">登 录</button>
             <div class="error" id="error" role="alert"></div>
@@ -653,11 +652,17 @@
             </div>
             <div class="login-form__item">
               <label for="reg-password">密码</label>
-              <input id="reg-password" name="password" type="password" autocomplete="new-password" placeholder="8 位以上，含大小写字母/数字/特殊字符" required />
+              <span class="pwd-wrap">
+                <input id="reg-password" name="password" type="password" autocomplete="new-password" placeholder="8 位以上，含大小写字母/数字/特殊字符" required />
+                <button type="button" class="eye-btn" data-act="secretToggle" title="显示/隐藏"></button>
+              </span>
             </div>
             <div class="login-form__item">
               <label for="reg-password2">确认密码</label>
-              <input id="reg-password2" name="password2" type="password" autocomplete="new-password" placeholder="再输入一次密码" required />
+              <span class="pwd-wrap">
+                <input id="reg-password2" name="password2" type="password" autocomplete="new-password" placeholder="再输入一次密码" required />
+                <button type="button" class="eye-btn" data-act="secretToggle" title="显示/隐藏"></button>
+              </span>
             </div>
             <button class="login-submit" id="register-submit" type="submit">注 册</button>
             <div class="error" id="register-error" role="alert"></div>

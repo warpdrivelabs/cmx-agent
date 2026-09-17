@@ -8,9 +8,17 @@
 //! 未配置（无 API Key 且无显式 base_url）时，壳回退到离线 [`cmx_agent_app::DemoModel`]。
 
 pub mod config;
+pub mod error_friendly;
 pub mod openai;
 pub mod providers;
 
 pub use config::ModelProviderConfig;
-pub use openai::{OpenAiCompatModel, build_request_body, parse_response};
-pub use providers::{NamedProvider, ProviderFile, new_id, resolve_active};
+pub use error_friendly::{classify, friendly_model_error, friendly_model_error_brief};
+pub use openai::{
+    OpenAiCompatModel, TestConnectError, build_request_body, parse_response,
+};
+pub use providers::{
+    ModelEntry, NamedProvider, PROVIDER_PRESETS, ProviderFile, ProviderPreset, MODEL_CAPABILITIES,
+    MODEL_INPUT_TYPES, MODEL_REASONING_ORDER, find_preset, new_id, provider_presets_json,
+    resolve_active,
+};

@@ -27,13 +27,15 @@
   .settings-close{margin-left:auto;width:28px;height:28px;border-radius:7px;color:var(--muted);
     font-size:13px;cursor:pointer;border:none;background:none;flex:0 0 auto}
   .settings-close:hover{background:var(--hover);color:var(--ink)}
-  .settings-body{flex:1;overflow-y:auto;padding:18px 24px 22px}
+  /* 分区主体：flex 列容器；有按钮行的分区（模型/IM/子智能体）内容区自滚、按钮行钉底不跟随滚动 */
+  .settings-body{flex:1;min-height:0;overflow:hidden;padding:18px 24px 22px;display:flex;flex-direction:column}
 
   .settings-sec{display:none}
-  .settings-sec.on{display:block}
-  /* 模型/IM 分区平移自 mcfg-box.mcfg-wide：此处 mcfg-body 脱离 flex 容器需自带高度 */
-  .settings-sec .mcfg-body{min-height:340px}
-  .settings-sec .mcfg-actions{margin-top:14px}
+  .settings-sec.on{display:flex;flex-direction:column;flex:1;min-height:0;overflow-y:auto}
+  /* 模型/IM/子智能体：mcfg-body（列表+详情双栏）吃满剩余高度，各自内部滚动；按钮行固定底部 */
+  .settings-sec .mcfg-body{flex:1;min-height:0}
+  .settings-sec .mcfg-actions{flex:0 0 auto;margin-top:14px}
+  /* 无按钮行的分区（账户/外观/通用/关于）：内容自然流，超高时随分区滚动 */
 
   /* ── 账户分区 ── */
   .acc-card{display:flex;align-items:center;gap:16px;background:var(--surface);border:1px solid var(--border);

@@ -62,7 +62,7 @@ impl ModelSeam for DemoModel {
             None => Ok(ModelResponse::text(format!(
                 "我是 TrueMate（cmx 企业桌面智能体，演示模型）。你说的是「{q}」。\n\
                  试试：「列出所有流程定义」调 cmx-flow，「列出对象类型」调 cmx-ontology，「算 2 加 3」用内置工具。\n\
-                 （真实大模型将在后续接入，届时可自然对话。）"
+                 （真实大模型需在模型配置中自行接入，届时可自然对话。）"
             ))),
         }
     }

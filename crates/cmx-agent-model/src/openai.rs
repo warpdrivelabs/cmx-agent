@@ -12,6 +12,18 @@ use cmx_agent_core::tool::ToolCall;
 use serde_json::{Value, json};
 
 use crate::config::ModelProviderConfig;
+use crate::error_friendly::friendly_model_error;
+
+/// 错误构造统一收口：先套友好话术（七类映射，方案「报错可见性」B 项——
+/// IM 桥复用同一文本，后端成型三端同时受益），原文保留在括号里。
+/// 控制哨兵（`__turn_cancelled__`）不经映射原样通过。
+fn err(raw: impl std::fmt::Display) -> ModelError {
+    let s = raw.to_string();
+    if s.starts_with("__turn_cancelled__") {
+        return ModelError(s);
+    }
+    ModelError(friendly_model_error(&s))
+}
 
 /// OpenAI 兼容模型缝。
 pub struct OpenAiCompatModel {
@@ -32,6 +44,53 @@ impl OpenAiCompatModel {
     pub fn model_name(&self) -> &str {
         &self.cfg.model
     }
+
+    /// 连通性探测（配置面板「测试连接」用，方案 20260917 §5.4）：向 `{base}/chat/completions`
+    /// 发 `max_tokens=1` 的一次真实请求——同时验证 key、URL、模型名三样（比 GET /models
+    /// 普适，部分网关没有 /models）。key/URL 只进内存不落盘；token 消耗 1 级。
+    /// 返回耗时毫秒；错误按七类分类（`TestConnectError::kind`）并带友好话术，
+    /// 分类映射与聊天回合错误共用 `friendly_model_error` 一张表。
+    pub async fn ping(&self) -> Result<u64, TestConnectError> {
+        use crate::error_friendly::{classify, friendly_model_error_brief};
+        let map = |raw: String| TestConnectError {
+            kind: classify(&raw),
+            // 测试连接悬浮条是小空间：只要话术、不带「（原文：…）」（用户：不用展示原文）
+            message: friendly_model_error_brief(&raw),
+        };
+        let url = format!("{}/chat/completions", self.cfg.base_url);
+        let body = json!({
+            "model": self.cfg.model,
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 1,
+        });
+        let mut req = self.client.post(&url).json(&body);
+        if !self.cfg.api_key.is_empty() {
+            req = req.bearer_auth(&self.cfg.api_key);
+        }
+        let t0 = std::time::Instant::now();
+        let resp = match req.send().await {
+            Ok(r) => r,
+            Err(e) => return Err(map(format!("请求模型失败: {e}"))),
+        };
+        let status = resp.status();
+        let v: Value = resp.json().await.unwrap_or(Value::Null);
+        // 信封错误优先（4xx/5xx 带 message、个别网关 200 也回 error 信封）
+        if let Some(m) = v.get("error").and_then(|e| e.get("message")).and_then(|x| x.as_str()) {
+            return Err(map(format!("HTTP {}: {m}", status.as_u16())));
+        }
+        if !status.is_success() {
+            return Err(map(format!("模型服务返回 HTTP {}", status.as_u16())));
+        }
+        Ok(t0.elapsed().as_millis() as u64)
+    }
+}
+
+/// 「测试连接」探测错误：七类稳定分类值 + 友好话术（含原文）。
+#[derive(Debug, Clone)]
+pub struct TestConnectError {
+    /// auth / network / timeout / model_not_found / rate_limit / server / unknown。
+    pub kind: &'static str,
+    pub message: String,
 }
 
 /// 把内核 `ModelContext` 编成 OpenAI chat/completions 请求体（纯函数，可测）。
@@ -115,13 +174,13 @@ pub fn build_request_body(cfg: &ModelProviderConfig, ctx: &ModelContext) -> Valu
 
 /// 解析 OpenAI chat/completions 响应为 `ModelResponse`（纯函数，可测）。
 pub fn parse_response(v: &Value) -> Result<ModelResponse, ModelError> {
-    // 上游错误信封：{"error":{"message":...}}
-    if let Some(err) = v.get("error") {
-        let msg = err
+    // 上游错误信封：{"error":{"message":...}}（HTTP 200 但业务报错的网关形态）
+    if let Some(env) = v.get("error") {
+        let msg = env
             .get("message")
             .and_then(|m| m.as_str())
             .unwrap_or("上游模型错误");
-        return Err(ModelError(msg.to_string()));
+        return Err(err(msg));
     }
     let msg = v
         .get("choices")
@@ -331,7 +390,7 @@ async fn read_sse_once(
     let mut buf: Vec<u8> = Vec::new();
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
-        let bytes = chunk.map_err(|e| ModelError(format!("读取流失败: {e}")))?;
+        let bytes = chunk.map_err(|e| err(format!("读取流失败: {e}")))?;
         if observer.is_cancelled() {
             return Err(ModelError("__turn_cancelled__".to_string()));
         }
@@ -373,19 +432,18 @@ impl ModelSeam for OpenAiCompatModel {
         if !self.cfg.api_key.is_empty() {
             req = req.bearer_auth(&self.cfg.api_key);
         }
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| ModelError(format!("请求模型失败: {e}")))?;
+        let resp = req.send().await.map_err(|e| err(format!("请求模型失败: {e}")))?;
         let status = resp.status();
         let v: Value = resp
             .json()
             .await
-            .map_err(|e| ModelError(format!("解析模型响应失败: {e}")))?;
+            .map_err(|e| err(format!("解析模型响应失败: {e}")))?;
         if !status.is_success() {
-            // 优先取上游错误信息
-            parse_response(&v)?;
-            return Err(ModelError(format!("模型服务返回 HTTP {}", status.as_u16())));
+            // 优先取上游错误信息（带状态码标注供七类分类），无信封回退状态码文案
+            return Err(match v.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()) {
+                Some(m) => err(format!("HTTP {}: {m}", status.as_u16())),
+                None => err(format!("模型服务返回 HTTP {}", status.as_u16())),
+            });
         }
         parse_response(&v)
     }
@@ -421,7 +479,7 @@ impl ModelSeam for OpenAiCompatModel {
             let resp = req
                 .send()
                 .await
-                .map_err(|e| ModelError(format!("请求模型失败: {e}")))?;
+                .map_err(|e| err(format!("请求模型失败: {e}")))?;
 
             let status = resp.status();
             if status.is_success() {
@@ -448,14 +506,15 @@ impl ModelSeam for OpenAiCompatModel {
             } else if let Some(msg) = upstream_error_message(resp).await {
                 return Err(msg); // 服务端明确报错（如 401）——重试无意义，直接抛出
             } else {
-                return Err(ModelError(format!("模型服务返回 HTTP {}", status.as_u16())));
+                return Err(err(format!("模型服务返回 HTTP {}", status.as_u16())));
             }
 
-            // 尝试耗尽：优先回报最后一次真实流错误；否则说明只是"不完整"而非断流。
+            // 尝试耗尽：优先回报最后一次真实流错误（友好化已在构造点完成）；
+            // 否则说明只是"不完整"而非断流。
             if attempt >= MAX_ATTEMPTS {
                 return Err(last_err.unwrap_or_else(|| {
-                    ModelError(format!(
-                        "模型响应不完整（{MAX_ATTEMPTS} 次尝试后仍无 finish_reason），请稍后重试"
+                    err(format!(
+                        "模型响应中断，已自动重试 {MAX_ATTEMPTS} 次仍无完整响应，请稍后再试"
                     ))
                 }));
             }
@@ -466,13 +525,16 @@ impl ModelSeam for OpenAiCompatModel {
     }
 }
 
-/// 非成功响应时尽力读取上游错误体（取得所有权）；`None` 表示无可用错误信息（调用方回退到 HTTP 状态码文案）。
+/// 非成功响应时尽力读取上游错误体（取得所有权）；带状态码标注返回（供七类分类认准
+/// auth/404/429 等）。无信封 message 时返回 None，调用方回退 HTTP 状态码文案。
 async fn upstream_error_message(resp: reqwest::Response) -> Option<ModelError> {
+    let status = resp.status();
     let v: Value = resp.json().await.unwrap_or(Value::Null);
-    if let Err(e) = parse_response(&v) {
-        return Some(e);
-    }
-    None
+    let m = v
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|x| x.as_str())?;
+    Some(err(format!("HTTP {}: {m}", status.as_u16())))
 }
 
 #[cfg(test)]

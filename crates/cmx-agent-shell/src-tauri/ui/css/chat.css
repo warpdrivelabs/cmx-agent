@@ -186,11 +186,12 @@
   /* 结果状态图标（替代 exit 文字）：成功绿 / 失败红 */
   .tool .tcstatus{display:inline-flex;align-items:center} .tool .tcstatus svg{width:15px;height:15px;display:block}
   .tool .tcstatus.ok{color:var(--green)} .tool .tcstatus.bad{color:var(--red)}
-  /* AI 文本气泡底部操作行 */
-  .bubble .tcacts.bubble-acts{display:flex;gap:1px;margin:8px -4px -2px;padding-top:2px}
-  .bubble .tcact{display:inline-flex;align-items:center;justify-content:center;width:24px;height:22px;border-radius:6px;color:var(--muted);background:transparent;border:1px solid transparent;cursor:pointer;padding:0;transition:color .12s,background .12s}
-  .bubble .tcact:hover{background:var(--hover);color:var(--ink)} .bubble .tcact svg{display:block;width:15px;height:15px}
-  .bubble .tcact.liked{color:var(--aqua)} .bubble .tcact.disliked{color:var(--red)}
+  /* 回合操作行（.bubble-acts）：挂回合直下（最底、唯一），不再塞进气泡——
+     气泡后还有工具行时按钮行会把时间线拦腰截断（用户反馈 2026-09-17） */
+  .turn > .tcacts.bubble-acts{display:flex;gap:1px;margin:6px -4px -2px;padding-top:2px}
+  .tcacts.bubble-acts .tcact{display:inline-flex;align-items:center;justify-content:center;width:24px;height:22px;border-radius:6px;color:var(--muted);background:transparent;border:1px solid transparent;cursor:pointer;padding:0;transition:color .12s,background .12s}
+  .tcacts.bubble-acts .tcact:hover{background:var(--hover);color:var(--ink)} .tcacts.bubble-acts .tcact svg{display:block;width:15px;height:15px}
+  .tcacts.bubble-acts .tcact.liked{color:var(--aqua)} .tcacts.bubble-acts .tcact.disliked{color:var(--red)}
   .cmx-toast{position:fixed;left:50%;bottom:84px;transform:translateX(-50%) translateY(8px);background:var(--panel);color:var(--ink);
     border:1px solid var(--border2);border-radius:10px;padding:8px 16px;font-size:13px;box-shadow:0 8px 28px rgba(0,0,0,.4);
     opacity:0;pointer-events:none;transition:opacity .18s,transform .18s;z-index:9999}
@@ -368,6 +369,17 @@
 /* 折叠豁免（方案 20260914 改造二）：后台执行中（.run）的子任务卡不被折叠藏掉——
    背景任务看着凭空消失等于丢状态；收口后的子任务卡随回合折叠（可视化方案的 .subcard） */
 .turn.folded .subcard.run{display:block}
+/* 折叠豁免 + 强化（报错可见性方案 20260917 A）：错误 note（⚠ 处理出错，render.js 判定
+   落 .note-err）回合折叠后仍常显、点击行展开整个回合。文字用 --red-soft 柔和红
+   （用户反馈：纯 --red 太扎眼）；行上只显示中文短句（render.js shortErrZh），完整
+   技术原文挪悬停 title；margin-top 与上方工具行拉开间距（用户反馈：贴行显示太怪异）。
+   word-break 配合 line-clamp：极长无空格原文（URL 串）也能正常省略不溢出。 */
+.turn.folded .meta.note-err{display:block}
+.meta.note.note-err{color:var(--red-soft);cursor:pointer;align-self:flex-start;width:fit-content;
+  max-width:100%;margin:6px 0 2px;padding:2px 7px;border-radius:5px;overflow:hidden;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-all}
+.meta.note.note-err:hover{background:var(--hover)}
+.meta.note.note-err.solo{cursor:default}
 
 /* ── 等待队列卡片（方案 20260914 改造一）：回合忙碌时后发消息按序成卡，停靠在
    时间线与输入区之间；拖拽换序 + ↑ 立即 / ✎ 编辑 / ✕ 删除。全部 var(--*) 令牌。 ── */
@@ -394,7 +406,6 @@
 .turn-divider{align-self:flex-start;width:fit-content;display:flex;align-items:center;gap:6px;
   font-size:11.5px;color:var(--muted);margin:2px 0}
 .turn-divider.int{color:var(--orange);opacity:.9}
-.meta.note.bad{color:var(--red)}
 /* 回合间隙的独立 note（计划模式开/关等状态线）：不进任何回合，比照回合分隔条的小行形态 */
 .meta.note.solo{align-self:flex-start;width:fit-content;margin:2px 0}
 

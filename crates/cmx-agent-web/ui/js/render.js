@@ -102,6 +102,25 @@ function toolCardHtml(call){
     +`</button>`
     +`<div class="tc-body" hidden><div class="tcempty">等待结果…</div></div>`;
 }
+// ── 「⚠ 处理出错」显示层瘦身（用户反馈 2026-09-17：行上只留中文短句，太扎眼的长串
+// 技术原文挪到悬停 title）。关键词分类与后端 error_friendly.rs classify 同源，改一侧须同步
+// 另一侧。显示层做这件事（而非只在后端成型时）是为了历史落库的长报错回放时同样生效。
+function shortErrZh(t){
+  const s=(t||"").toLowerCase();
+  if(/http 401|http 403|invalid api[- ]?key|invalid_api_key|invalid token|unauthorized|forbidden|鉴权失败|令牌无效|无效的令牌|认证失败/.test(s))
+    return "API Key 无效或没有权限，请在设置 → 模型里检查";
+  if(/http 404|model[-_ ]not[-_ ]found|does not exist|模型不存在|无可用模型|没有可用模型/.test(s))
+    return "接口地址或模型名不对，请检查 Base URL 与模型 ID";
+  if(/http 429|rate limit|ratelimit|too many requests|quota|余额不足|额度不足|限流/.test(s))
+    return "请求太频繁或额度不足，请稍后再试";
+  if(/http 5\d\d|internal server error|服务异常/.test(s))
+    return "模型服务暂时不可用，请稍后再试";
+  if(/timed out|timeout|超时/.test(s))
+    return "模型服务超时无响应，请稍后重试";
+  if(/error sending request|error trying to connect|connection (refused|reset|closed)|connect error|dns error|name or service not known|network|broken pipe|tcp connect|tls|连不上|连接失败|网络/.test(s))
+    return "连不上模型服务，请检查网络后重试";
+  return "处理请求时出错，请稍后重试";
+}
 function setToolStatus(card, cls, tip){
   const st=card.querySelector(".tc-st");
   if(!st) return;
@@ -223,7 +242,7 @@ function completeToolCard(log, ev){
   // ask_user 成功：问句行原地落「已询问 N 个问题」+ Q/A 体（trigger 一并重写，状态点让位给 ? 图标）
   if(card.dataset.tool==="ask_user" && ev.ok){ settleAskCard(card, ev.output); }
   else if(!(isWrite && ev.ok)){ card.querySelector(".tc-body").innerHTML=toolBodyHtml(ev); addBodyCopy(card); }
-  if(CONTEXT_GROUP_TOOLS.has(card.dataset.tool)){ foldIntoCtxGroup(log, card, !!ev.ok); return; }   // 失败也入组：满屏红叉比静默失败更吵（opencode 降噪）
+  if(CONTEXT_GROUP_TOOLS.has(card.dataset.tool)){ foldIntoCtxGroup(log, card, ev); return; }   // 失败也入组：满屏红叉比静默失败更吵（opencode 降噪）
   closeCtxGroup(log);                      // 非只读结果落卡后，引用组定格（后续只读工具另起一组）
 }
 
@@ -438,8 +457,10 @@ function settleAskCard(card, output){
     body.innerHTML=`<div class="iqwrap">${rows||`<div class="iqa">${esc(sub||"未提供回答")}</div>`}</div>`;
   }
 }
-// 上下文组：连续只读工具折成一行「已引用 N 处」，点击展开逐条；条目点击再看完整结果
-function foldIntoCtxGroup(log, card, ok){
+// 上下文组：连续只读工具折成一行「已引用 N 处」，点击展开逐条；条目点击再看完整结果。
+// 失败条目在行内直接带首行原因（报错可见性方案 C：组里不再只有 ✗ 图标）。
+function foldIntoCtxGroup(log, card, ev){
+  const ok=!!(ev&&ev.ok);
   if(!log._ctx){   // 只看引用：closeCtxGroup 在所有边界事件（正文/换回合/非只读工具）清空
     const wrap=el("ctxgroup");
     wrap.innerHTML=`<button class="cg-head" type="button"><span class="cg-g">🔍</span>`
@@ -661,8 +682,8 @@ function renderToolResult(ev){
   if(!ev.ok) return `<span class="chip">⛔ 被拦截 <code>${esc(compact(o))}</code></span>`;
   return toolBodyHtml(ev);
 }
-// 操作按钮（复制/赞/踩/分享）的挂载时机在 turn_ended（本回合最后一条回复、回合结束才出），
-// 详见 renderEvent 的 turn_ended 分支；addBubbleActions 定义在 main.js。
+// 操作按钮（复制/赞/踩/分享）的挂载时机在 turn_ended（回合结束才挂、一回合唯一一份挂回合最底），
+// 详见 renderEvent 的 turn_ended 分支；addTurnActions 定义在 main.js。
 function compact(v){ try{ const s=JSON.stringify(v); return s.length>240?s.slice(0,240)+"…":s; }catch(e){ return String(v); } }
 
 // ── 思考行（opencode Thinking row）：busy 且暂无可见输出时显示 shimmer 行 ──
@@ -1166,22 +1187,33 @@ function renderEvent(log, ev, sid){
       else (turn||ensureTurn(log)).append(el("turn-divider int","⎋ 已中断"));
     }
     else if(ev.reason==="max_steps"){ ensureTurn(log).append(el("meta note turn-note","— 达到步数上限（"+ev.steps+" 步）—")); }
-    else if(ev.reason==="error"){ ensureTurn(log).append(el("meta note bad turn-note","— 回合异常结束 —")); }
+    // error：不再画收尾行（用户反馈 2026-09-17：失败原因已由上方「⚠ 处理出错」note
+    // 折叠豁免常显，再补一行「回合失败」是重复）；展开过程入口就在 note-err 行的点击上。
     // 回合计时行定格（实时行就地落字；回放补静态行）——贴参考图「已工作 1 分 11 秒」，点击折叠执行细节
     finalizeWorkDur(log);
-    // 操作按钮（复制/赞/踩/分享）在回合**结束**时挂到本回合最后一条回复气泡上（ZCode 式）：
-    // loop 进行中（提问/审批挂起、步骤间输出）任何气泡都不挂——操作行是「整个回合输出完毕」的落款；
-    // 先清本回合旧操作行再挂末尾（幂等），之前回合的操作行不动。
+    // 操作按钮（复制/赞/踩/分享）在回合**结束**时挂一次（ZCode 式）：一回合唯一一份，
+    // 挂回合最底（所有工具行/报错行之后）——以前塞在末条气泡里，气泡后面还有工具行时
+    // 按钮行把时间线拦腰截断（用户多次反馈「工具条下面不该再出现终端行」）。
+    // 「折叠之外只展示最终输出」：末条气泡后面还有工具调用/思考/轨迹行 = 它只是中间步骤
+    // 说明（如「明白！改用 echo」后面还有 echo 调用），不算最终输出，归入折叠内；此时
+    // 折叠外只剩计时行+报错行，也不挂操作行（回合失败无最终产出可操作）。
     if(turn){
-      turn.querySelectorAll(".bubble > .tcacts").forEach(a=>a.remove());
+      turn.querySelectorAll(".tcacts").forEach(a=>a.remove());
       const bs=turn.querySelectorAll(".bubble");
-      // 折叠组只留最终回复（ZCode 式）：末条气泡落 .tail 常显（操作行同挂它），之前的文字气泡
-      // 都算过程细节，连同 .iline（✕ 已拒绝）/.meta/.turn-divider 一起由 .folded 的 CSS 收进「已工作」组。
       bs.forEach(b=>b.classList.remove("tail"));
-      if(bs.length){
-        const last=bs[bs.length-1];
-        last.classList.add("tail");
-        addBubbleActions(last);
+      const last=bs[bs.length-1];
+      let tail=null;
+      if(last){
+        let blocked=false;
+        for(let n=last.nextElementSibling;n;n=n.nextElementSibling){
+          const c=n.classList;
+          if(c&&(c.contains("tool")||c.contains("iline")||c.contains("reasoning")||c.contains("thinking-row")||c.contains("ctxgroup")||c.contains("subcard"))){blocked=true;break;}
+        }
+        if(!blocked) tail=last;
+      }
+      if(tail){
+        tail.classList.add("tail");
+        addTurnActions(turn, tail);
       }
     }
     log._turnStartTs=null;
@@ -1193,11 +1225,26 @@ function renderEvent(log, ev, sid){
     // toast 承担，浮在回合之间的独立小字既突兀也无信息量（用户反馈 2026-09-15）。后端仍
     // 落库作审计（何时进/出只读档），仅展示层滤除；旧日志里已持久化的同类事件同此滤除。
     if((ev.text||"").startsWith("计划模式")) return;
+    const inTurn=!!log._turn;
+    // 错误 note（前缀与后端 app.rs TURN_ERROR_NOTE_PREFIX 互为契约，改一侧须同步另一侧）：
+    // 落 .note-err——回合折叠后仍常显、点击行 = 展开整个回合（历史回放走同一渲染路径）。
+    // 行上只显示中文短句（shortErrZh 分类映射，历史长报错同样生效），悬停 title 看
+    // 落库的完整技术原文（用户反馈 2026-09-17：长英文串太扎眼、不放行上）。
+    const P="⚠ 处理出错：";                       // 与 app.rs TURN_ERROR_NOTE_PREFIX 全等
+    const isErr=(ev.text||"").startsWith(P);
+    const row=el("meta note"+(inTurn?"":" solo")+(isErr?" note-err":""), esc(ev.text||""));
+    if(isErr){
+      row.textContent=P+shortErrZh(ev.text.slice(P.length));
+      row.title=ev.text||"";
+      if(inTurn){
+        const t=log._turn;
+        row.addEventListener("click",()=>{ t._userFold=true; t.classList.toggle("folded"); });
+      }
+    }
     // 其余回合间隙的 note（⚠ 处理出错等）不能开新回合：ensureTurn 若为它建 .turn，
     // 下一条 user_message 会被吞进同一回合，「已工作」计时行翻到用户气泡上方（2026-09-15
     // 排版事故）。无开启回合时比照 queueNote 挂线程根。
-    const inTurn=!!log._turn;
-    (inTurn?log._turn:log).append(el("meta note"+(inTurn?"":" solo"),esc(ev.text||"")));
+    (inTurn?log._turn:log).append(row);
   }
   stickScroll(log);
 }
