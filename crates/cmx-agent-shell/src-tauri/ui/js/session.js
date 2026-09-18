@@ -811,22 +811,21 @@ function setSessionBusy(t,busy){
   btn.title=busy?((t._queue&&t._queue.length)?("已排队 "+t._queue.length+" 条 · "):"")+"中断 ⎋":"发送 ⏎";
   btn.onclick=busy?()=>stopSession(t):()=>sendChatTab(t);
 }
-// 立即中断反馈：撤等待行、折叠思考、关上下文组、当前回合补「已停止」分隔条并关闭。
-// 分隔条折叠豁免常显（参考图二 2026-09-18）；「已工作」行不再改写文本——避免与分隔条
-// 双重提示，回放路径本来也只定格时长。后端随后到达的 turn_ended(stopped) 经 _intMarked
-// 去重，不会画第二条。
+// 立即中断反馈：撤等待行、折叠思考、关上下文组、「已工作 N 秒」行就地改「已停止」并关闭回合
+// （参考图二 2026-09-18：不另画分隔条，行仍保留折叠开关；无计时行的早停由 markWorkDurStopped 补行）。
+// 后端随后到达的 turn_ended(stopped) 经 _intMarked 去重，不会重复处理。
 function closeInterruptedTurn(log){
   hideTyping(log);
   if(log._raf){ cancelAnimationFrame(log._raf); log._raf=null; }
   if(log._rraf){ cancelAnimationFrame(log._rraf); log._rraf=null; }
   stopWorkDurTick(log);                                  // 停实时计时；turn_ended 后到时不重复定格
-  log._durRow=null;
   log._closed=true; log._turnStartTs=null;               // 关回合：后到事件不再拉起新的计时行/回合卡
   closeCtxGroup(log);
   closeReasoning(log);
   log._sb=null;
   if(log._turn){
-    log._turn.append(el("turn-divider int","已停止"));
+    markWorkDurStopped(log._turn);
+    log._durRow=null;
     log._intMarked=true;
     log._turn=null;
   }

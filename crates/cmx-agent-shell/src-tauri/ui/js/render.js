@@ -978,6 +978,19 @@ function finalizeWorkDur(log){
   insertWorkDur(turn,row);
   if(!turn._userFold) turn.classList.add("folded");     // 回放里的历史回合同样默认收起（用户手动展开过则不强制）
 }
+// 中断回合标记（参考图二 2026-09-18）：不另画分隔条，「已工作 N 秒」计时行**就地**改为
+// 「已停止」（行仍保留折叠开关与下缘线）；早停回合无计时行则补一行。实时点停走
+// closeInterruptedTurn 调本函数，turn_ended(stopped) 兜回放/远端来源。
+function markWorkDurStopped(turn){
+  if(!turn) return;
+  const row=turn.querySelector(":scope > .work-dur");
+  if(row){ const t=row.querySelector(".wd-t"); if(t) t.textContent="已停止"; return; }
+  if(!turn.querySelector(":scope > .user-chip")) return;   // 无用户气泡的通知回合不补行
+  const r=el("work-dur");
+  r.innerHTML=`<span class="wd-t">已停止</span><span class="chev">▾</span>`;
+  r.addEventListener("click",()=>{ turn._userFold=true; turn.classList.toggle("folded"); });
+  insertWorkDur(turn,r);
+}
 
 // ── 会话事件渲染主入口（历史回放与实时流共用）──
 // 视觉对齐参考界面：无头像、无气泡底的连续文档式线程；
@@ -1188,17 +1201,17 @@ function renderEvent(log, ev, sid){
     log._sb=null; hideTyping(log); closeCtxGroup(log); closeReasoning(log); log._qwait=false;
     const turn=log._turn;
     if(turn) turn.dataset.ended="1";   // 完整收讫标记：截断回补（settlePendingCards）据此与「故意无计时行」的回合区分
-    if(ev.reason==="stopped"){
-      // 用户已手动中断过（分隔条已画）→ 只关回合；否则画「已停止」分隔条（参考图二 2026-09-18，
-      // 折叠豁免常显——回放里中断回合只剩「已工作 N 秒」毫无痕迹）。
-      if(log._intMarked){ log._intMarked=false; }
-      else (turn||ensureTurn(log)).append(el("turn-divider int","已停止"));
-    }
-    else if(ev.reason==="max_steps"){ ensureTurn(log).append(el("meta note turn-note","— 达到步数上限（"+ev.steps+" 步）—")); }
+    if(ev.reason==="max_steps"){ ensureTurn(log).append(el("meta note turn-note","— 达到步数上限（"+ev.steps+" 步）—")); }
     // error：不再画收尾行（用户反馈 2026-09-17：失败原因已由上方「⚠ 处理出错」note
     // 折叠豁免常显，再补一行「回合失败」是重复）；展开过程入口就在 note-err 行的点击上。
     // 回合计时行定格（实时行就地落字；回放补静态行）——贴参考图「已工作 1 分 11 秒」，点击折叠执行细节
     finalizeWorkDur(log);
+    // 中断回合（参考图二 2026-09-18）：不另画分隔条，「已工作 N 秒」行就地改「已停止」。
+    // 本地点停已在 closeInterruptedTurn 改写并置 _intMarked 去重，此处兜回放/远端来源。
+    if(ev.reason==="stopped"){
+      if(log._intMarked) log._intMarked=false;
+      else markWorkDurStopped(turn);
+    }
     // 操作按钮（复制/赞/踩/分享）在回合**结束**时挂一次（ZCode 式）：一回合唯一一份，
     // 挂回合最底（所有工具行/报错行之后）——以前塞在末条气泡里，气泡后面还有工具行时
     // 按钮行把时间线拦腰截断（用户多次反馈「工具条下面不该再出现终端行」）。
