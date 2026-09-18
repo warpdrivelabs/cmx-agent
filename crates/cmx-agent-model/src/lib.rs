@@ -13,7 +13,7 @@ pub mod openai;
 pub mod providers;
 
 pub use config::ModelProviderConfig;
-pub use error_friendly::{classify, friendly_model_error, friendly_model_error_brief};
+pub use error_friendly::{classify, friendly_model_error, friendly_model_error_brief, is_context_overflow};
 pub use openai::{
     OpenAiCompatModel, TestConnectError, build_request_body, parse_response,
 };

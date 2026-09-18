@@ -65,8 +65,22 @@ pub enum AppRequest {
         #[serde(default)]
         session_id: Option<String>,
     },
-    /// 列出可用技能（当前工具契约）；/ 悬浮菜单用。
+    /// 列出可用技能（当前工具契约）；agents.js 子智能体编辑器的工具白/黑名单选项用。
+    /// （`/` 悬浮菜单改用 [`AppRequest::ListSlash`]——工具名不再冒充技能。）
     ListSkills,
+    /// `/` 菜单三类条目（命令/技能/子智能体，姊妹方案 §2.3）；/ 悬浮菜单数据源。
+    ListSlash,
+    /// 手动压缩（壳直调入口；`/compact` 文本识别在 Send 斜杠分发器，两者共用压缩例程）。
+    /// `focus` = 摘要侧重关注点（可空）。
+    Compact {
+        session_id: String,
+        #[serde(default)]
+        focus: Option<String>,
+    },
+    /// 当前会话上下文用量（压缩方案 §4.4.2 圆环+明细卡：used/window/pct/breakdown/缓存命中）。
+    GetContextUsage {
+        session_id: String,
+    },
     /// 中断当前会话正在执行的回合。
     CancelSession { session_id: String },
     /// 删除会话。
@@ -414,6 +428,13 @@ async fn dispatch_inner(app: &AgentApp, req: AppRequest) -> Result<AppResponse, 
             Ok(AppResponse::ok(serde_json::json!({ "files": files })))
         }
         AppRequest::ListSkills => Ok(AppResponse::ok(app.list_skills())),
+        AppRequest::ListSlash => Ok(AppResponse::ok(app.list_slash())),
+        AppRequest::Compact { session_id, focus } => {
+            Ok(AppResponse::ok(app.compact_session(&session_id, focus).await?))
+        }
+        AppRequest::GetContextUsage { session_id } => {
+            Ok(AppResponse::ok(app.context_usage(&session_id)?))
+        }
         AppRequest::CancelSession { session_id } => Ok(AppResponse::ok(
             serde_json::json!({ "cancelled": app.cancel_session_turn(&session_id) }),
         )),

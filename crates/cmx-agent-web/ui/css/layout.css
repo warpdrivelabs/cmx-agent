@@ -116,7 +116,7 @@
   .tl-group.folded .tl-items{display:none}
   .tl-items{display:flex;flex-direction:column}
   .tl-items .task{padding-left:26px}
-  .tl-wsmenu{position:fixed;z-index:60}
+  /* tl-wsmenu 定位/层级由 dropdown.css 的 .floating-menu 基类（fixed + z-index:1200）与 .tl-wsmenu 紧凑覆盖统一管理 */
   .task{display:flex;align-items:center;gap:8px;padding:9px 12px;border-radius:8px;color:var(--ink2);font-size:13.5px}
   .task:hover{background:var(--hover);color:var(--ink)} .task.active{background:var(--surface);color:var(--ink)}
   .task .tt{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

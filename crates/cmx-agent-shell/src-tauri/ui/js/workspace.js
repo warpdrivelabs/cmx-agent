@@ -2,7 +2,6 @@
 // 交互对齐 opencode/codex：触发符只在光标 token 内生效；悬浮列表支持↑↓/⏎/Tab/Esc；
 // 选择后替换触发词并保留其余输入。工作空间真源在后端 workspaces.json。
 let WORKSPACE_STATE = { current:null, workspaces:[] };
-let SKILL_CACHE = null;
 
 async function refreshWorkspaces(){
   try{
@@ -155,9 +154,13 @@ function detectTrigger(inp){
   const cur=inp.selectionStart||0, before=inp.value.slice(0,cur);
   const at=before.match(/(^|\s)(@)([^\s@]*)$/);
   if(at) return {type:"at",trigger:at[2],query:at[3],start:cur-at[3].length-1};
-  // / 只在输入框开头触发（对齐 opencode ^\/）：避免「cd /usr」「和/或」这类路径/文本误触；@ 行中空白后即可
-  const slash=before.match(/^\/([^\s/]*)$/);
-  if(slash) return {type:"slash",trigger:"/",query:slash[1],start:0};
+  // / 与 @ 同款规则（2026-09-18 反馈）：行首或空白字符之后都弹提示窗；紧贴文字的「和/或」、
+  // 路径式「/a/b」（前一段非空白）不弹。start=「/」所在下标，selectPopoverItem 按它替换。
+  const slash=before.match(/(^|\s)\/([^\s/]*)$/);
+  if(slash){
+    const atPos=(slash.index||0)+slash[1].length;
+    return {type:"slash",trigger:"/",query:slash[2],start:atPos};
+  }
   return null;
 }
 
@@ -210,8 +213,14 @@ function renderPopover(){
       :"没有匹配技能";
     p.append(el("fm-empty",message));
   }
+  let lastGroup=null;
   POP.items.forEach((item,i)=>{
+    if(item.group && item.group!==lastGroup){
+      lastGroup=item.group;
+      p.append(el("fm-group",esc(item.group)));
+    }
     const row=el("fm-item"+(i===POP.active?" active":""));
+    if(item.invalid) row.title=item.invalid;
     if(POP.type==="at"){
       const isDir=item.type==="dir";
       const seg=isDir?{dir:"",leaf:item.name||item.path}:splitPath(item.path||item.name||"");
@@ -219,10 +228,11 @@ function renderPopover(){
         +`<span class="fm-line">${seg.dir?`<span class="fm-dir">${esc(seg.dir)}</span>`:""}<span class="fm-leaf">${esc(seg.leaf)}</span></span>`
         +(item.description?`<span class="fm-desc">${esc(item.description)}</span>`:"");
     }else{
-      row.innerHTML=`<span class="wi">⚡</span>`
-        +`<span class="fm-line"><span class="fm-leaf">/${esc(item.name)}</span></span>`
-        +`<span class="fm-desc">${esc(item.description||item.title||"技能工具")}</span>`
-        +`<span class="fm-badge">技能</span>`;
+      const icon=item.icon||(item.group==="子智能体"?"🤖":item.group==="命令"?"⌘":"⚡");
+      row.innerHTML=`<span class="wi">${icon}</span>`
+        +`<span class="fm-line"><span class="fm-leaf${item.invalid?" invalid":""}">/${esc(item.name)}</span></span>`
+        +`<span class="fm-desc">${esc(item.description||item.title||"")}</span>`
+        +`<span class="fm-badge">${esc(item.group||"技能")}</span>`;
     }
     row.addEventListener("pointermove",()=>setPopActive(i));
     row.onclick=()=>selectPopoverItem(item);
@@ -261,12 +271,16 @@ async function queryTrigger(inp,tr){
     }catch(e){ if(token===POP.token) showToast("文件检索失败："+(e&&e.message||e)); }
     finally{ if(token===POP.token) POP.loading=false; }
   }else{
-    if(!SKILL_CACHE){
-      const r=await call({cmd:"list_skills"});
-      SKILL_CACHE=(r.ok&&r.data.skills)||[];
-    }
+    // 斜杠菜单三分（姊妹方案 §2.3/§2.4）：命令/技能/子智能体一次拉全，前端只做跨组过滤。
+    const r=await call({cmd:"list_slash"});
+    const d=(r.ok&&r.data)||{};
+    const all=[
+      ...(d.commands||[]).map(c=>({group:"命令",icon:"⌘",name:c.name,description:c.description})),
+      ...(d.skills||[]).map(s=>({group:"技能",icon:"⚡",name:s.name,description:s.description,invalid:s.invalid})),
+      ...(d.subagents||[]).map(a=>({group:"子智能体",icon:"🤖",name:a.name,description:a.description||a.title})),
+    ];
     const q=tr.query.toLowerCase();
-    POP.items=SKILL_CACHE.filter(s=>!q||s.name.toLowerCase().includes(q)||(s.description||"").toLowerCase().includes(q));
+    POP.items=all.filter(s=>!q||s.name.toLowerCase().includes(q)||(s.description||"").toLowerCase().includes(q));
   }
   renderPopover();
 }
@@ -287,7 +301,9 @@ function attachComposer(inp){
   inp.addEventListener("input",()=>{
     clearTimeout(MENTION_TIMER);
     const tr=detectTrigger(inp);
-    if(!tr){ closePopover(); return; }
+    if(!tr){ closePopover(); } 
+    syncComposerChip(inp);
+    if(!tr) return;
     MENTION_TIMER=setTimeout(()=>queryTrigger(inp,tr),110);
   });
   inp.addEventListener("blur",()=>setTimeout(()=>closePopover(),120));
@@ -310,4 +326,195 @@ function bindComposerButtons(){
   });
 }
 
+// ── 斜杠命令 chip（ZCode 图二 2026-09-18）：输入框文本是「/命令 [+参数]」且命令在 list_slash
+// 清单里时，整体变「⌘ 命令 ✕ | 参数」chip 形态；textarea 隐藏但 value 持续同步，发送链路不变。
+let SLASH_NAMES=null;
+async function slashNames(){
+  if(SLASH_NAMES) return SLASH_NAMES;
+  SLASH_NAMES={};
+  try{
+    const r=await call({cmd:"list_slash"}); const d=(r.ok&&r.data)||{};
+    (d.commands||[]).forEach(c=>{ SLASH_NAMES[c.name]={icon:c.icon||"⌘"}; });
+    (d.skills||[]).forEach(s=>{ if(!s.invalid) SLASH_NAMES[s.name]={icon:"⚡"}; });
+    (d.subagents||[]).forEach(a=>{ SLASH_NAMES[a.name]={icon:"🤖"}; });
+  }catch(e){ /* 清单取不到就不变 chip，按普通文本发送 */ }
+  return SLASH_NAMES;
+}
+function syncComposerChip(inp){
+  const m=(inp.value||"").match(/^\/([^\s/]+)(?:\s([\s\S]*))?$/);
+  if(inp._chip){
+    // 已在 chip 态：命令名被改掉/文本不再匹配 → 拆回输入框
+    if(!m||!SLASH_NAMES||!SLASH_NAMES[m[1]]) exitChipMode(inp,false);
+    return;
+  }
+  if(!m) return;
+  const name=m[1];
+  slashNames().then(names=>{
+    if(inp._chip||!document.contains(inp)||!names[name]) return;
+    if(document.activeElement===inp) enterChipMode(inp,name);   // 失焦状态下不抢焦点变形
+  });
+}
+function enterChipMode(inp,name){
+  inp._chip={name};
+  inp.style.display="none";
+  let row=inp.parentNode.querySelector(".cmd-chip-row");
+  if(!row){ row=document.createElement("div"); row.className="cmd-chip-row"; inp.parentNode.insertBefore(row,inp); }
+  const meta=SLASH_NAMES[name]||{};
+  row.innerHTML=`<span class="cmd-chip"><span class="ci">${esc(meta.icon||"⌘")}</span><span class="cn">${esc(name)}</span>`
+    +`<span class="cx" title="取消命令（Esc）">✕</span></span><input class="chip-inp" placeholder="参数，可留空">`;
+  const args=row.querySelector(".chip-inp");
+  args.addEventListener("input",()=>{ inp.value="/"+name+(args.value?" "+args.value:""); });
+  args.addEventListener("keydown",e=>{
+    if(e.key==="Backspace"&&!args.value){ e.preventDefault(); exitChipMode(inp,true); }
+    else if(e.key==="Escape"){ e.preventDefault(); exitChipMode(inp,true); }
+    else if(e.key==="Enter"&&!e.shiftKey){
+      e.preventDefault();
+      // 复用输入框既有的 Enter 发送绑定（会话页/首页各自已挂 keydown）
+      inp.dispatchEvent(new KeyboardEvent("keydown",{key:"Enter",cancelable:true}));
+    }
+  });
+  row.querySelector(".cx").addEventListener("click",()=>{
+    inp.value="";                       // ✕ = 删除命令（含参数），不是退回编辑态（Esc/退格才是）
+    exitChipMode(inp,true);
+  });
+  args.focus();
+}
+function exitChipMode(inp,focus){
+  inp._chip=null;
+  const row=inp.parentNode&&inp.parentNode.querySelector(".cmd-chip-row");
+  if(row) row.remove();
+  inp.style.display="";
+  if(focus){ inp.focus(); const n=inp.value.length; try{ inp.setSelectionRange(n,n); }catch(e){} }
+}
+
 document.addEventListener("DOMContentLoaded",()=>{ initWorkspaceUI(); attachComposer(document.getElementById("inp")); bindComposerButtons(); });
+
+// ── 上下文用量圆环 + 明细卡（压缩方案 §4.4.2，ZCode 同款；2026-09-18 拍板）──
+// 入口=会话 composer 工具行模型按钮左侧 18px SVG 圆环（<80% 蓝 / ≥80% 金 / ≥95% 红）；
+// 点开明细卡：容量（万单位）+ 分类分段条 + 占比行 + 缓存命中率（网关未回传整行隐藏）。
+// 明细卡沿用 cmx-dd 定稿「挂 body + position:fixed」模式，杜绝 overflow 裁剪；
+// scroll（捕获）/resize/点空白统一收起。数据源=get_context_usage（真实 usage 优先，
+// 无则后端投影估算；UI 不标注来源——09-18 拍板）。取不到数据一律按 0% 显示
+// （09-18 反馈：占位「—」与默认整圈蓝都不对）。
+const RING_C = 2 * Math.PI * 7;
+
+function ensureUsageRings(root){
+  (root || document).querySelectorAll(".composer .crow").forEach(crow => {
+    if (crow.querySelector(".ring-btn")) return;
+    const model = crow.querySelector(".model");
+    if (!model) return;
+    const btn = document.createElement("button");
+    btn.className = "ring-btn";
+    btn.innerHTML = '<svg viewBox="0 0 18 18" width="18" height="18" aria-hidden="true">'
+      + '<circle class="rb-bg" cx="9" cy="9" r="7"></circle>'
+      + '<circle class="rb-fg" cx="9" cy="9" r="7"></circle></svg>'
+      + '<span class="tip">上下文 0%</span>';
+    crow.insertBefore(btn, model);
+    btn.addEventListener("click", e => { e.stopPropagation(); toggleUsagePop(btn); });
+  });
+}
+
+function fmtWan(n){
+  if (n == null) return "—";
+  if (n >= 10000) {
+    const v = n / 10000;
+    return (v >= 100 ? Math.round(v) : Math.round(v * 10) / 10) + "万";
+  }
+  return String(n);
+}
+
+const USAGE_CATS = [
+  ["messages", "消息", "--blue"],
+  ["tool_results", "工具结果", "--green"],
+  ["tool_defs", "工具定义", "--violet"],
+  ["system", "系统提示词", "--gold"],
+  ["other", "其他", "--muted"],
+];
+
+let _usagePop = null;
+
+function usagePop(){
+  if (_usagePop) return _usagePop;
+  _usagePop = el("usage-pop");
+  _usagePop.id = "usage-pop";
+  _usagePop.hidden = true;
+  document.body.append(_usagePop);
+  document.addEventListener("scroll", hideUsagePop, true);
+  window.addEventListener("resize", hideUsagePop);
+  document.addEventListener("click", e => {
+    if (_usagePop && !_usagePop.hidden && !_usagePop.contains(e.target)
+      && !(e.target.closest && e.target.closest(".ring-btn"))) hideUsagePop();
+  });
+  return _usagePop;
+}
+
+function hideUsagePop(){ if (_usagePop) { _usagePop.hidden = true; _usagePop._btn = null; } }
+
+function toggleUsagePop(btn){
+  const p = usagePop();
+  if (!p.hidden && p._btn === btn) { hideUsagePop(); return; }
+  p._btn = btn;
+  p.hidden = false;
+  p.innerHTML = '<div class="up-loading">读取中…</div>';
+  const r = btn.getBoundingClientRect();
+  const pw = 264;
+  // top=底缘（CSS translateY(-100%)）：内容变高向上生长，永不下探盖住 composer
+  p.style.top = Math.max((p.offsetHeight || 60) + 8, r.top - 8) + "px";
+  p.style.left = Math.max(8, Math.min(window.innerWidth - pw - 8, r.right - pw)) + "px";
+  refreshUsage(CURRENT);
+}
+
+async function refreshUsage(sid){
+  let d = null;
+  if (sid) {
+    try {
+      const r = await call({ cmd: "get_context_usage", session_id: sid });
+      if (r && r.ok && r.data) d = r.data;
+    } catch (e) { /* 取不到按 0 显示 */ }
+  }
+  paintUsageRings(d);
+  if (d && _usagePop && !_usagePop.hidden) paintUsagePopBody(d);
+}
+
+function paintUsageRings(d){
+  const pct = d ? Math.max(0, Math.min(100, d.pct || 0)) : 0;
+  document.querySelectorAll(".ring-btn").forEach(btn => {
+    const fg = btn.querySelector(".rb-fg");
+    if (fg) {
+      fg.style.strokeDasharray = RING_C.toFixed(2);
+      fg.style.strokeDashoffset = (RING_C * (1 - pct / 100)).toFixed(2);
+    }
+    btn.classList.toggle("warn", pct >= 80 && pct < 95);
+    btn.classList.toggle("crit", pct >= 95);
+    const tip = btn.querySelector(".tip");
+    if (tip) tip.textContent = "上下文 " + pct + "%";
+  });
+}
+
+function paintUsagePopBody(d){
+  const p = _usagePop; if (!p) return;
+  const total = d.breakdown && d.breakdown.total || 1;
+  // 分段条按「占容量」铺宽（ZCode 同款）：彩色总宽=used/容量，剩余留灰底轨；
+  // 下方占比行仍是各分类占 used 的份额，两者语义不同。
+  const cap = d.usable || d.window || total;
+  const segs = USAGE_CATS.map(([k, , color]) => {
+    const v = (d.breakdown && d.breakdown[k]) || 0;
+    const w = v / cap * 100;
+    return `<i style="width:${w}%;background:var(${color})"></i>`;
+  }).join("");
+  const rows = USAGE_CATS.map(([k, label, color]) => {
+    const v = (d.breakdown && d.breakdown[k]) || 0;
+    const w = total > 0 ? Math.round(v / total * 1000) / 10 : 0;
+    return `<div class="ucat"><span class="dot" style="background:var(${color})"></span>`
+      + `<span>${label}</span><b>${w}%</b></div>`;
+  }).join("");
+  const cache = d.cached_input != null
+    ? (() => {
+        const rate = d.used > 0 ? Math.round(d.cached_input / d.used * 1000) / 10 : 0;
+        return `<div class="cache"><span>平均缓存命中率</span><b>${rate}%</b></div>`;
+      })()
+    : "";
+  p.innerHTML = `<div class="cap"><h5>上下文容量</h5>`
+    + `<span class="num">${fmtWan(d.used)} / ${fmtWan(d.window)}（${d.pct}%）</span></div>`
+    + `<div class="segbar">${segs}</div>${rows}${cache}`;
+}

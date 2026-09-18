@@ -93,6 +93,12 @@
 /* @ / 输入弹层（opencode PromptPopover 行式布局）：目录灰字 + 文件名亮字；/技能行带描述与 badge */
 #input-popover{width:auto;max-height:min(330px,42vh);overflow:auto;padding:6px}
 #input-popover .fm-item{min-height:32px;padding:5px 9px}
+/* 空间组右键菜单：两项轻量上下文菜单，按原生右键菜单比例收窄（富下拉基类的 356px/40px 行/大阴影不适用） */
+.tl-wsmenu{width:auto;min-width:150px;padding:4px;border-radius:10px;box-shadow:0 6px 22px rgba(0,0,0,.30)}
+.tl-wsmenu .fm-item{min-height:30px;padding:5px 10px;gap:8px;border-radius:6px}
+.tl-wsmenu .fm-item .wi{width:15px;flex:0 0 15px;font-size:13px}
+.tl-wsmenu .fm-leaf{font-size:12.5px;font-weight:500}
+.tl-wsmenu .fm-item.danger:hover{color:var(--red)}
 .fm-line{display:flex;align-items:baseline;flex:0 1 auto;min-width:0;overflow:hidden}
 .fm-dir{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:0 1 auto;min-width:0}
 .fm-leaf{color:var(--ink);font-weight:600;white-space:nowrap;flex:0 0 auto}
@@ -101,3 +107,5 @@
   color:var(--muted);font-size:12px;margin-left:10px}
 .fm-badge{flex:0 0 auto;margin-left:8px;font-size:10.5px;padding:1px 7px;border-radius:999px;
   background:var(--accent-soft);color:var(--aqua)}
+.fm-group{padding:7px 9px 3px;font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.05em}
+.fm-item .fm-leaf.invalid{color:var(--muted);text-decoration:line-through}

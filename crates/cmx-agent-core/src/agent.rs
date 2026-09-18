@@ -12,7 +12,7 @@ use std::sync::Arc;
 use crate::error::{AgentError, AgentResult};
 use crate::event::{EventKind, StopReason};
 use crate::guard::{GuardCtx, GuardDecision, GuardPhase, GuardPipeline, SandboxMode, Subject};
-use crate::model::{ModelResponse, ModelSeam};
+use crate::model::{ModelContext, ModelResponse, ModelSeam};
 use crate::question::{normalize_ask_input, QuestionOutcome, QuestionService};
 use crate::session::Session;
 use crate::tool::{Approval, Tool, ToolCall, ToolCtx, ToolRegistry, ToolResult, ToolSpec};
@@ -191,6 +191,9 @@ pub struct TurnOutcome {
     pub steps: usize,
     /// 最后一条模型文本（便于前门直接展示）。
     pub final_text: Option<String>,
+    /// 本回合最后一次请求的服务端用量（压缩方案 §4.1.3；取最后一步——其 input 即收口时的
+    /// 上下文规模）。None = 网关未回传 / 回合未走到模型。
+    pub usage: Option<crate::model::ModelUsage>,
 }
 
 /// 单回合中断旗标。由应用层注册到活动回合表，取消时置位；
@@ -271,6 +274,19 @@ impl Agent {
 
     pub fn tools(&self) -> &ToolRegistry {
         &self.tools
+    }
+
+    /// 有输出上限的一次补全（上下文压缩的摘要请求专用，压缩方案 §4.2.4.3）。
+    /// 不落日志、不走守卫——合成上下文由调用方全权负责。
+    pub async fn complete_bounded(
+        &self,
+        ctx: &ModelContext,
+        max_tokens: u64,
+    ) -> Result<ModelResponse, AgentError> {
+        self.model
+            .complete_bounded(ctx, max_tokens)
+            .await
+            .map_err(|e| AgentError::Model(e.0))
     }
 
     /// 交互提问服务句柄（app 层前门命令 answer/dismiss/list 与内核共享同一 Arc）。
@@ -442,6 +458,8 @@ impl Agent {
 
         let mut steps = 0usize;
         let mut final_text = None;
+        // 本回合最后一次请求的服务端用量（压缩方案 §4.1.3）：逐步覆盖，收口时即最后一次。
+        let mut last_usage: Option<crate::model::ModelUsage> = None;
         // 「勿绕道」提示同回合只发全量一次：连续多工具被拦时重复全文只会膨胀上下文，后续拦截给短句重申。
         let mut detour_hinted = false;
         let reason = loop {
@@ -464,6 +482,9 @@ impl Agent {
                 Err(_e) if cancel.is_some_and(|c| c.is_cancelled()) => break StopReason::Stopped,
                 Err(e) => return Err(AgentError::Model(e.0)),
             };
+            if let Some(u) = resp.usage {
+                last_usage = Some(u);
+            }
 
             // 思考过程可审计/可回放，但不进入 model_context。
             if let Some(text) = resp.reasoning.as_deref()
@@ -511,12 +532,14 @@ impl Agent {
             turn,
             reason,
             steps,
+            usage: last_usage,
         });
         Ok(TurnOutcome {
             turn,
             reason,
             steps,
             final_text,
+            usage: last_usage,
         })
     }
 

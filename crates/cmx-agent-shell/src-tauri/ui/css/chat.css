@@ -602,3 +602,65 @@
   .live-dot{ animation:none; }
   .skel i{ animation:none; }
 }
+
+  /* ── 上下文压缩边界线（ZCode 同款 2026-09-18：细线居中灰字；live=压缩中占位，点击行展开摘要）
+       ——令牌派生，双主题即插即用 ── */
+  /* margin 只设上下：左右必须留给 .log>* 的 auto 居中——简写 margin:10px 0 会把左右覆盖回 0
+     （同特异性、靠后生效），边界线整体左倾不居中（2026-09-18 对齐反馈根因） */
+  .compact-div{display:flex;align-items:center;gap:12px;width:100%;padding:0;border:0;
+    margin-top:10px;margin-bottom:10px;
+    background:none;color:var(--muted);font-size:12px}
+  button.compact-div{cursor:pointer;user-select:none}
+  button.compact-div:hover .cd-txt{color:var(--ink2)}
+  .compact-div .cd-line{flex:1;height:1px;background:var(--border)}
+  .compact-div .cd-txt{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+  .compact-div.live .cd-txt{animation:cd-pulse 1.6s ease-in-out infinite}
+  @keyframes cd-pulse{0%,100%{opacity:.5}50%{opacity:1}}
+  @media (prefers-reduced-motion:reduce){ .compact-div.live .cd-txt{animation:none} }
+  .compact-div.fail{color:var(--red-soft)}
+  .compact-wrap .cc-body{margin:6px 0 2px;padding:10px 12px;border:1px solid var(--border);border-left:3px solid var(--gold);
+    border-radius:8px;background:var(--surface);font-size:13px;line-height:1.65;color:var(--ink2);max-height:420px;overflow:auto}
+  .compact-wrap .cc-body h1,.compact-wrap .cc-body h2{font-size:13.5px;margin:10px 0 4px;color:var(--ink)}
+  .compact-wrap .cc-body h3{font-size:12.5px;margin:8px 0 3px;color:var(--ink2)}
+  .compact-wrap .cc-body ul,.compact-wrap .cc-body ol{margin:4px 0;padding-left:18px}
+  .compact-wrap .cc-body p{margin:4px 0}
+
+  /* ── 斜杠命令 chip（ZCode 图二 2026-09-18）：输入框整体变「⌘ 命令 ✕｜参数」形态 ── */
+  .composer .cmd-chip-row{display:flex;align-items:center;gap:10px;min-height:38px}
+  .composer .cmd-chip{display:inline-flex;align-items:center;gap:6px;flex:none;padding:4px 10px;
+    border:1px solid var(--border);border-radius:8px;background:var(--panel2);color:var(--ink2);font-size:12.5px}
+  .composer .cmd-chip .cx{margin-left:2px;cursor:pointer;color:var(--muted);font-size:11px}
+  .composer .cmd-chip .cx:hover{color:var(--ink)}
+  .composer .chip-inp{flex:1;min-width:0;border:0;outline:none;background:none;color:var(--ink);
+    font:inherit;font-size:13.5px}
+  .composer .chip-inp::placeholder{color:var(--muted)}
+  .tool.pruned .tc-body .tcmeta{color:var(--muted)}
+
+  /* ── 用量圆环 + 明细卡（压缩方案 §4.4.2，ZCode 同款）── */
+  .composer .ring-btn{position:relative;display:flex;align-items:center;justify-content:center;width:28px;height:28px;
+    border:0;border-radius:8px;background:none;color:var(--ink2);cursor:pointer}
+  .composer .ring-btn:hover{background:var(--hover)}
+  .composer .ring-btn .rb-bg{fill:none;stroke:var(--border2);stroke-width:2.5}
+  .composer .ring-btn .rb-fg{fill:none;stroke:var(--blue);stroke-width:2.5;stroke-linecap:round;
+    stroke-dasharray:43.98;stroke-dashoffset:43.98; /* 默认空弧=0% 态，取不到数据不再整圈蓝 */
+    transform:rotate(-90deg);transform-origin:9px 9px;transition:stroke-dashoffset .3s,stroke .3s}
+  .composer .ring-btn.warn .rb-fg{stroke:var(--gold)}
+  .composer .ring-btn.crit .rb-fg{stroke:var(--red)}
+  .composer .ring-btn .tip{position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);
+    white-space:nowrap;font-size:11px;color:var(--ink);background:var(--panel2);border:1px solid var(--border);
+    border-radius:6px;padding:3px 7px;opacity:0;pointer-events:none;transition:opacity .12s;z-index:30}
+  .composer .ring-btn:hover .tip{opacity:1}
+  .usage-pop{position:fixed;z-index:400;width:264px;padding:12px 14px;border:1px solid var(--border);
+    border-radius:12px;background:var(--panel);box-shadow:0 8px 28px rgba(0,0,0,.35);font-size:12.5px;
+    transform:translateY(-100%)} /* top 锚定底缘：内容变高向上生长，不盖 composer */
+  .usage-pop .cap{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+  .usage-pop .cap h5{margin:0;font-size:12.5px;color:var(--ink);font-weight:600}
+  .usage-pop .cap .num{color:var(--ink2);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .usage-pop .segbar{display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--border);margin:10px 0 8px}
+  .usage-pop .segbar i{height:100%}
+  .usage-pop .ucat{display:flex;align-items:center;gap:7px;padding:2.5px 0;color:var(--ink2)} /* ucat：避开会话列表 pill 的全局 .cat 背景 */
+  .usage-pop .ucat .dot{width:7px;height:7px;border-radius:50%;flex:0 0 7px}
+  .usage-pop .ucat b{margin-left:auto;color:var(--ink);font-variant-numeric:tabular-nums;font-weight:600}
+  .usage-pop .cache{display:flex;justify-content:space-between;margin-top:8px;padding-top:8px;border-top:1px solid var(--border);color:var(--ink2)}
+  .usage-pop .cache b{color:var(--ink);font-variant-numeric:tabular-nums}
+  .usage-pop .up-loading{color:var(--muted);text-align:center;padding:8px 0}

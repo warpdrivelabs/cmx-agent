@@ -70,10 +70,46 @@ impl Session {
     /// 执行段的历史遗留），在投影尾部补合成错误结果——主流模型 API 严格校验 assistant 的每个
     /// tool_call 必须跟随 tool 结果，缺配对会 400 并把会话对模型砖死。中断只缺尾部调用，补在
     /// 结尾顺序正确。
+    ///
+    /// **压缩投影（压缩方案 §4.2.2）**：最后一条 [`EventKind::Compacted`] 之前（`up_to_seq`
+    /// 含）的可见事件不再投影，改为在消息头部注入摘要 User 消息；所有
+    /// [`EventKind::ToolOutputsPruned`] 的 call_id 并集命中的 `ToolResult` 投影为占位 JSON
+    /// （原 output 不动——append-only 不变量保持）。
     pub fn model_context(&self, tools: Vec<ToolSpec>) -> ModelContext {
+        // 扫描压缩标记：最后压缩点 + 摘要 + 清理并集
+        let mut cutoff: u64 = 0;
+        let mut summary: Option<&String> = None;
+        let mut pruned: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for ev in self.log.iter() {
+            match &ev.kind {
+                EventKind::Compacted { up_to_seq, summary: sum, .. } => {
+                    cutoff = *up_to_seq;
+                    summary = Some(sum);
+                }
+                EventKind::ToolOutputsPruned { call_ids } => {
+                    for id in call_ids {
+                        pruned.insert(id.as_str());
+                    }
+                }
+                _ => {}
+            }
+        }
+
         let mut messages = Vec::new();
+        if let Some(s) = summary {
+            messages.push(ModelMessage::User {
+                text: format!(
+                    "[会话前段已被压缩，以下是截至当时的结构化摘要；其后为近期原文。]\n\
+                     <compacted-summary>\n{s}\n</compacted-summary>"
+                ),
+            });
+        }
+
         let mut open_calls: Vec<String> = Vec::new();
         for ev in self.log.iter() {
+            if ev.seq <= cutoff {
+                continue; // 已被摘要覆盖的段落不投影（含失败回合的 UserMessage——救援重试不重复）
+            }
             match &ev.kind {
                 EventKind::UserMessage { text } => {
                     messages.push(ModelMessage::User { text: text.clone() });
@@ -91,10 +127,25 @@ impl Session {
                     call_id, output, ..
                 } => {
                     open_calls.retain(|id| id != call_id);
-                    messages.push(ModelMessage::Tool {
-                        call_id: call_id.clone(),
-                        output: output.clone(),
-                    });
+                    if pruned.contains(call_id.as_str()) {
+                        // 清理占位：原字符数投影时现算（原事件不动）
+                        let n = match output {
+                            serde_json::Value::String(s) => s.chars().count(),
+                            other => other.to_string().chars().count(),
+                        };
+                        messages.push(ModelMessage::Tool {
+                            call_id: call_id.clone(),
+                            output: serde_json::json!({
+                                "pruned": true,
+                                "note": format!("较早的工具输出已清理（原约 {n} 字符）")
+                            }),
+                        });
+                    } else {
+                        messages.push(ModelMessage::Tool {
+                            call_id: call_id.clone(),
+                            output: output.clone(),
+                        });
+                    }
                 }
                 _ => {}
             }

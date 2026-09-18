@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use cmx_agent_core::model::{ModelContext, ModelError, ModelMessage, ModelResponse, ModelSeam};
+use cmx_agent_core::model::{ModelContext, ModelError, ModelMessage, ModelResponse, ModelSeam, ModelUsage};
 use cmx_agent_core::tool::ToolCall;
 use serde_json::{Value, json};
 
@@ -94,7 +94,10 @@ pub struct TestConnectError {
 }
 
 /// 把内核 `ModelContext` 编成 OpenAI chat/completions 请求体（纯函数，可测）。
-pub fn build_request_body(cfg: &ModelProviderConfig, ctx: &ModelContext) -> Value {
+///
+/// `max_tokens`：输出上限——正常回合不传（维持旧行为），仅压缩摘要等合成请求传
+/// （压缩方案 §4.2.4.3；`ModelProviderConfig` 无该配置字段，是有意收窄）。
+pub fn build_request_body(cfg: &ModelProviderConfig, ctx: &ModelContext, max_tokens: Option<u64>) -> Value {
     let mut messages: Vec<Value> = Vec::new();
     if let Some(sys) = &ctx.system
         && !sys.is_empty() {
@@ -150,6 +153,9 @@ pub fn build_request_body(cfg: &ModelProviderConfig, ctx: &ModelContext) -> Valu
         "messages": messages,
         "temperature": cfg.temperature,
     });
+    if let Some(mt) = max_tokens {
+        body["max_tokens"] = json!(mt);
+    }
 
     if !ctx.tools.is_empty() {
         let tools: Vec<Value> = ctx
@@ -231,10 +237,34 @@ pub fn parse_response(v: &Value) -> Result<ModelResponse, ModelError> {
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
 
+    let usage = v.get("usage").and_then(parse_usage_json);
     Ok(ModelResponse {
         text,
         reasoning,
         tool_calls,
+        usage,
+    })
+}
+
+/// 解析 usage 块（压缩方案 §4.1.2）。**取数必须用 `prompt_tokens`**——MLamp 实测响应里
+/// 另有 `input_tokens` 字段但恒 0；`cached_input` 兼容 OpenAI 新版（prompt_tokens_details.
+/// cached_tokens）与 DeepSeek 风格（prompt_cache_hit_tokens）两种网关形态。缺 prompt_tokens
+/// 返回 None（不覆盖已收 usage）。
+fn parse_usage_json(u: &Value) -> Option<ModelUsage> {
+    let input = u.get("prompt_tokens").and_then(|x| x.as_u64())?;
+    let output = u
+        .get("completion_tokens")
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
+    let cached_input = u
+        .get("prompt_tokens_details")
+        .and_then(|d| d.get("cached_tokens"))
+        .and_then(|x| x.as_u64())
+        .or_else(|| u.get("prompt_cache_hit_tokens").and_then(|x| x.as_u64()));
+    Some(ModelUsage {
+        input,
+        output,
+        cached_input,
     })
 }
 
@@ -254,6 +284,8 @@ struct StreamAcc {
     tools: Vec<ToolAcc>,
     /// 是否已收到服务端的 `finish_reason`（生成真正结束，含 stop / tool_calls / length）。
     finished: bool,
+    /// 任意帧出现顶层 `usage` 即缓存（后到覆盖：OpenAI 约定最后一个 usage-only 帧是完整值）。
+    usage: Option<ModelUsage>,
 }
 #[derive(Default)]
 struct ToolAcc {
@@ -303,6 +335,7 @@ impl StreamAcc {
             text,
             reasoning,
             tool_calls,
+            usage: self.usage,
         }
     }
 }
@@ -319,6 +352,14 @@ enum StreamDelta {
 /// 同时记录是否收到 `finish_reason`（服务端明确宣告生成结束）。GLM/DeepSeek 等推理模型会先流
 /// `reasoning_content`（本函数**忽略**，不进入 text/tool 拼装），再流 `content`/`tool_calls`。
 fn apply_stream_chunk(acc: &mut StreamAcc, v: &Value) -> Option<StreamDelta> {
+    // usage 捕获必须在 `choice?` 早退**之前**：独立 usage 帧 `choices:[]`，走不到 choice
+    // 分支（MLamp 实测两种形态并存——独立帧 / 与 finish_reason 同帧，逐帧覆盖取最后）。
+    if let Some(u) = v.get("usage")
+        && let Some(u) = parse_usage_json(u)
+    {
+        acc.usage = Some(u);
+    }
+
     let choice = v
         .get("choices")
         .and_then(|c| c.as_array())
@@ -423,11 +464,16 @@ async fn read_sse_once(
     Ok(false)
 }
 
-#[async_trait]
-impl ModelSeam for OpenAiCompatModel {
-    async fn complete(&self, ctx: &ModelContext) -> Result<ModelResponse, ModelError> {
+
+impl OpenAiCompatModel {
+    /// 非流式 chat/completions 一次往返（complete / complete_bounded 共用体）。
+    async fn post_chat(
+        &self,
+        ctx: &ModelContext,
+        max_tokens: Option<u64>,
+    ) -> Result<ModelResponse, ModelError> {
         let url = format!("{}/chat/completions", self.cfg.base_url);
-        let body = build_request_body(&self.cfg, ctx);
+        let body = build_request_body(&self.cfg, ctx, max_tokens);
         let mut req = self.client.post(&url).json(&body);
         if !self.cfg.api_key.is_empty() {
             req = req.bearer_auth(&self.cfg.api_key);
@@ -447,6 +493,22 @@ impl ModelSeam for OpenAiCompatModel {
         }
         parse_response(&v)
     }
+}
+
+#[async_trait]
+impl ModelSeam for OpenAiCompatModel {
+    async fn complete(&self, ctx: &ModelContext) -> Result<ModelResponse, ModelError> {
+        self.post_chat(ctx, None).await
+    }
+
+    /// 摘要等合成请求：请求体附 `max_tokens`（压缩方案 §4.2.4.3）。
+    async fn complete_bounded(
+        &self,
+        ctx: &ModelContext,
+        max_tokens: u64,
+    ) -> Result<ModelResponse, ModelError> {
+        self.post_chat(ctx, Some(max_tokens)).await
+    }
 
     async fn complete_streaming(
         &self,
@@ -454,8 +516,13 @@ impl ModelSeam for OpenAiCompatModel {
         observer: &dyn cmx_agent_core::TurnObserver,
     ) -> Result<ModelResponse, ModelError> {
         let url = format!("{}/chat/completions", self.cfg.base_url);
-        let mut body = build_request_body(&self.cfg, ctx);
+        let mut body = build_request_body(&self.cfg, ctx, None);
         body["stream"] = serde_json::json!(true);
+        // 用量感知（压缩方案 §4.1.2）：请求服务端回传 usage 帧。个别网关不认该参数会 4xx，
+        // 报错文本含 stream_options 时**从 body 移除该键**重试一次（须真移除——下方断流重试
+        // 复用同一 body，只改局部变量后续尝试仍带坏参数）。
+        body["stream_options"] = serde_json::json!({"include_usage": true});
+        let mut usage_param_stripped = false;
 
         // 健壮性：单次模型生成自愈。GLM/DeepSeek 等推理模型会先流长段 reasoning 再出正文，流很长；
         // 网关/负载均衡器偶发在长流中途切断 HTTP/2（reqwest 抛 Kind::Decode「读取流失败」）。
@@ -504,6 +571,17 @@ impl ModelSeam for OpenAiCompatModel {
                 }
                 // 流正常收尾但既无 [DONE] 也无 finish_reason：视为一次不完整尝试，继续重试。
             } else if let Some(msg) = upstream_error_message(resp).await {
+                // stream_options 不被网关认领 → 剥参重试一次（计一次尝试，防不认领网关死循环）
+                if !usage_param_stripped && msg.0.to_ascii_lowercase().contains("stream_options") {
+                    usage_param_stripped = true;
+                    if let Some(obj) = body.as_object_mut() {
+                        obj.remove("stream_options");
+                    }
+                    if attempt >= MAX_ATTEMPTS {
+                        return Err(msg);
+                    }
+                    continue;
+                }
                 return Err(msg); // 服务端明确报错（如 401）——重试无意义，直接抛出
             } else {
                 return Err(err(format!("模型服务返回 HTTP {}", status.as_u16())));
@@ -663,7 +741,7 @@ mod tests {
                     .schema(json!({"type":"object","properties":{"a":{"type":"number"}}})),
             ],
         };
-        let b = build_request_body(&cfg(), &ctx);
+        let b = build_request_body(&cfg(), &ctx, None);
         assert_eq!(b["model"], "deepseek-chat");
         assert_eq!(b["messages"][0]["role"], "system");
         assert_eq!(b["messages"][1]["role"], "user");
@@ -688,7 +766,7 @@ mod tests {
             ],
             tools: vec![],
         };
-        let b = build_request_body(&cfg(), &ctx);
+        let b = build_request_body(&cfg(), &ctx, None);
         let asst = &b["messages"][0];
         assert_eq!(asst["role"], "assistant");
         assert!(asst["content"].is_null());

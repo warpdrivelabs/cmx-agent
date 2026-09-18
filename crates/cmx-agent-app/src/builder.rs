@@ -326,6 +326,8 @@ impl DesktopAppBuilder {
         };
 
         // B2 模型配置目录（model_slot 已提前构造）。
+        // 真技能目录（姊妹方案 §2.1）：`<data_dir>/skills`，首次访问自动初始化并放示例。
+        let skills_dir = self.data_dir.join("skills");
         let model_config_dir = self.data_dir.clone();
         // 登录会话落盘路径（data_dir 本体稍后 move 进 FileSessionStore，先克隆备用）。
         let auth_session_path = self.data_dir.clone().join("auth.json");
@@ -358,6 +360,7 @@ impl DesktopAppBuilder {
             .with_token_store(token_store)
             .with_plugins(plugin_summaries)
             .with_plugins_dir(plugins_dir)
+            .with_skills_dir(skills_dir)
             .with_plugin_market(plugin_market)
             .with_model(model_slot, model_config_dir)
             .with_agents(agents_registry)

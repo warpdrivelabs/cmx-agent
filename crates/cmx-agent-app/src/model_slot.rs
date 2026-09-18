@@ -37,6 +37,15 @@ impl ModelSeam for ModelSlot {
         self.current().complete(ctx).await
     }
 
+    // 摘要等有输出上限的合成请求须真传 max_tokens——不走 trait 默认（默认忽略上限）。
+    async fn complete_bounded(
+        &self,
+        ctx: &ModelContext,
+        max_tokens: u64,
+    ) -> Result<ModelResponse, ModelError> {
+        self.current().complete_bounded(ctx, max_tokens).await
+    }
+
     // 委托流式版（保留真实模型的 token 流；不走 trait 默认的「整段当一个 delta」）。
     async fn complete_streaming(
         &self,

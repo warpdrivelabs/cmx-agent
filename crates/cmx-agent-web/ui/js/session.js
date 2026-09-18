@@ -113,7 +113,7 @@ function openWsGroupMenu(g,x,y){
   open.onclick=async()=>{ hideWsGroupMenu();
     try{ const r=await call({cmd:"open_workspace_folder",id:g.ws.id}); if(!r.ok) showToast(r.error?.message||"打开文件夹失败"); }
     catch(e){ showToast("打开文件夹失败："+(e&&e.message||e)); } };
-  const rm=el("fm-item");
+  const rm=el("fm-item danger");
   rm.innerHTML=`<span class="wi">🗑</span><span class="fm-line"><span class="fm-leaf">从列表中移除</span></span>`;
   rm.onclick=async()=>{ hideWsGroupMenu();
     try{
@@ -122,9 +122,10 @@ function openWsGroupMenu(g,x,y){
       else showToast(r.error?.message||"移除失败");
     }catch(e){ showToast("移除失败："+(e&&e.message||e)); } };
   m.append(open,rm);
-  m.style.left=Math.min(x,window.innerWidth-230)+"px";
-  m.style.top=Math.min(y,window.innerHeight-120)+"px";
-  m.style.bottom="auto"; m.hidden=false; m.classList.add("on");
+  m.style.left="0px"; m.style.top="0px"; m.style.bottom="auto";
+  m.hidden=false; m.classList.add("on");   // 宽度自适应，先显形布局再实测尺寸钳边（旧的 -230/-120 是按富下拉宽度拍的）
+  m.style.left=Math.max(8,Math.min(x,window.innerWidth-m.offsetWidth-8))+"px";
+  m.style.top=Math.max(8,Math.min(y,window.innerHeight-m.offsetHeight-8))+"px";
 }
 function hideWsGroupMenu(){
   const m=document.getElementById("tl-wsmenu");
@@ -183,6 +184,7 @@ function onSessionEvent(env){
       log._live = true;   // 有实时渲染内容：openSession 补历史时只 prepend 不整屏擦除（P3-4）
     }
   }
+  if(ev.kind==="turn_ended") refreshUsage(sid);
   scheduleRefreshTasks();
 }
 
@@ -675,6 +677,8 @@ async function openSession(sessionId, autoPrompt){
     t.view.className="tabview";
     t.view.append(node);
     t.view.querySelectorAll(".model .mlabel").forEach(s=>s.textContent=_modelLabel);
+    ensureUsageRings(t.view);
+    refreshUsage(sessionId); // 打开会话即拉一次：有历史的会话圆环不应停在 0% 初值
   const inp=t.view.querySelector(".inp2");
   attachComposer(inp);
   bindComposerButtons();
@@ -742,10 +746,12 @@ async function doSendTab(t, text){
     if(t._streamAbort) t._streamAbort.abort();
   };
   // 1) 立即乐观渲染用户气泡，并让流里的 user_message 事件跳过一次，避免重复。
-  renderEvent(log, {kind:"user_message", text}, t.sessionId);
-  log._skipUser = true;
-  // 2) 打字等待指示器：立即出现，覆盖「发送→首个 token」的等待。
-  showTyping(log);
+  //    /compact 例外（ZCode 同款 2026-09-18）：后端不落 UserMessage，前端也不画假气泡，
+  //    时间线只放「正在压缩上下文」细线，完成后由 renderEvent(compacted) 的边界线替代。
+  if(/^\/compact(\s|$)/.test(text)) showCompactLive(log);
+  else { renderEvent(log, {kind:"user_message", text}, t.sessionId); log._skipUser = true; }
+  // 2) 打字等待指示器：立即出现，覆盖「发送→首个 token」的等待（压缩中用细线，不上打字点）。
+  if(!log._compactLive) showTyping(log);
   t._streamAbort=new AbortController();
   try {
     await streamSend(t.sessionId, text, (ev)=>{
@@ -757,7 +763,7 @@ async function doSendTab(t, text){
       if(ev.kind==="stream_done"){ hideTyping(log); closeReasoning(log); return; }
       // 流收尾（成/败）都把思考卡定格收口：不留流式态/「重试中」卡。断流重试失败时，卡里保住的
       // 正文是用户唯一能回看的思考内容（见 render.js reasoning_reset：不再清空显示）。
-      if(ev.kind==="stream_error"){ hideTyping(log); closeReasoning(log); renderEvent(log,{kind:"model_message",text:"⚠ "+(ev.message||"错误")}, t.sessionId); return; }
+      if(ev.kind==="stream_error"){ hideTyping(log); closeReasoning(log); if(log._compactLive) showCompactFailed(log,"压缩中断"); renderEvent(log,{kind:"model_message",text:"⚠ "+(ev.message||"错误")}, t.sessionId); return; }
       // 落库事件按 seq 去重并注册：与 session_event 通道共用 _seqs。流结束 STREAMING 放行后，
       // 总线迟到重播的同一条事件（如 reasoning 回执）若不在此注册，会被再渲一遍（重复思考卡）。
       if(ev.seq != null){
@@ -767,6 +773,14 @@ async function doSendTab(t, text){
       }
       // 有可见输出（文字流/工具卡/模型消息）到达 → 先撤等待动画，再渲染。
       if(ev.kind==="text_delta" || ev.kind==="tool_invoked" || ev.kind==="model_message") hideTyping(log);
+      // 压缩收尾三态（2026-09-18 反馈：失败也不能无收尾）：边界线到达→撤占位；note 到达→
+      // 「无需压缩」（app.rs COMPACT_NOOP_TEXT）撤占位即可（renderEvent 会画灰字边界线），
+      // 其余（失败审计）→ 占位线改判红字「上下文压缩失败」，细节 note 照常渲染在线下。
+      if(ev.kind==="compacted") removeCompactLive(log);
+      else if(ev.kind==="note" && log._compactLive){
+        if((ev.text||"").includes("无需压缩")) removeCompactLive(log);
+        else showCompactFailed(log,"上下文压缩失败");
+      }
       renderEvent(log, ev, t.sessionId);
       // 工具刚出结果 → 模型将继续思考，重新显示等待行（多步等待提示）。
       if(ev.kind==="tool_result") showTyping(log);
@@ -775,11 +789,13 @@ async function doSendTab(t, text){
       else if(ev.kind==="turn_ended" || ev.kind==="approval_requested") hideTyping(log);
     }, t._streamAbort.signal);
   } catch(e) {
-    if(!_cancelled){ closeCtxGroup(log); renderEvent(log,{kind:"note",text:"⚠ 连接中断："+(e&&e.message||e)},t.sessionId); }
+    if(!_cancelled){ closeCtxGroup(log); if(log._compactLive) showCompactFailed(log,"压缩中断"); renderEvent(log,{kind:"note",text:"⚠ 连接中断："+(e&&e.message||e)},t.sessionId); }
   } finally {
     hideTyping(log);
+    if(log._compactLive) showCompactFailed(log,"压缩中断");   // 兜底：无任何收尾事件也不许占位线无声消失
     t._busy=false; setSessionBusy(t,false);
     if(STREAMING && STREAMING.delete) STREAMING.delete(t.sessionId);
+    refreshUsage(t.sessionId);
   }
   // 收尾必须有保护：此处失败（网络/后端异常）若抛出，下方等待队列永不推进、消息永久滞留。
   const resp=await call({cmd:"list_sessions"}).catch(()=>null);
@@ -801,9 +817,28 @@ function queueNote(log, text){
   host.append(el("meta note",esc(text)));
   log._stick=true; log.scrollTop=log.scrollHeight;
 }
+// 「正在压缩上下文」细线（ZCode 同款）：/compact 发送期间的唯一时间线占位；由 compacted
+// 边界线（render.js）或失败 note 替代，doSendTab finally 兜底撤线（断线不留永久占位）。
+function showCompactLive(log){
+  removeCompactLive(log);
+  const d=el("compact-div live");
+  d.innerHTML='<span class="cd-line"></span><span class="cd-txt">正在压缩上下文</span><span class="cd-line"></span>';
+  log.append(d); log._compactLive=d; log._stick=true; stickScroll(log);
+}
+function removeCompactLive(log){ if(log._compactLive){ log._compactLive.remove(); log._compactLive=null; } }
+// 压缩收尾·失败态（红字细线）：占位线的替身——压缩是显式操作，失败/中断也必须有线收口，
+// 不能让「正在压缩上下文」无声消失（2026-09-18 反馈）。
+function showCompactFailed(log, txt){
+  removeCompactLive(log);
+  const d=el("compact-div fail");
+  d.innerHTML='<span class="cd-line"></span><span class="cd-txt">✕ '+esc(txt)+'</span><span class="cd-line"></span>';
+  log.append(d); log._compactLive=null; log._stick=true; stickScroll(log);
+}
 async function sendChatTab(t){
   const box=t.view.querySelector(".inp2"); const text=box.value.trim(); if(!text) return;
-  box.value=""; autoGrow(box); await doSendTab(t, text);
+  box.value=""; autoGrow(box); syncComposerChip(box);   // 清空后顺带拆除命令 chip（若有）
+  box.focus();
+  await doSendTab(t, text);
 }
 function setSessionBusy(t,busy){
   const btn=t.view.querySelector(".tab-send");

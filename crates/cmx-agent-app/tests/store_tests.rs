@@ -52,7 +52,7 @@ fn sample_events() -> Vec<SessionEvent> {
             kind: EventKind::TurnEnded {
                 turn: 1,
                 reason: cmx_agent_core::event::StopReason::Completed,
-                steps: 1,
+                steps: 1, usage: None,
             },
         },
     ]

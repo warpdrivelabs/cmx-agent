@@ -9,8 +9,21 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::guard::{GuardDecision, GuardPhase};
+use crate::model::ModelUsage;
 use crate::question::AskQuestion;
 use crate::tool::ToolCall;
+
+/// 压缩原因（压缩方案 §4.2.1）。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionReason {
+    /// 上下文用量触线自动压缩。
+    AutoThreshold,
+    /// 用户 `/compact` 手动触发。
+    Manual,
+    /// 模型报上下文超限后的救援压缩。
+    Overflow,
+}
 
 /// 一条会话事件的类型化载荷（内部标签 `kind`，snake_case）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -78,11 +91,27 @@ pub enum EventKind {
         #[serde(default)]
         answers: serde_json::Map<String, serde_json::Value>,
     },
-    /// 回合结束。
+    /// 回合结束。`usage` = 本回合最后一次请求的服务端用量（其 input 即当时的上下文规模）；
+    /// `#[serde(default)]` 兼容旧落库事件（tagged enum 未声明字段会静默丢，必须显式声明）。
     TurnEnded {
         turn: u64,
         reason: StopReason,
         steps: usize,
+        #[serde(default)]
+        usage: Option<ModelUsage>,
+    },
+    /// 上下文压缩完成（压缩方案 §4.2.1）：`up_to_seq`（含）之前的模型可见历史已被
+    /// `summary` 摘要替代；投影仅保留其后的事件 + 头部注入摘要。
+    Compacted {
+        up_to_seq: u64,
+        /// 摘要正文（Markdown，结构化模板）。
+        summary: String,
+        reason: CompactionReason,
+    },
+    /// 旧工具输出清理登记（§4.2.5）：列出的 call_id 其结果在投影时替换为占位说明。
+    /// append-only——不改写原事件，多次事件取并集。
+    ToolOutputsPruned {
+        call_ids: Vec<String>,
     },
     /// 内部注记（不必模型可见）。
     Note { text: String },

@@ -20,6 +20,7 @@ pub mod error;
 pub mod model_select;
 pub mod model_slot;
 pub mod protocol;
+pub mod skills;
 pub mod store;
 pub mod stream;
 pub mod workspace;

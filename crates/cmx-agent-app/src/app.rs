@@ -8,8 +8,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use cmx_agent_connectors::{AuthProvider, ConnectorCard, ConnectorRegistry, LoggedInUser, user_from_me};
-use cmx_agent_core::event::StopReason;
-use cmx_agent_core::{Agent, Approver, Session, TurnCancel};
+use cmx_agent_core::event::{CompactionReason, EventKind, EventSink, SessionEvent, StopReason};
+use cmx_agent_core::{Agent, Approver, ModelContext, ModelMessage, Session, TurnCancel};
+use cmx_agent_model::is_context_overflow;
 
 use crate::error::{AppError, AppResult};
 use crate::store::{SessionMeta, SessionStore};
@@ -33,6 +34,31 @@ const PLAN_MODE_PROMPT_SECTION: &str = "\n\n【计划模式】当前处于计划
 const TASK_RESULT_PROMPT_SECTION: &str = "\n\n【后台子任务回执】刚收到的 <task_result> 回执已作为\
 系统卡片向用户展示（含完成状态与完整输出）。请勿复述「子任务已完成」等状态语，也不要整段引用回执\
 原文；直接给出基于结果实质内容的回答、整理或后续动作；若无实质内容可说，简短说明即可。";
+
+// ── 上下文压缩常量（压缩方案 §4.2.3，2026-09-18 拍板）──
+/// `context_window` 未配置时的默认窗口（用户拍板 1M；小真窗口模型靠溢出救援兜底）。
+pub(crate) const DEFAULT_CONTEXT_WINDOW: u64 = 1_000_000;
+/// 压缩预留（对齐 opencode buffer）。
+pub(crate) const COMPACTION_BUFFER: u64 = 20_000;
+/// 自动触发线：估算上下文 ≥ usable×0.85（宁晚勿早——误压代价是摘要丢细节）。
+const AUTO_COMPACT_RATIO: f64 = 0.85;
+/// 手动压缩空表（无可压缩历史，如刚压过再压）的收尾 Note 文本：前端按它渲染灰字「无需压缩」
+/// 边界线（ZCode 同款 2026-09-18 反馈），IM 以 outcome.final_text 回复同文；改一侧须同步另一侧。
+pub(crate) const COMPACT_NOOP_TEXT: &str = "上下文已是最新，无需压缩";
+/// 未配置 max_output_tokens 时的输出预留缺省。
+const DEFAULT_MAX_OUTPUT_TOKENS: u64 = 8_192;
+
+/// 可用上下文 = 窗口 − max(max_output 配置值缺省 8_192, 20k 预留)。
+pub(crate) fn usable_window(window: u64, max_output: Option<u64>) -> u64 {
+    let reserve = max_output.unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS).max(COMPACTION_BUFFER);
+    window.saturating_sub(reserve)
+}
+
+/// 斜杠分发路由结果（姊妹方案 §2.2）：Pass=继续正常发送（可能已改写文本），Handled=已消费输入。
+pub enum SlashRoute {
+    Pass(String),
+    Handled(SendOutcome),
+}
 
 /// 一个回合的对外结果（含新产生的事件条数，便于前门增量渲染）。
 #[derive(Debug, Clone, serde::Serialize)]
@@ -66,6 +92,8 @@ pub struct AgentApp {
     plugins: Vec<serde_json::Value>,
     /// U15 plugins 目录（设了则 list_plugins 实时扫描、install/uninstall 落到此）。
     plugins_dir: Option<std::path::PathBuf>,
+    /// 真技能目录 `<data_dir>/skills`（姊妹方案 §2.1；builder 从 data_dir 装配）。
+    skills_dir: Option<std::path::PathBuf>,
     /// U15 远程市场 URL（env CMX_AGENT_PLUGIN_MARKET；list_plugins 有则拉取市场目录）。
     plugin_market: Option<String>,
     /// U13 数据权限 PEP（启用数据权限时 Some）：登录后按真实用户重热 PDP 判定。
@@ -173,6 +201,7 @@ impl AgentApp {
             token_store: None,
             plugins: Vec::new(),
             plugins_dir: None,
+            skills_dir: None,
             plugin_market: None,
             data_auth_pep: None,
             auth_identity: None,
@@ -255,6 +284,12 @@ impl AgentApp {
     /// 注入 plugins 目录（U15；设了则 list_plugins 实时扫描、install/uninstall 落到此）。
     pub fn with_plugins_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
         self.plugins_dir = Some(dir.into());
+        self
+    }
+
+    /// 真技能目录（姊妹方案 §2.1）。未设 = 无技能（`/` 菜单技能组为空）。
+    pub fn with_skills_dir(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
+        self.skills_dir = Some(dir.into());
         self
     }
 
@@ -1692,6 +1727,44 @@ impl AgentApp {
             Err(e) => return Err(e),
         };
 
+        // U16 总线 sink 上提到本函数（压缩方案改造）：边界压缩/溢出救援/斜杠命令追加的事件
+        // 也要实时广播；下方 execute_turn_locked 一律传 attach_bus=false——同一日志实例
+        // 重复挂载同一广播器会让每条事件双发（原实现只挂首回合，故 sink 必须只挂这一处）。
+        session.log.add_sink(Arc::new(crate::bus::BusSink::new(
+            session_id.to_string(),
+            self.event_bus.sender(),
+        )));
+
+        // 斜杠分发（姊妹方案 §2.2）：命令 > 技能 > 子智能体 > 原样。持锁后、落任何事件前——
+        // /compact 在此消费掉输入（不落 UserMessage，不进 run_turn）；技能/子智能体改写消息文本。
+        let user_input = match self.dispatch_slash(session_id, &mut session, user_input).await? {
+            crate::app::SlashRoute::Handled(outcome) => {
+                // 斜杠命令的收尾事件（压缩成功/无需压缩/失败审计）必须补推给流式 sink：
+                // ChannelSink 要到 execute_turn_locked 内部才挂载，斜杠路径到不了那里，事件
+                // 只进总线——而前端本地发送期间丢弃总线帧（防双渲染），结果收尾永远不实时
+                // 上屏，只能走前端兜底误报「压缩中断」（2026-09-18 实测根因）。迟到总线帧由
+                // 前端 _seqs 去重兜底。
+                if let Some(sink) = &sink {
+                    for ev in &outcome.new_events {
+                        sink.on_event(ev);
+                    }
+                }
+                return Ok(outcome);
+            }
+            crate::app::SlashRoute::Pass(text) => text,
+        };
+
+        // 回合边界维护（压缩方案 §4.2.3）：先 prune、重估，仍超线再自动压缩（auto_compact 开）。
+        // prune/自动压缩事件同样发生在 ChannelSink 挂载前——不补推则自动压缩边界实时不上屏
+        //（与斜杠收尾同一通路坑，2026-09-18 自动压缩实测发现），前端迟到总线帧靠 _seqs 去重。
+        let extra = self.boundary_maintenance(&mut session, &user_input).await;
+        self.persist_extra_events(session_id, &extra)?;
+        if let Some(sink) = &sink {
+            for ev in &extra {
+                sink.on_event(ev);
+            }
+        }
+
         // 改造二：本回合在途期间到达的后台子任务回执轮询缝——内核收口点（模型不再要工具）
         // 每次取队首一条，作为 UserMessage 注入本回合并续跑一轮（折进当前回复末尾）。
         let deferred = || {
@@ -1704,15 +1777,59 @@ impl AgentApp {
             .execute_turn_locked(
                 &mut session,
                 session_id,
-                user_input,
-                sink,
-                subject,
+                &user_input,
+                sink.clone(),
+                subject.clone(),
                 cancel,
                 policy_override,
                 Some(&deferred),
-                true,
+                false,
             )
             .await?;
+
+        // 溢出救援（压缩方案 §4.2.6，1M 默认下的实际兜底主路径）：模型报上下文超限 →
+        // 压缩（up_to_seq 覆盖失败回合，含其 UserMessage——重试走正常 run_turn 落新回合，
+        // 投影不重复）→ 原话重试一次。无可压缩历史（首回合即超窗）或压缩失败 → 保留原错误结局。
+        if matches!(outcome.reason, StopReason::Error)
+            && outcome
+                .final_text
+                .as_deref()
+                .is_some_and(is_context_overflow)
+        {
+            let (mut cevents, summary) = self
+                .run_compaction(&mut session, CompactionReason::Overflow, None)
+                .await;
+            if summary.is_some() {
+                self.persist_extra_events(session_id, &cevents)?;
+                // 救援压缩边界同样补推流式 sink（挂载前的产物，与边界维护同因）
+                if let Some(sink) = &sink {
+                    for ev in &cevents {
+                        sink.on_event(ev);
+                    }
+                }
+                outcome.new_events.append(&mut cevents);
+                if let Ok(retry) = self
+                    .execute_turn_locked(
+                        &mut session,
+                        session_id,
+                        &user_input,
+                        sink.clone(),
+                        subject.clone(),
+                        cancel,
+                        policy_override,
+                        Some(&deferred),
+                        false,
+                    )
+                    .await
+                {
+                    outcome.new_events.extend(retry.new_events);
+                    outcome.turn = retry.turn;
+                    outcome.reason = retry.reason;
+                    outcome.steps = retry.steps;
+                    outcome.final_text = retry.final_text;
+                } // 重试路径 Err（持久化失败）：保留原错误结局
+            }
+        }
 
         // 收尾兜底 drain：仅在前一回合 Completed 时链式续跑（中断/出错即停，剩余回执
         // 留在队列里，下一次回合经 deferred 缝吸收，不丢）。回执回合不再挂流式 sink
@@ -1890,12 +2007,14 @@ impl AgentApp {
                     turn,
                     reason: cmx_agent_core::event::StopReason::Error,
                     steps: 0,
+                    usage: None,
                 });
                 cmx_agent_core::TurnOutcome {
                     turn,
                     reason: cmx_agent_core::event::StopReason::Error,
                     steps: 0,
                     final_text: Some(msg),
+                    usage: None,
                 }
             }
         };
@@ -2165,13 +2284,455 @@ impl AgentApp {
                     .and_then(|w| w.current_context())
             }) {
             Some((_, name, path)) => format!(
-                "\n\n当前工作空间：{name}\n工作空间根：{}\n文件操作使用相对该根的路径；用户用 @ 引用的文件也相对该根解析。\
-                 用户输入以 / 开头时，斜杠后是技能名，请优先调用同名工具完成后续诉求。",
+                "\n\n当前工作空间：{name}\n工作空间根：{}\n文件操作使用相对该根的路径；用户用 @ 引用的文件也相对该根解析。",
                 path.display()
             ),
             None => "\n\n当前未绑定工作空间：这是普通任务，不要主动创建或改写本地文件。".to_string(),
         };
-        Some(base + &context)
+        Some(base + &context + &self.skills_prompt_section())
+    }
+
+    // ── 斜杠菜单三分与真技能体系（姊妹方案 §2.1–§2.3，2026-09-18 拍板）──
+
+    /// `/` 菜单三类条目（命令/技能/子智能体）。`list_skills`（工具契约改名）保持原样不动
+    /// ——agents.js 子智能体编辑器拿它做工具白名单选项。
+    pub fn list_slash(&self) -> serde_json::Value {
+        let commands = vec![
+            serde_json::json!({"name": "compact", "description": "压缩上下文：把较早对话总结成结构化摘要（可附关注点，如 /compact 保留结论）"}),
+            serde_json::json!({"name": "plan", "description": "进入计划模式：只做调研与规划，不改文件（可附任务，如 /plan 重构登录页）"}),
+        ];
+        let skills: Vec<serde_json::Value> = self
+            .scan_skills()
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(|e| serde_json::json!({
+                        "name": e.name,
+                        "description": e.description,
+                        "invalid": e.invalid,
+                    }))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let subagents: Vec<serde_json::Value> = self
+            .agents
+            .as_ref()
+            .map(|reg| {
+                reg.list()
+                    .into_iter()
+                    .filter(|a| a.enabled)
+                    .map(|a| {
+                        serde_json::json!({
+                            "name": a.name,
+                            "title": a.title,
+                            "description": a.description,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        serde_json::json!({ "commands": commands, "skills": skills, "subagents": subagents })
+    }
+
+    /// 技能目录扫描（目录自动初始化 + 种子示例；None = 未配置技能目录）。
+    fn scan_skills(&self) -> Option<Vec<crate::skills::SkillEntry>> {
+        let dir = self.skills_dir.as_deref()?;
+        crate::skills::ensure_initialized(dir).ok()?;
+        Some(crate::skills::scan(dir))
+    }
+
+    /// 技能清单注入（姊妹方案 §2.1「模型感知」）：没有这段，模型自己不知道技能存在，
+    /// 只有用户敲 `/名` 才能触发。与 `list_slash` 同源扫描；system 每回合重建 → 恒新鲜。
+    fn skills_prompt_section(&self) -> String {
+        let Some(entries) = self.scan_skills() else {
+            return String::new();
+        };
+        let usable: Vec<_> = entries.iter().filter(|e| e.invalid.is_none()).collect();
+        if usable.is_empty() {
+            return String::new();
+        }
+        let mut sec = String::from(
+            "\n\n【可用技能】用户消息以「/技能名 参数」形式调用技能，调用时系统会注入技能正文；用户口头描述的任务若与某技能描述明显匹配，可提示用户用对应技能：",
+        );
+        for e in &usable {
+            sec.push_str(&format!("\n- {}：{}", e.name, e.description));
+        }
+        sec
+    }
+
+    /// 斜杠分发（§2.2）：`send_inner_locked` 持会话锁后、落任何事件前调用。
+    /// 优先级 命令 > 技能 > 子智能体 > 原样；未匹配 `/xxx` 原样发送（现状行为，不报错）。
+    async fn dispatch_slash(
+        &self,
+        session_id: &str,
+        session: &mut Session,
+        user_input: &str,
+    ) -> AppResult<crate::app::SlashRoute> {
+        let trimmed = user_input.trim_start();
+        if !trimmed.starts_with('/') {
+            return Ok(crate::app::SlashRoute::Pass(user_input.to_string()));
+        }
+        let body = &trimmed[1..];
+        let mut parts = body.splitn(2, char::is_whitespace);
+        let name = parts.next().unwrap_or("").trim();
+        let args = parts.next().unwrap_or("").trim();
+        if name.is_empty() {
+            return Ok(crate::app::SlashRoute::Pass(user_input.to_string()));
+        }
+        match name {
+            // /compact [关注点]：消费输入，不落 UserMessage（压缩事件经总线实时上屏）
+            "compact" => {
+                let focus = (!args.is_empty()).then_some(args);
+                let (mut events, summary) = self
+                    .run_compaction(session, CompactionReason::Manual, focus)
+                    .await;
+                // 空表 = 无可压缩历史（刚压过/尚无对话）：补「无需压缩」收尾 Note——不给收尾
+                // 事件，前端只能按中断兜底画红字、IM 会误报失败（ZCode 同款灰字 2026-09-18）。
+                // auto/救援路径保持静默空表，不补此事件。
+                let text = match summary {
+                    Some(sum) => {
+                        format!("🗜 上下文已压缩（手动）· 摘要 {} 字", sum.chars().count())
+                    }
+                    None if events.is_empty() => {
+                        let note = session
+                            .log
+                            .append(EventKind::Note { text: COMPACT_NOOP_TEXT.to_string() })
+                            .clone();
+                        events.push(note);
+                        COMPACT_NOOP_TEXT.to_string()
+                    }
+                    None => "压缩失败，已保留现场（摘要请求未成功，详见时间线提示）".to_string(),
+                };
+                self.persist_extra_events(session_id, &events)?;
+                Ok(crate::app::SlashRoute::Handled(SendOutcome {
+                    session_id: session_id.to_string(),
+                    turn: session.next_turn_no(),
+                    reason: StopReason::Completed,
+                    steps: 0,
+                    final_text: Some(text),
+                    new_events: events,
+                }))
+            }
+            // /plan [任务]：映射既有计划模式；带任务则改写文本继续跑回合（execute_turn_locked
+            // 按 meta.plan_mode 自动进入只读档）。本分发器在会话锁内 → 必须走免锁内层
+            "plan" => {
+                self.set_plan_mode_inner(session_id, true).await?;
+                if args.is_empty() {
+                    Ok(crate::app::SlashRoute::Handled(SendOutcome {
+                        session_id: session_id.to_string(),
+                        turn: session.next_turn_no(),
+                        reason: StopReason::Completed,
+                        steps: 0,
+                        final_text: Some("已进入计划模式（只调研规划，不改文件）".to_string()),
+                        new_events: Vec::new(),
+                    }))
+                } else {
+                    Ok(crate::app::SlashRoute::Pass(args.to_string()))
+                }
+            }
+            _ => {
+                // 技能：名称精确命中（非法条目不执行）→ 注入消息进正常回合
+                if let Some(e) = self.scan_skills().and_then(|entries| {
+                    entries
+                        .into_iter()
+                        .find(|e| e.name == name && e.invalid.is_none())
+                }) {
+                        let injected = format!(
+                            "[用户调用技能 {name}，请严格按其指引执行]\n\
+                             <skill-instruction name=\"{name}\">\n{}\n\n技能基准目录：{}；\
+                             正文中出现的相对路径（scripts/、references/ 等）均相对该目录。\n\
+                             </skill-instruction>\n\n用户指令：{}",
+                            e.body.trim(),
+                            e.dir.display(),
+                            if args.is_empty() { "（无附加参数，按技能正文执行）" } else { args },
+                        );
+                return Ok(crate::app::SlashRoute::Pass(injected));
+                }
+                // 子智能体：一期软委派——注入指令让主对话用 task 工具委派（注册表与 task 工具现成）
+                if let Some(reg) = &self.agents
+                    && let Some(a) = reg.list().into_iter().find(|a| a.enabled && a.name == name)
+                {
+                    let target = if a.title.is_empty() { a.name.clone() } else { a.title.clone() };
+                    let injected = format!(
+                        "请把以下事项委派给子智能体「{target}」执行：使用 task 工具，\
+                         subagent_type=\"{}\"，并把下方事项原文作为 prompt 传入；\
+                         等待其完成后向用户汇报结果。\n\n事项：{}",
+                        a.name,
+                        if args.is_empty() { "（用户未附具体事项，先向用户确认要做什么）" } else { args },
+                    );
+                    return Ok(crate::app::SlashRoute::Pass(injected));
+                }
+                Ok(crate::app::SlashRoute::Pass(user_input.to_string()))
+            }
+        }
+    }
+
+    // ── 上下文压缩编排（压缩方案 §4.2，auto/manual/rescue 三路共用）──
+
+    /// 压缩执行：序列化压缩段 → 摘要请求（max_tokens 有界 + 自溢出逐条丢最旧）→ 落
+    /// `Compacted` 事件。返回（新事件、摘要正文）；摘要 None = 失败降级（已记审计 Note，
+    /// 不压缩，绝不因压缩失败丢历史）。无可压缩历史返回空表。
+    async fn run_compaction(
+        &self,
+        session: &mut Session,
+        reason: CompactionReason,
+        focus: Option<&str>,
+    ) -> (Vec<SessionEvent>, Option<String>) {
+        let events: Vec<SessionEvent> = session.log.events().to_vec();
+        let mut cutoff = 0u64;
+        let mut prior: Option<&String> = None;
+        for ev in &events {
+            if let EventKind::Compacted { up_to_seq, summary, .. } = &ev.kind {
+                cutoff = *up_to_seq;
+                prior = Some(summary);
+            }
+        }
+        let window_events: Vec<SessionEvent> =
+            events.iter().filter(|e| e.seq > cutoff).cloned().collect();
+        let entries = cmx_agent_core::compaction::serialize_entries(&window_events);
+        if entries.is_empty() {
+            return (Vec::new(), None);
+        }
+        // 自溢出防护（codex remove_first_item 同款）：序列化文本超窗 → 从最旧条目逐条丢弃
+        let (window, _) = self.current_model_window();
+        let budget = window
+            .saturating_sub(cmx_agent_core::compaction::SUMMARY_MAX_TOKENS + 2_000);
+        let (conversation, dropped) =
+            cmx_agent_core::compaction::fit_entries(&entries, budget);
+        let prompt = cmx_agent_core::compaction::summary_prompt(
+            prior.map(|s| s.as_str()),
+            &conversation,
+            focus,
+        );
+        let ctx = ModelContext {
+            system: None,
+            messages: vec![ModelMessage::User { text: prompt }],
+            tools: Vec::new(),
+        };
+        let summary = match self
+            .agent
+            .complete_bounded(&ctx, cmx_agent_core::compaction::SUMMARY_MAX_TOKENS)
+            .await
+        {
+            Ok(resp) => resp.text.filter(|t| !t.trim().is_empty()),
+            Err(e) => {
+                eprintln!("[compact] 摘要请求失败: {e}");
+                None
+            }
+        };
+        let mut new_events: Vec<SessionEvent> = Vec::new();
+        match summary {
+            Some(text) => {
+                let up_to = events.last().map(|e| e.seq).unwrap_or(0);
+                let ev = session
+                    .log
+                    .append(EventKind::Compacted { up_to_seq: up_to, summary: text.clone(), reason })
+                    .clone();
+                new_events.push(ev);
+                if dropped > 0 {
+                    let note = session
+                        .log
+                        .append(EventKind::Note {
+                            text: format!(
+                                "压缩序列化超出预算，已丢弃最旧 {dropped} 条记录后再摘要（审计）"
+                            ),
+                        })
+                        .clone();
+                    new_events.push(note);
+                }
+                (new_events, Some(text))
+            }
+            None => {
+                let note = session
+                    .log
+                    .append(EventKind::Note {
+                        text: "上下文压缩失败：摘要请求未成功，已保留现场，可稍后重试 /compact"
+                            .to_string(),
+                    })
+                    .clone();
+                new_events.push(note);
+                (new_events, None)
+            }
+        }
+    }
+
+    /// 回合边界维护（§4.2.3/§4.2.5，仅 auto_compact 开启时）：先 prune、重估，仍超线再压缩。
+    /// 返回新追加事件（调用方持久化；SSE 由总线 sink 实时广播）。
+    async fn boundary_maintenance(
+        &self,
+        session: &mut Session,
+        incoming: &str,
+    ) -> Vec<SessionEvent> {
+        if !self.auto_compact_enabled() {
+            return Vec::new();
+        }
+        let mut new_events = Vec::new();
+        // ① prune：守卫全过且可清理量足才动手
+        let already = self.pruned_union(session);
+        let ids = cmx_agent_core::compaction::select_prune(session.log.events(), &already);
+        if !ids.is_empty() {
+            let ev = session
+                .log
+                .append(EventKind::ToolOutputsPruned { call_ids: ids })
+                .clone();
+            new_events.push(ev);
+        }
+        // ② 重估：真实 usage（未过时）与投影估算取大者 + 新消息估算；≥ usable×85% 再压缩
+        let (window, max_out) = self.current_model_window();
+        let est = self.estimate_context(session) + cmx_agent_core::token::est_tokens(incoming);
+        if est as f64 >= usable_window(window, max_out) as f64 * AUTO_COMPACT_RATIO {
+            let (evs, _) = self
+                .run_compaction(session, CompactionReason::AutoThreshold, None)
+                .await;
+            new_events.extend(evs);
+        }
+        new_events
+    }
+
+    /// 已登记清理的 call_id 并集（prune 守卫③的输入）。
+    fn pruned_union(&self, session: &Session) -> std::collections::HashSet<String> {
+        let mut set = std::collections::HashSet::new();
+        for ev in session.log.events() {
+            if let EventKind::ToolOutputsPruned { call_ids } = &ev.kind {
+                set.extend(call_ids.iter().cloned());
+            }
+        }
+        set
+    }
+
+    /// 触发判定用量（§4.2.3）：真实 usage 优先（其 input 即请求时上下文规模），但仅当该回合
+    /// 之后没发生过压缩/清理（否则真实值反映的是维护前的更大上下文，会误触发）；否则整投影估算。
+    fn estimate_context(&self, session: &Session) -> u64 {
+        let events = session.log.events();
+        let mut maint_seq = 0u64;
+        for ev in events {
+            if matches!(
+                ev.kind,
+                EventKind::Compacted { .. } | EventKind::ToolOutputsPruned { .. }
+            ) {
+                maint_seq = ev.seq;
+            }
+        }
+        for ev in events.iter().rev() {
+            if let EventKind::TurnEnded { usage: Some(u), .. } = &ev.kind {
+                if ev.seq > maint_seq {
+                    return u.input;
+                }
+                break;
+            }
+        }
+        let tools = self.agent.tools().specs();
+        cmx_agent_core::token::est_context(&session.model_context(tools)).total
+    }
+
+    /// 当前模型的（上下文窗口, 最大输出）：providers.json 激活条目里按当前模型 id 查
+    /// `ModelEntry`；缺省（1M / None）见压缩方案 §0 拍板。
+    fn current_model_window(&self) -> (u64, Option<u64>) {
+        if let Some((_, pf)) = self.load_providers()
+            && let Some(active_id) = pf.active.as_deref()
+            && let Some(p) = pf.get(active_id)
+            && let Some(m) = p.models.iter().find(|m| m.id == p.config.model)
+        {
+            return (
+                m.context_window.unwrap_or(DEFAULT_CONTEXT_WINDOW),
+                m.max_output_tokens,
+            );
+        }
+        (DEFAULT_CONTEXT_WINDOW, None)
+    }
+
+    /// 自动压缩开关（providers.json 顶层 `auto_compact`，缺省 true；关闭后仅手动 + 救援）。
+    fn auto_compact_enabled(&self) -> bool {
+        self.load_providers()
+            .map(|(_, pf)| pf.auto_compact)
+            .unwrap_or(true)
+    }
+
+    /// 追加事件落库（压缩/命令路径专用；回合事件由 execute_turn_locked 统一落）。
+    /// 墓碑在册（会话正被删除）时放弃——与 execute_turn_locked 同规，防已删会话复活。
+    fn persist_extra_events(&self, session_id: &str, events: &[SessionEvent]) -> AppResult<()> {
+        if events.is_empty() {
+            return Ok(());
+        }
+        if self
+            .pending_deleted
+            .lock()
+            .expect("pending deleted lock")
+            .contains(session_id)
+        {
+            return Ok(());
+        }
+        self.store.append_events(session_id, events)?;
+        if let Ok(metas) = self.store.list()
+            && let Some(m) = metas.iter().find(|m| m.id == session_id)
+        {
+            let mut meta = m.clone();
+            meta.event_count += events.len();
+            meta.updated_at = chrono::Utc::now();
+            self.store.put_meta(&meta)?;
+        }
+        Ok(())
+    }
+
+    /// 当前会话上下文用量（圆环+明细卡，§4.4.2）：used=最近真实 usage（无则退投影估算），
+    /// 分类占比=估算器分桶，缓存命中率=最近一次 cached_input。
+    pub fn context_usage(&self, session_id: &str) -> AppResult<serde_json::Value> {
+        let session = self.store.load(session_id)?;
+        let tools = self.agent.tools().specs();
+        let breakdown = cmx_agent_core::token::est_context(&session.model_context(tools));
+        let (window, max_out) = self.current_model_window();
+        let mut used = breakdown.total;
+        let mut cached = None;
+        for ev in session.log.events().iter().rev() {
+            if let EventKind::TurnEnded { usage: Some(u), .. } = &ev.kind {
+                used = u.input;
+                cached = u.cached_input;
+                break;
+            }
+        }
+        let usable = usable_window(window, max_out);
+        let pct = (used as f64 / usable.max(1) as f64 * 1000.0).round() / 10.0;
+        Ok(serde_json::json!({
+            "used": used,
+            "window": window,
+            "usable": usable,
+            "pct": pct,
+            "cached_input": cached,
+            "breakdown": {
+                "messages": breakdown.messages,
+                "tool_results": breakdown.tool_results,
+                "tool_defs": breakdown.tool_defs,
+                "system": breakdown.system,
+                "other": breakdown.other,
+                "total": breakdown.total,
+            },
+        }))
+    }
+
+    /// 手动压缩（壳直调入口；`/compact` 文本识别在 dispatch_slash，两者共用 run_compaction）。
+    pub async fn compact_session(
+        &self,
+        session_id: &str,
+        focus: Option<String>,
+    ) -> AppResult<serde_json::Value> {
+        // 与回合互斥：同一会话锁（压缩也是对日志的写操作）
+        let session_lock = {
+            let mut locks = self.session_locks.lock().await;
+            locks
+                .entry(session_id.to_string())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        let _permit = session_lock.lock().await;
+        let mut session = self.store.load(session_id)?;
+        let (events, summary) = self
+            .run_compaction(&mut session, CompactionReason::Manual, focus.as_deref())
+            .await;
+        self.persist_extra_events(session_id, &events)?;
+        Ok(serde_json::json!({
+            "compacted": summary.is_some(),
+            "summary_chars": summary.as_ref().map(|s| s.chars().count()).unwrap_or(0),
+        }))
     }
 
     /// 技能 = 当前已注册工具。前端 / 菜单只做选择，发送后模型仍经工具契约与守卫执行。
@@ -2326,6 +2887,16 @@ impl AgentApp {
         };
         let _permit = permit.lock().await;
         // 持锁后重读 meta（若刚才有回合在收尾，此处拿到的是对账后的最终值）。
+        self.set_plan_mode_inner(session_id, enabled).await
+    }
+
+    /// 计划模式切换的内层实现：**调用方必须已持有该会话锁**（公开版负责加锁；
+    /// 斜杠分发器的 /plan 在 send_inner_locked 锁内调用，走本函数防重复加锁死锁）。
+    async fn set_plan_mode_inner(
+        &self,
+        session_id: &str,
+        enabled: bool,
+    ) -> AppResult<serde_json::Value> {
         let mut meta = self
             .store
             .list()?
@@ -2392,13 +2963,12 @@ impl AgentApp {
         });
         let context = match self.workspaces.as_ref().and_then(|w| w.current_context()) {
             Some((_, name, path)) => format!(
-                "\n\n当前工作空间：{name}\n工作空间根：{}\n文件操作使用相对该根的路径；用户用 @ 引用的文件也相对该根解析。\
-                 用户输入以 / 开头时，斜杠后是技能名，请优先调用同名工具完成后续诉求。",
+                "\n\n当前工作空间：{name}\n工作空间根：{}\n文件操作使用相对该根的路径；用户用 @ 引用的文件也相对该根解析。",
                 path.display()
             ),
             None => "\n\n当前未绑定工作空间：这是普通任务，不要主动创建或改写本地文件。".to_string(),
         };
-        Some(base + &context)
+        Some(base + &context + &self.skills_prompt_section())
     }
 }
 

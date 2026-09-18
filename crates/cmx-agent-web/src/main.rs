@@ -97,9 +97,16 @@ async fn build_app(workdir: &std::path::Path, data_dir: &std::path::Path) -> Age
     // U15：plugins 目录里 kind:"mcp" 的插件清单，也作为 MCP server 连上（统一插件面入口）。
     mcp_tools.extend(cmx_agent_plugin::connect_mcp_plugins(&data_dir.join("plugins")).await);
     // U13：opt-in 数据权限接地——设 CMX_AGENT_DATAAUTH_URL 指向 cmx-data-auth 即启用真 PEP；否则 allow_all 占位。
+    // 门户基址：CMX_AGENT_PORTAL_BASE 可覆盖（登录门与 IM 绑定同源；默认团队门户）。
+    // 原实现只覆盖了 IM 绑定、登录门写死 default（注释声称「可覆盖」与行为不符）——本次修正。
+    let portal_base = std::env::var("CMX_AGENT_PORTAL_BASE")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| cmx_agent_app::AuthConfig::default().base_url);
     let mut app = DesktopAppBuilder::new(workdir, data_dir, model)
         .connectors(cmx_agent_app::ConnectorConfig::default())
-        .auth(cmx_agent_app::AuthConfig::default())
+        .auth(cmx_agent_app::AuthConfig { base_url: portal_base.clone() })
         // 登录页「注册账号」入口显隐（env CMX_AGENT_REGISTER_ENABLED，缺省展示；成败由门户 whitelist 决定）。
         .with_register_enabled(register_enabled_from_env())
         .interactive_approval() // X4：shell 等需审批工具挂起等前端点按
@@ -112,11 +119,6 @@ async fn build_app(workdir: &std::path::Path, data_dir: &std::path::Path) -> Age
         .expect("build agent app");
 
     // IM 绑定面板（设置 → IM 绑定）：不注入则绑定三命令一律报「未启用 IM 绑定」。
-    // 门户基址与登录门同源（AuthConfig::default().base_url），CMX_AGENT_PORTAL_BASE 可覆盖。
-    let portal_base = std::env::var("CMX_AGENT_PORTAL_BASE")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| cmx_agent_app::AuthConfig::default().base_url);
     app = app.with_im_binding(cmx_agent_app::ImBindingClient::new(portal_base));
 
     app

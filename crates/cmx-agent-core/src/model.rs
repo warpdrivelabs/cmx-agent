@@ -42,6 +42,16 @@ pub enum ModelMessage {
     },
 }
 
+/// 一次请求的服务端用量（压缩方案 §4.1.1）。`input` = 该次请求的上下文规模（最能量化占用）。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ModelUsage {
+    pub input: u64,
+    pub output: u64,
+    /// 命中缓存的输入 token（OpenAI `prompt_tokens_details.cached_tokens` 与 DeepSeek
+    /// 风格 `prompt_cache_hit_tokens` 归一）；网关未回传 = None（命中率行隐藏）。
+    pub cached_input: Option<u64>,
+}
+
 /// 模型响应：自由文本 + 零或多个工具调用。无工具调用 = 回合可完成。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ModelResponse {
@@ -52,6 +62,9 @@ pub struct ModelResponse {
     pub reasoning: Option<String>,
     #[serde(default)]
     pub tool_calls: Vec<ToolCall>,
+    /// 服务端用量（网关未回传 = None；流式经 `stream_options.include_usage` 换取）。
+    #[serde(default)]
+    pub usage: Option<ModelUsage>,
 }
 
 impl ModelResponse {
@@ -59,17 +72,15 @@ impl ModelResponse {
     pub fn text(t: impl Into<String>) -> Self {
         Self {
             text: Some(t.into()),
-            reasoning: None,
-            tool_calls: vec![],
+            ..Default::default()
         }
     }
 
     /// 请求一批工具调用（可附文本）。
     pub fn calls(tool_calls: Vec<ToolCall>) -> Self {
         Self {
-            text: None,
-            reasoning: None,
             tool_calls,
+            ..Default::default()
         }
     }
 
@@ -113,6 +124,17 @@ pub trait TurnObserver: Send + Sync {
 #[async_trait]
 pub trait ModelSeam: Send + Sync {
     async fn complete(&self, ctx: &ModelContext) -> Result<ModelResponse, ModelError>;
+
+    /// 有输出上限的一次补全（上下文压缩的摘要请求专用，压缩方案 §4.2.4.3；正常回合走
+    /// `complete`/`complete_streaming`）。默认实现忽略上限——Mock/Demo 无需感知；
+    /// OpenAI 兼容实现覆写为请求体带 `max_tokens`。
+    async fn complete_bounded(
+        &self,
+        ctx: &ModelContext,
+        _max_tokens: u64,
+    ) -> Result<ModelResponse, ModelError> {
+        self.complete(ctx).await
+    }
 
     /// 流式版：产出文字增量经 `observer.on_text_delta` 实时回调，最终返回完整 [`ModelResponse`]。
     /// 默认实现回退到非流式 `complete`（把全文当作一个 delta 回调），保证 Mock/Demo 等无需改动。

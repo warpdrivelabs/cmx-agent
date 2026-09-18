@@ -91,13 +91,27 @@ pub struct NamedProvider {
 }
 
 /// `<dir>/providers.json` 的完整内容。
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ProviderFile {
     /// 当前激活的 provider id；None = 无激活（回退离线 DemoModel）。
     #[serde(default)]
     pub active: Option<String>,
     #[serde(default)]
     pub providers: Vec<NamedProvider>,
+    /// 会话超长自动压缩开关（压缩方案 §4.5）：缺省 true；false = 仅手动 /compact 与
+    /// 溢出救援生效。本轮不加设置 UI，配置文件即文档。
+    #[serde(default = "default_true")]
+    pub auto_compact: bool,
+}
+
+impl Default for ProviderFile {
+    fn default() -> Self {
+        Self {
+            active: None,
+            providers: Vec::new(),
+            auto_compact: true,
+        }
+    }
 }
 
 /// 供应商模板内单条模型元数据（ZCode modelConfigRules 的静态子集）。

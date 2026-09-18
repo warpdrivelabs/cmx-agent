@@ -8,10 +8,14 @@
 
 /// 七类错误（对齐 ZCode `settings.modelProvider.*` 的错误分类；`err_kind` 是稳定枚举值，
 /// 前端/测试可据此分支）。stable 值：auth / network / timeout / model_not_found /
-/// rate_limit / server / unknown。
+/// rate_limit / server / unknown；另有第八类 `context_overflow`（压缩方案 §4.1.5，
+/// 上下文超限——溢出救援 `is_context_overflow` 与人话话术共用此分类）。
 pub fn friendly_model_error(raw: &str) -> String {
     let kind = classify(raw);
     let friendly = match kind {
+        "context_overflow" => {
+            "对话内容超出模型上下文窗口。可输入 /compact 压缩历史后重试；若反复出现，请在 设置 → 模型 把该模型的「上下文窗口」改为真实值"
+        }
         "auth" => "API Key 无效或没有权限。请到 设置 → 模型 检查 API Key",
         "model_not_found" => {
             "接口地址或模型名不对（404）。请检查 Base URL（一般以 /v1 结尾）和模型 ID 拼写"
@@ -29,6 +33,7 @@ pub fn friendly_model_error(raw: &str) -> String {
 /// unknown 也没有话术可给，退化为截断到 80 字的原文。
 pub fn friendly_model_error_brief(raw: &str) -> String {
     match classify(raw) {
+        "context_overflow" => "对话超出模型上下文窗口，可 /compact 压缩后重试".into(),
         "auth" => "API Key 无效或没有权限。请到 设置 → 模型 检查 API Key".into(),
         "model_not_found" => "接口地址或模型名不对（404）。请检查 Base URL 与模型 ID 拼写".into(),
         "rate_limit" => "请求太频繁或额度不足（429）。请稍后再试，或检查账户余额".into(),
@@ -48,6 +53,11 @@ pub fn friendly_model_error_brief(raw: &str) -> String {
     }
 }
 
+/// 机器可判定的「上下文超限」识别（压缩方案 §4.2.6 溢出救援的触发条件）。
+pub fn is_context_overflow(msg: &str) -> bool {
+    classify(msg) == "context_overflow"
+}
+
 /// 技术原文截断（IM 卡片防撑爆；UI 侧另有 line-clamp 双保险）。
 fn truncate_raw(raw: &str) -> String {
     let s = raw.trim();
@@ -63,8 +73,29 @@ fn truncate_raw(raw: &str) -> String {
 /// 七类分类启发式：优先认 openai.rs 错误构造点写死的「HTTP {code}」标注，
 /// 其次认上游业务文案关键词（HTTP 200 但信封报错，如 invalid api key），
 /// 最后认 reqwest 传输错误文案（connect / timeout / dns）。
+/// 上下文超限特征（中英文；openai `context_length_exceeded` / anthropic
+/// `prompt is too long` / 中文网关文案）。出现在请求体超窗报错里，高度特异。
+const OVERFLOW_KEYWORDS: &[&str] = &[
+    "context_length_exceeded",
+    "maximum context length",
+    "context length exceeded",
+    "exceeds the context window",
+    "context window exceeded",
+    "prompt is too long",
+    "too many tokens",
+    "reduce the length",
+    "上下文长度",
+    "超出上下文",
+    "上下文超限",
+    "过长",
+];
+
 pub fn classify(raw: &str) -> &'static str {
     let l = raw.to_ascii_lowercase();
+    // —— 上下文超限（压缩方案 §4.1.5；最特异，最先判）——
+    if OVERFLOW_KEYWORDS.iter().any(|k| l.contains(k)) {
+        return "context_overflow";
+    }
     // —— HTTP 状态码标注（构造点保证带；前缀匹配 http 401/403/404/429 与 http 5xx）——
     for (pat, kind) in [
         ("http 401", "auth"),

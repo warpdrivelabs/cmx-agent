@@ -1029,7 +1029,7 @@ function renderEvent(log, ev, sid){
     log._closed=false; log._liveR=false; log._notifyTurn=false;   // 思考对账/回执计时豁免标记随回合重置
     log._turnStartTs=log._lastTs||Date.now(); return;   // 只记起点（计时行随首个内容事件出现）
   }
-  if(k!=="user_message" && k!=="note") ensureWorkDur(log);  // 内容事件：确保「已工作」计时行已在（实时态）。
+  if(k!=="user_message" && k!=="note" && k!=="compacted" && k!=="tool_outputs_pruned") ensureWorkDur(log);  // 内容事件：确保「已工作」计时行已在（实时态）。
                                                             // note 豁免：回合间隙的 note 若拉起计时行，
                                                             // 无人收口就成永久跳动的幽灵行（09-15 事故）。
   if(k==="text_delta"){
@@ -1082,6 +1082,47 @@ function renderEvent(log, ev, sid){
         stickScroll(log); });
     }
     stickScroll(log); return;
+  }
+  if(k==="compacted"){
+    // 压缩边界线（ZCode 同款，2026-09-18 反馈：原带边框大卡太重）：细线居中灰字、独立于回合
+    // 结构、落时间线原位；点击展开摘要全文。回放与实时走同一路径（renderHistory → renderEvent）。
+    closeCtxGroup(log);
+    const suffix = ev.reason==="manual" ? "" : ev.reason==="overflow" ? " · 窗口救援" : " · 自动";
+    const wrap = el("compact-wrap");
+    wrap.innerHTML = `<button class="compact-div" type="button" title="点击展开摘要">`
+      + `<span class="cd-line"></span><span class="cd-txt">▣ 上下文已压缩${esc(suffix)}</span><span class="cd-line"></span></button>`
+      + `<div class="cc-body md" hidden></div>`;
+    wrap.querySelector(".cc-body").innerHTML = renderMarkdown(ev.summary||"");
+    wrap.querySelector(".compact-div").addEventListener("click", () => {
+      const b = wrap.querySelector(".cc-body"); b.hidden = !b.hidden;
+    });
+    // 恒落 log 顶层（不进回合容器）：压缩边界是时间线级标记，与「正在压缩」占位线同宽同位
+    //（2026-09-18 反馈：进回合会被收窄，两条线中心对不齐）。若前方回合还开着（溢出救援的
+    // 失败回合，错误路径没有 turn_ended），就地封口——重试回合 ensureTurn 另起新 div，
+    // 保证视觉顺序 [失败回合][边界线][重试回合]。
+    if(log._turn && !log._closed){ log._closed=true; log._turn=null; }
+    log.append(wrap);
+    log._stick = true; stickScroll(log); return;
+  }
+  if(k==="tool_outputs_pruned"){
+    // prune 标记（§4.4.1）：按 call_id 找已渲染的工具行就地打「🧹 已清理」徽标并替换正文；
+    // 找不到行（分页边界）兜底一条汇总行。回放时行先于本事件渲染，顺序天然成立。
+    closeCtxGroup(log);
+    const ids = ev.call_ids || [];
+    let marked = 0;
+    ids.forEach(id => {
+      const card = log.querySelector('.tool.tcard[data-callid="' + id + '"]');
+      if (!card) return;
+      marked++;
+      card.classList.add("pruned");
+      const body = card.querySelector(".tc-body");
+      if (body) body.innerHTML = '<div class="tcmeta">🧹 已清理 · 较早的工具输出（发送给模型时以占位说明代替）</div>';
+    });
+    if (marked < ids.length) {
+      const row = el("meta note solo", "🧹 已清理 " + ids.length + " 条较早的工具输出");
+      (log._turn && !log._closed ? log._turn : log).append(row);
+    }
+    log._stick = true; stickScroll(log); return;
   }
   if(k==="user_message"){
     closeCtxGroup(log);
@@ -1246,6 +1287,15 @@ function renderEvent(log, ev, sid){
     // toast 承担，浮在回合之间的独立小字既突兀也无信息量（用户反馈 2026-09-15）。后端仍
     // 落库作审计（何时进/出只读档），仅展示层滤除；旧日志里已持久化的同类事件同此滤除。
     if((ev.text||"").startsWith("计划模式")) return;
+    // 压缩空表收尾（文本与 app.rs COMPACT_NOOP_TEXT 互为契约，改一侧须同步另一侧）：
+    // 渲染成灰字「无需压缩」边界线（ZCode 同款 2026-09-18），实时与回放同路径；落线前
+    // 封口开着的回合，与 compacted 分支同款。
+    if((ev.text||"")==="上下文已是最新，无需压缩"){
+      if(log._turn && !log._closed){ log._closed=true; log._turn=null; }
+      const d=el("compact-div");
+      d.innerHTML='<span class="cd-line"></span><span class="cd-txt">▣ 上下文已是最新，无需压缩</span><span class="cd-line"></span>';
+      log.append(d); log._stick=true; stickScroll(log); return;
+    }
     const inTurn=!!log._turn;
     // 错误 note（前缀与后端 app.rs TURN_ERROR_NOTE_PREFIX 互为契约，改一侧须同步另一侧）：
     // 落 .note-err——回合折叠后仍常显、点击行 = 展开整个回合（历史回放走同一渲染路径）。

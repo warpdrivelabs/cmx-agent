@@ -8,6 +8,7 @@
 
 pub mod agent;
 pub mod agents;
+pub mod compaction;
 pub mod error;
 pub mod event;
 pub mod exit_plan;
@@ -15,6 +16,7 @@ pub mod guard;
 pub mod model;
 pub mod question;
 pub mod session;
+pub mod token;
 pub mod tool;
 
 pub use agent::{
@@ -24,14 +26,15 @@ pub use agent::{
 };
 pub use agents::{builtin_specs, AgentSpec, ModelResolver, ToolSelection, EXPLORE, GENERAL_PURPOSE};
 pub use error::{AgentError, AgentResult};
-pub use event::{EventKind, EventSink, SessionEvent, SessionLog, StopReason};
+pub use event::{CompactionReason, EventKind, EventSink, SessionEvent, SessionLog, StopReason};
 pub use exit_plan::{ExitPlanTool, EXIT_PLAN_TOOL_NAME};
 pub use guard::{
     ApprovalGuard, AuthGuard, Guard, GuardCtx, GuardDecision, GuardPhase, GuardPipeline,
     HighRiskGuard, PlanModeGuard, PLAN_READ_TOOLS, SandboxGuard, SandboxMode, Subject,
 };
 pub use model::{
-    MockModel, ModelContext, ModelError, ModelMessage, ModelResponse, ModelSeam, TurnObserver,
+    MockModel, ModelContext, ModelError, ModelMessage, ModelResponse, ModelSeam, ModelUsage,
+    TurnObserver,
 };
 pub use question::{
     normalize_ask_input, AskOption, AskQuestion, AskUserTool, PendingQuestionInfo, QuestionOutcome,
