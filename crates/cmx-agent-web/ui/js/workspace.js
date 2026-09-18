@@ -443,7 +443,13 @@ function usagePop(){
   _usagePop.id = "usage-pop";
   _usagePop.hidden = true;
   document.body.append(_usagePop);
-  document.addEventListener("scroll", hideUsagePop, true);
+  // 弹层锚在 composer 圆环（fixed），时间线滚动不挪锚点：.log 的滚动（含流式输出时
+  // stickScroll 的编程滚动）不收起——否则会话一输出弹层就被关掉（用户反馈 2026-09-18）。
+  // 其余滚动/resize 照旧收起。
+  document.addEventListener("scroll", e => {
+    if (e.target && e.target.classList && e.target.classList.contains("log")) return;
+    hideUsagePop();
+  }, true);
   window.addEventListener("resize", hideUsagePop);
   document.addEventListener("click", e => {
     if (_usagePop && !_usagePop.hidden && !_usagePop.contains(e.target)
