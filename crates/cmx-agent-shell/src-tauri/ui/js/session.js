@@ -35,9 +35,11 @@ async function refreshTasks(){
   const list = ((resp.ok && resp.data.sessions) || []).filter(m=>!/^im-/.test(m.id));
   const box = document.getElementById("tasklist");
 
-  let wsState={current:null,workspaces:[]};
-  try{ const r=await call({cmd:"list_workspaces"}); if(r.ok) wsState=r.data; }catch(e){}
+  // 空间数据统一走 refreshWorkspaces（同步 WORKSPACE_STATE，输入区下拉/标签同源）；
+  // 旧实现这里自拉一份，侧栏看得见的空间输入区下拉看不见（两份状态不同步）。
+  await refreshWorkspaces();
   if(gen !== _rtGen) return;
+  const wsState=WORKSPACE_STATE;
   box.innerHTML="";                                    // 两份数据齐且仍是最新 → 才清空重画
   const wsById={}; (wsState.workspaces||[]).forEach(w=>{ wsById[w.id]=w; });
 

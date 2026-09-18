@@ -36,7 +36,11 @@ function openWorkspaceMenu(){
   m.style.bottom=(window.innerHeight-r.top+8)+"px";
   m.style.top="auto";
   m.hidden=false; m.classList.add("on");
-  const input=document.getElementById("workspace-search"); input.value=""; renderWorkspaceList(""); setTimeout(()=>input.focus(),0);
+  const input=document.getElementById("workspace-search"); input.value=""; renderWorkspaceList("");
+  // WORKSPACE_STATE 只在加载时拉一次，之后侧栏/其他入口新增的空间它看不见（曾表现为
+  // 侧栏有空间、下拉却「没有工作空间」）——每次展开都强制重拉，先照旧渲染再就绪后重画。
+  refreshWorkspaces().then(()=>{ if(!m.hidden) renderWorkspaceList(input.value); });
+  setTimeout(()=>input.focus(),0);
 }
 
 function renderWorkspaceList(query){
