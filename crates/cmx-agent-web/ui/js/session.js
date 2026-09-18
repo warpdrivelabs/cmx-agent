@@ -440,7 +440,7 @@ function initSessionPermSelect(t, sessionId){
 }
 
 // ── 等待队列卡片（方案 20260914 改造一）：t._queue=[{qid,text}]，按数组序全量重渲；
-// 卡片拖拽换序（HTML5 DnD）、↑ 立即（提到队首）、✎ 编辑（取回输入框）、✕ 删除。──
+// 卡片拖拽换序（HTML5 DnD）、↑ 立即（空闲=直接放行，输出中=提到队首）、✎ 编辑（取回输入框）、✕ 删除。──
 function renderQueue(t){
   const box=t.view.querySelector(".queued"); if(!box) return;
   box.innerHTML=""; box.hidden=!(t._queue&&t._queue.length);
@@ -451,7 +451,7 @@ function renderQueue(t){
   t._queue.forEach(it=>{
     const c=el("qcard"); c.draggable=true; c.dataset.qid=it.qid;
     c.innerHTML="<span class=\"qgrip\">⋮⋮⋮</span><span class=\"qtext\" title=\""+esc(it.text)+"\">"+esc(it.text)+"</span>"
-      +"<button class=\"qa qa-now\" title=\"提到队首，当前回合结束后立即发送\">↑ 立即</button>"
+      +"<button class=\"qa qa-now\" title=\"空闲时立即发送；输出中提到队首，回合结束后立即发送\">↑ 立即</button>"
       +"<button class=\"qa qa-edit\" title=\"取出编辑\">✎</button>"
       +"<button class=\"qa qa-del\" title=\"删除\">✕</button>";
     c.addEventListener("dragstart",e=>{ t._qdrag=it.qid; c.classList.add("dragging");
@@ -471,8 +471,12 @@ function renderQueue(t){
       q.splice(to,0,m); renderQueue(t); });
     c.querySelector(".qa-now").addEventListener("click",()=>{
       const i=t._queue.findIndex(x=>x.qid===it.qid); if(i<0) return;
-      const [m]=t._queue.splice(i,1); t._queue.unshift(m); renderQueue(t);
-      showToast(t._busy?"已提到队首，当前回合结束后立即发送":"已提到队首"); });
+      const [m]=t._queue.splice(i,1); renderQueue(t);
+      // 空闲=直接放行（2026-09-18 拍板）：只重排不发送的话，空闲时永远没人发它，须再发一条消息才接续。
+      // 输出中=提到队首，当前回合结束后由收尾 drain 放行（原行为）。
+      if(!t._busy) doSendTab(t,m.text);
+      else { t._queue.unshift(m); renderQueue(t); showToast("已提到队首，当前回合结束后立即发送"); }
+    });
     c.querySelector(".qa-edit").addEventListener("click",()=>{
       const i=t._queue.findIndex(x=>x.qid===it.qid); if(i<0) return;
       const [m]=t._queue.splice(i,1); renderQueue(t);
