@@ -22,9 +22,10 @@ async function scfgOpen(){
   try{ r = JSON.parse(await window.__TAURI__.core.invoke("im_config",{action:"get", reveal:true})); }catch(e){ showToast("读取失败："+e); return; }
   if(!r||!r.ok){ showToast("读取 IM 配置失败："+((r&&r.error&&r.error.message)||"未知")); return; }
   const d=r.data;
-  // 多通道：回显 active 勾选；旧文件无 active 时按 kind 单通道回显。
+  // 多通道：回显 active 勾选；旧单通道档案仅当**确已配置**时才按 kind 回显——
+  // 后端默认 kind 恒为 feishu，未配置也回落会把飞书预勾上（用户须手动取消，2026-09-18 反馈）。
   // 先把「启用态」记到暂存变量——勾选框是 scfgRenderList 动态生成的，此时还不存在。
-  const active = (d.active&&d.active.length) ? d.active : (d.kind?[d.kind]:[]);
+  const active = (d.active&&d.active.length) ? d.active : ((d.kind && d.configured) ? [d.kind] : []);
   _scfgEnabled = { feishu:active.includes("feishu"), qq:active.includes("qq"), wechat:active.includes("wechat") };
   document.getElementById("scfg-enabled").checked= d.enabled!==false;
   // 无人值守自动执行（默认开）：旧配置无该字段时后端 masked()/默认 JSON 均回 true。

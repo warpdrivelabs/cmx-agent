@@ -183,7 +183,7 @@ pub const PROVIDER_PRESETS: &[ProviderPreset] = &[
         id: "bigmodel",
         name: "智谱 BigModel",
         description: "智谱开放平台官方 API",
-        base_url: "https://open.bigmodel.cn/api/paas/v4",
+        base_url: "https://open.bigmodel.cn/api/coding/paas/v4",
         api_key_url: "https://bigmodel.cn/usercenter/proj-mgmt/apikeys",
         models: &[
             PresetModel::simple("glm-5.3", true),
