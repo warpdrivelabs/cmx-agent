@@ -403,15 +403,16 @@
             <div class="chip-row" id="med-input-types"></div>
           </div>
           <!-- 模型能力 chips 已删（2026-09-17 用户拍板）：无编辑入口，存量值保存时原样透传 -->
+          <!-- 推理两字段移入折叠块（2026-09-18 用户反馈）：原在 details 外，折叠时裸露在外 -->
+          <div class="mcfg-row">
+            <label>推理等级（从低到高）</label>
+            <div class="chip-row" id="med-reasoning-levels"></div>
+          </div>
+          <div class="mcfg-row">
+            <label>推理参数映射（JSON，可选）</label>
+            <textarea id="med-params" rows="4" placeholder='{ "reasoning_effort": "high" }'></textarea>
+          </div>
         </details>
-        <div class="mcfg-row">
-          <label>推理等级（从低到高）</label>
-          <div class="chip-row" id="med-reasoning-levels"></div>
-        </div>
-        <div class="mcfg-row">
-          <label>推理参数映射（JSON，可选）</label>
-          <textarea id="med-params" rows="4" placeholder='{ "reasoning_effort": "high" }'></textarea>
-        </div>
         <div class="mcfg-hint" id="med-hint"></div>
       </div>
       <div class="mcfg-actions">

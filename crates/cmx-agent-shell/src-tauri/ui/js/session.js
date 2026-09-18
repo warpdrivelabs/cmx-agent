@@ -430,11 +430,14 @@ async function answerQuestion(btn){
 function initSessionPermSelect(t, sessionId){
   const sel=t.view.querySelector("select[data-role=perm]");
   if(!sel) return;
-  if(typeof cmxInitDropdown==="function") cmxInitDropdown(sel);
+  // IM 会话（统一助理 + 历史散会话）整个隐藏权限下拉（2026-09-18 用户拍板）：模式切换对
+  // IM 助理无意义——后端本就拒绝其进计划模式，桌面端改下拉也影响不到 IM 来的消息。
   if(/^im-/.test(sessionId)){
-    const opt=sel.querySelector("option[value=plan]");
-    if(opt){ opt.disabled=true; opt.textContent="📋 计划模式（IM 会话不支持）"; }
+    const wrap=sel.closest(".selbtn");
+    if(wrap) wrap.style.display="none";
+    return;
   }
+  if(typeof cmxInitDropdown==="function") cmxInitDropdown(sel);
   const meta=_SESSION_META[sessionId];
   permSetSelect(sel, (meta&&meta.plan_mode)?"plan":permMode);
 }
@@ -698,7 +701,7 @@ async function openSession(sessionId, autoPrompt){
     restoreActiveSubtasks(t);      // F4 恢复：后台任务运行中刷新/重开 → 重建运行卡续流 + 子审批补画
   }
   // 权限三模式下拉（方案 20260914 改造三）：状态 = 会话 plan_mode ? plan : 全局档
-  //（im-* 会话的 plan 项已在克隆时禁用）
+  //（im-* 会话的下拉已整体隐藏，此处对其置值无害）
   const _psel=t.view.querySelector("select[data-role=perm]");
   if(_psel){
     const meta=_SESSION_META[sessionId];
