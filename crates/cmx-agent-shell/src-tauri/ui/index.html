@@ -325,8 +325,8 @@
               <label style="display:flex;align-items:center;gap:5px;font-weight:400;font-size:12.5px;color:var(--ink2);white-space:nowrap;cursor:pointer">
                 <input type="checkbox" id="scfg-enabled" checked> 启用遥控
               </label>
-              <label style="display:flex;align-items:center;gap:5px;font-weight:400;font-size:12.5px;color:var(--ink2);white-space:nowrap;cursor:pointer" title="开（默认）：IM 消息驱动回合沙箱完全放行、从不弹审批卡（无人值守没人点卡片）。关：跟随桌面「默认权限」下拉档。">
-                <input type="checkbox" id="scfg-full-access" checked> 无人值守全权
+              <label style="display:flex;align-items:center;gap:5px;font-weight:400;font-size:12.5px;color:var(--ink2);white-space:nowrap;cursor:pointer" title="开（默认）：IM 无人值守回合自动执行普通需确认工具，不等待审批卡；强制审批或高风险操作仍拒绝。关：跟随桌面「操作审批」下拉档。">
+                <input type="checkbox" id="scfg-full-access" checked> 无人值守自动执行
               </label>
               <span style="flex:1"></span>
               <button data-act="closeSettings">取消</button>
@@ -490,10 +490,10 @@
           <button class="tool-ic" title="附件（占位）"><span>＋</span></button>
           <button class="tool-ic" title="引用文件（@ 搜索工作空间文件）"><span>@</span></button>
           <button class="tool-ic" title="调用技能（/ 唤起技能菜单）"><span>/</span></button>
-          <div class="selbtn"><select data-role="perm" title="默认权限：变更前确认 · 计划模式 · 完全访问">
+          <div class="selbtn"><select data-role="perm" title="操作审批：变更前确认 · 计划模式 · 自动执行（普通操作免确认，强制审批或高风险操作仍拒绝）">
             <option value="confirm">🛡 变更前确认</option>
             <option value="plan">📋 计划模式</option>
-            <option value="full">⚡ 完全访问</option>
+            <option value="full">⚡ 自动执行</option>
           </select></div>
           <div class="sp"></div>
           <button class="model" data-act="openModelMenu" title="模型选择"><span class="mdot">◎</span> <span class="mlabel">未配置</span> ▾</button>
@@ -502,7 +502,7 @@
         </div>
       </div>
       <div class="selectors">
-        <button id="workspace-btn" class="selbtn workspace-btn" title="选择工作空间 = 沙箱工作区根">
+        <button id="workspace-btn" class="selbtn workspace-btn" title="选择工作空间，作为文件操作和命令执行的工作目录">
           <span class="wi">🗂</span><span id="workspace-label">加载中…</span><span class="chev">▾</span>
         </button>
       </div>
@@ -540,10 +540,10 @@
               <button class="tool-ic" title="附件（占位）"><span>＋</span></button>
               <button class="tool-ic" title="引用文件（@ 搜索工作空间文件）"><span>@</span></button>
               <button class="tool-ic" title="调用技能（/ 唤起技能菜单）"><span>/</span></button>
-              <div class="selbtn"><select data-role="perm" title="默认权限：变更前确认 · 计划模式 · 完全访问">
+              <div class="selbtn"><select data-role="perm" title="操作审批：变更前确认 · 计划模式 · 自动执行（普通操作免确认，强制审批或高风险操作仍拒绝）">
                 <option value="confirm">🛡 变更前确认</option>
                 <option value="plan">📋 计划模式</option>
-                <option value="full">⚡ 完全访问</option>
+                <option value="full">⚡ 自动执行</option>
               </select></div>
               <div class="sp"></div>
               <button class="model" data-act="openModelMenu" title="模型选择"><span class="mdot">◎</span> <span class="mlabel">未配置</span> ▾</button>
@@ -610,7 +610,7 @@
         <h1 class="brand-title"><span class="brand-title__text">True<span class="brand-title__accent">Mate</span></span></h1>
         <p class="brand-desc">同核多壳架构<br>形（前门）/ 核（回合循环 + 五层守卫）/ 体（cmx 引擎连接器）</p>
         <ul class="brand-features">
-          <li><span class="feature-index">01</span><div class="feature-text"><strong>本地沙箱守卫</strong><em>工作区可写 · 高危拦截 · 人在环审批</em></div></li>
+          <li><span class="feature-index">01</span><div class="feature-text"><strong>操作审批与风险拦截</strong><em>工作目录 · 按需审批 · 高危拦截</em></div></li>
           <li><span class="feature-index">02</span><div class="feature-text"><strong>cmx 引擎连接器</strong><em>flow / onto / report 变成智能体的双手</em></div></li>
           <li><span class="feature-index">03</span><div class="feature-text"><strong>多会话 tab 工作台</strong><em>浏览器式多标签，每任务独立上下文</em></div></li>
         </ul>

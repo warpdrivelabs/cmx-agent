@@ -26,7 +26,7 @@ const TOOL_LABELS = {
   web_search:"搜索", web_fetch:"网页", browser_read:"网页", browser_screenshot:"截图", browser_do:"浏览器",
   computer_use:"视觉操作", doc_read:"文档", data_describe:"数据", chart:"图表",
   task:"子智能体", plan:"计划",
-  add:"计算", echo:"回显", clock:"时钟", job:"任务", sandbox:"沙箱", proc:"进程",
+  add:"计算", echo:"回显", clock:"时钟", job:"任务", proc:"进程",
 };
 function toolLabel(name){ return TOOL_LABELS[name] || name; }
 // 副标题候选键（对齐 opencode label()：description/query/url/filePath/path/pattern/name + cmx 特有）
@@ -206,14 +206,6 @@ function completeToolCard(log, ev){
     closeCtxGroup(log);
     const t=el("tool"+(ev.ok?"":" denied"));
     t.innerHTML=renderToolResult(ev);
-    // S3 沙箱徽标：分页边界孤儿结果卡同样落档位（红队3 P2-5——尾加载首条结果恰走此路径）
-    const sb0=ev.output&&typeof ev.output==="object"?ev.output.sandbox:null;
-    if(sb0&&typeof sb0==="object"){
-      const chip=(sb0.degraded&&typeof sb0.degraded==="string")
-        ?`<span class="tc-sbx tc-sbx-deg" title="OS 沙箱不可用，已降级裸跑：${esc(String(sb0.degraded))}">⚠ 沙箱降级</span>`
-        :(sb0.wrapped?`<span class="tc-sbx" title="OS 沙箱内执行 · 出站网络档 ${esc(String(sb0.net||"open"))}">🔒 工作区沙箱</span>`:null);
-      if(chip) t.insertAdjacentHTML("afterbegin",chip+" ");
-    }
     ensureTurn(log).append(t);
     return;
   }
@@ -228,15 +220,7 @@ function completeToolCard(log, ev){
     const t1=(typeof ev.ts==="string"?Date.parse(ev.ts):ev.ts)||null;
     if(!deniedLike&&t1&&card._t0&&t1>card._t0){ const dt=t1-card._t0;
       if(dt>2000){ const chev=card.querySelector(".tc-chev"); if(chev) chev.insertAdjacentHTML("beforebegin",`<span class="tc-dur" title="自调用起（含人工审批等待）">· ${esc(fmtDur(dt))}</span>`); } }
-    // S3 沙箱徽标（方案 §6.4）：结果带 sandbox 字段（shell/git/run_tests/插件子进程类工具）时，
-    // 触发行落档位 chip。文案口径「子进程出站」（不写「网络管控」）；degraded 黄标警示。
-    const sb=o2&&typeof o2==="object"?o2.sandbox:null;
-    if(sb&&typeof sb==="object"){
-      const mode=(sb.degraded&&typeof sb.degraded==="string")
-        ?`<span class="tc-sbx tc-sbx-deg" title="OS 沙箱不可用，已降级裸跑：${esc(String(sb.degraded))}">⚠ 沙箱降级</span>`
-        :(sb.wrapped?`<span class="tc-sbx" title="OS 沙箱内执行（受限令牌/Landlock）· 出站网络档 ${esc(String(sb.net||"open"))}">🔒 工作区沙箱</span>`:null);
-      if(mode){ const chev=card.querySelector(".tc-chev"); if(chev) chev.insertAdjacentHTML("beforebegin",mode); }
-    } }
+  }
   // fs_write 成功时内容体已在建卡时渲染（正文即记录），不回退成结果 JSON；失败照常展示被拦截原因
   const isWrite = card.dataset.tool==="fs_write" && card._input && typeof card._input.content==="string";
   // ask_user 成功：问句行原地落「已询问 N 个问题」+ Q/A 体（trigger 一并重写，状态点让位给 ? 图标）

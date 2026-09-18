@@ -100,8 +100,7 @@ fn start_im_if_configured(rt: &'static tokio::runtime::Runtime, app: Arc<AgentAp
     // 个人模式：im.json `personal=true`（默认）= 所有 IM 消息直接以桌面壳当前登录用户身份
     // 跑回合，无需验证码绑定；false = 绑定模式（按发送者 open_id 鉴权）。env 来源恒绑定模式。
     let personal = resolved.personal;
-    // 无人值守全权：im.json `full_access=true`（默认）= IM 回合沙箱完全放行、从不弹审批卡
-    // （回合级覆盖档，不影响桌面）；false = 跟随桌面全局两旋钮。
+    // 无人值守审批覆盖仅作用于 IM 回合，不改变桌面策略。
     let full_access = resolved.full_access;
     // 绑定模式才需要绑定解析器（个人模式会被桥短路，但仍装配以防模式切换复用代码路径）。
     let portal_base = portal_base();
@@ -196,7 +195,7 @@ async fn im_config(
             let mut cfg = cmx_agent_im::load_im_config(&data_dir).unwrap_or_default();
             cfg.enabled = v.get("enabled").and_then(|x| x.as_bool()).unwrap_or(true);
             cfg.personal = true; // 身份模式固定个人：消息以桌面登录账号身份跑回合。
-            // 无人值守全权（默认开）：IM 回合沙箱完全放行、从不弹审批卡；false = 跟随桌面全局档。
+            // 无人值守自动执行普通操作，强制审批或高风险操作直接拒绝。
             cfg.full_access = v.get("full_access").and_then(|x| x.as_bool()).unwrap_or(true);
             // 多通道（2026-09-10）：面板多选 → `active` 列表；`kind` 同步为首个启用项
             // （兼容旧版本读文件的语义）。空列表 = 未勾任何通道。

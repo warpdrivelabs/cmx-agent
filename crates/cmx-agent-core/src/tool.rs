@@ -11,8 +11,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-use crate::guard::SandboxMode;
-
 /// 一次工具调用意图（由模型产出；`id` 关联其后的守卫裁决与结果）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolCall {
@@ -67,15 +65,24 @@ pub struct GuardHints {
     /// 是否幂等（影响重试与审批策略）。
     #[serde(default)]
     pub idempotent: bool,
-    /// 是否高危（仅在 danger-full-access 沙箱放行，否则拦截）。
+    /// 是否高危（由 [`crate::guard::HighRiskGuard`] 要求审批，不得自动批准）。
     #[serde(default)]
     pub high_risk: bool,
-    /// 需要联网（ReadOnly 沙箱下由 [`crate::guard::SandboxGuard`] 中央拒绝——工具自检之外的第二道闸）。
+    /// 需要联网（工具能力描述，不作为执行围栏）。
     #[serde(default)]
     pub network: bool,
-    /// 有写副作用（ReadOnly 沙箱下由 SandboxGuard 中央拒绝；与工具内 allows_write 自检双保险）。
+    /// 有写副作用（工具能力描述，计划模式仍按工具白名单控制）。
     #[serde(default)]
     pub writes: bool,
+    /// 写目标路径所在的入参字段名（如 fs_write 的 "path"）。非空时由
+    /// [`crate::guard::WorkspaceWriteGuard`] 做工作目录边界判定：目标在工作目录内放行，
+    /// 目录外升级为需审批。空 = 不做边界判定（该工具的审批仅由 `requires_approval` 决定）。
+    #[serde(default)]
+    pub write_path_args: Vec<String>,
+    /// 参数触发审批：`Some((字段, 取值集合))` 时，入参该字段命中集合即升级为需审批
+    /// （如 git 的写子命令 add/commit）。读子命令不在集合内 → 不额外要求审批。
+    #[serde(default)]
+    pub approval_arg_values: Option<(String, Vec<String>)>,
 }
 
 /// 工具规格（对齐 MCP：name/description/inputSchema + 守卫标注 x-guard）。
@@ -154,10 +161,10 @@ impl ToolError {
     }
 }
 
-/// 工具执行上下文（M0：沙箱模式 + 允许的文件根；后续扩展工作目录、租户、审计句柄等）。
+/// 工具执行上下文：工作区路径基准与会话归属。
 pub struct ToolCtx<'a> {
-    pub sandbox: SandboxMode,
-    pub allowed_roots: &'a [PathBuf],
+    /// 相对路径的解析基准，不是安全围栏，也不限制绝对路径访问。
+    pub workspace_roots: &'a [PathBuf],
     /// 本回合所属会话 id（方案 20260914 阶段一：子智能体每父会话并发计数、per-session 能力用）。
     pub session_id: &'a str,
 }

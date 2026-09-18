@@ -1,12 +1,12 @@
-//! `fs_edit` —— 对沙箱内文件做精确字符串替换（对齐 Claude Code Edit 语义）。
-//! 默认要求 `old_string` 唯一命中；`replace_all=true` 时替换全部。需 workspace-write 沙箱。
+//! `fs_edit` —— 对文件做精确字符串替换（对齐 Claude Code Edit 语义）。
+//! 默认要求 `old_string` 唯一命中；`replace_all=true` 时替换全部。
 
 use async_trait::async_trait;
 use cmx_agent_core::tool::GuardHints;
 use cmx_agent_core::{Tool, ToolCtx, ToolError, ToolResult, ToolSpec};
 use serde_json::{Value, json};
 
-use crate::sandbox;
+use crate::paths;
 
 pub struct FsEditTool;
 
@@ -15,7 +15,7 @@ impl Tool for FsEditTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec::new(
             "fs_edit",
-            "对工作区内文件做精确字符串替换；默认要求 old_string 唯一命中，replace_all 可替换全部",
+            "对文件做精确字符串替换；默认要求 old_string 唯一命中，replace_all 可替换全部",
         )
         .schema(json!({
             "type": "object",
@@ -31,14 +31,12 @@ impl Tool for FsEditTool {
             requires_auth: Some("fs:write".into()),
             idempotent: false,
             writes: true,
+            write_path_args: vec!["path".into()],
             ..Default::default()
         })
     }
 
     async fn invoke(&self, input: Value, ctx: &ToolCtx<'_>) -> Result<ToolResult, ToolError> {
-        if !ctx.sandbox.allows_write() {
-            return Ok(ToolResult::err("fs_edit: 当前沙箱为只读（需 workspace-write）"));
-        }
         let Some(path) = input.get("path").and_then(|v| v.as_str()) else {
             return Ok(ToolResult::err("fs_edit: 'path' is required"));
         };
@@ -54,7 +52,7 @@ impl Tool for FsEditTool {
         if old == new {
             return Ok(ToolResult::err("fs_edit: old_string 与 new_string 相同"));
         }
-        let target = match sandbox::resolve(path, ctx) {
+        let target = match paths::resolve(path, ctx) {
             Ok(p) => p,
             Err(e) => return Ok(ToolResult::err(format!("fs_edit: {e}"))),
         };
@@ -89,7 +87,6 @@ impl Tool for FsEditTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cmx_agent_core::guard::SandboxMode;
     use std::path::PathBuf;
 
     fn setup(content: &str) -> (PathBuf, Vec<PathBuf>) {
@@ -101,7 +98,7 @@ mod tests {
     #[tokio::test]
     async fn unique_replace_ok() {
         let (root, roots) = setup("hello world");
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
+        let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
         let r = FsEditTool
             .invoke(json!({"path":"f.txt","old_string":"world","new_string":"cmx"}), &ctx)
             .await
@@ -114,7 +111,7 @@ mod tests {
     #[tokio::test]
     async fn ambiguous_denied_without_replace_all() {
         let (root, roots) = setup("a a a");
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
+        let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
         let r = FsEditTool
             .invoke(json!({"path":"f.txt","old_string":"a","new_string":"b"}), &ctx)
             .await
@@ -126,7 +123,7 @@ mod tests {
     #[tokio::test]
     async fn replace_all_ok() {
         let (root, roots) = setup("a a a");
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
+        let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
         let r = FsEditTool
             .invoke(json!({"path":"f.txt","old_string":"a","new_string":"b","replace_all":true}), &ctx)
             .await
@@ -139,7 +136,7 @@ mod tests {
     #[tokio::test]
     async fn not_found_errors() {
         let (root, roots) = setup("xyz");
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
+        let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
         let r = FsEditTool
             .invoke(json!({"path":"f.txt","old_string":"nope","new_string":"b"}), &ctx)
             .await

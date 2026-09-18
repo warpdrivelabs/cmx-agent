@@ -6,7 +6,6 @@
 
 use crate::app::{AgentApp, SendOutcome};
 
-use std::path::PathBuf;
 use crate::error::AppError;
 use crate::store::SessionMeta;
 
@@ -129,25 +128,8 @@ pub enum AppRequest {
         #[serde(default)]
         api_key_value: Option<String>,
     },
-    /// 运行时切换两旋钮（沙箱能力 × 审批许可；其余 Policy 项不动）。
-    /// `sandbox`: `read-only|workspace-write|danger-full-access`；`approval`: `never|on-request|unless-trusted`。
-    SetPolicy { sandbox: String, approval: String },
-    /// 沙箱应用级配置（S0，方案 §6.3）：读取 SandboxSettings 快照（持久化落 data_dir/settings.json）。
-    GetSandboxSettings,
-    /// 沙箱应用级配置：整体替换并持久化（与 set_policy 的内存旋钮分层——重启不丢）。
-    SetSandboxSettings {
-        net: String,
-        #[serde(default)]
-        require_os: Option<bool>,
-        #[serde(default)]
-        cmd_risk_screen: Option<bool>,
-        #[serde(default)]
-        win_cache_policy: Option<String>,
-        #[serde(default)]
-        extra_write_roots: Vec<String>,
-        #[serde(default)]
-        hardened_read: bool,
-    },
+    /// 运行时切换审批策略，其余 Policy 项不动。
+    SetPolicy { approval: String },
     /// B2 读取完整模型配置，供配置面板填充表单。
     /// `id` 缺省 = 激活 provider（旧行为兼容）；有值 = 指定条目（多 provider 面板）。
     /// `reveal=true`（用户拍板 2026-09-17「点眼睛展示完整字符串」）：api_key 给**明文**——
@@ -338,11 +320,9 @@ fn error_code(e: &AppError) -> &'static str {
     }
 }
 
-/// 解析 kebab-case 枚举字符串（set_policy 的 sandbox/approval 参数），带合法值提示。
 fn parse_enum<T: serde::de::DeserializeOwned>(field: &str, raw: &str) -> Result<T, String> {
     let valid = match field {
-        "sandbox" => "read-only|workspace-write|danger-full-access",
-        "approval" => "never|on-request|unless-trusted",
+        "approval" => "never|on-request|unless-trusted|auto",
         _ => "unknown",
     };
     serde_json::from_value(serde_json::json!(raw))
@@ -361,7 +341,7 @@ pub async fn dispatch(app: &AgentApp, req: AppRequest) -> AppResponse {
 async fn dispatch_inner(app: &AgentApp, req: AppRequest) -> Result<AppResponse, AppError> {
     // 前门硬登录门：配置了门户认证的双壳里，除登录/注册/查当前用户/UI 配置外一律要求已认证。
     // 此前登录门只存在于前端路由——任何能到达前门的执行体（Web 壳的跨站请求、注入脚本）都能
-    // set_policy 拆沙箱、add_local_workspace 挂任意目录、install_plugin 装插件。
+    // set_policy 改审批、add_local_workspace 挂任意目录、install_plugin 装插件。
     // 未配置认证（CLI serve / 单元测试的本地单机模式）不强制。
     // Register/UiConfig 必须免登录：登录页即用（注册建号 / 注册按钮显隐查询）。
     if app.auth_configured()
@@ -474,67 +454,9 @@ async fn dispatch_inner(app: &AgentApp, req: AppRequest) -> Result<AppResponse, 
             if let Some(k) = api_key_value { payload.insert("api_key_value".into(), serde_json::json!(k)); }
             Ok(AppResponse::ok(app.test_model_config(serde_json::Value::Object(payload)).await?))
         }
-        AppRequest::SetPolicy { sandbox, approval } => {
-            let s: cmx_agent_core::SandboxMode = parse_enum("sandbox", &sandbox)
-                .map_err(AppError::BadRequest)?;
-            let a: cmx_agent_core::ApprovalPolicy = parse_enum("approval", &approval)
-                .map_err(AppError::BadRequest)?;
-            Ok(AppResponse::ok(app.set_policy(s, a)?))
-        }
-        AppRequest::GetSandboxSettings => {
-            let s = cmx_agent_sandbox::settings::get();
-            Ok(AppResponse::ok(serde_json::json!({
-                "net": s.net.as_str(),
-                "require_os": s.require_os,
-                "cmd_risk_screen": s.cmd_risk_screen,
-                "win_cache_policy": match s.win_cache_policy {
-                    cmx_agent_sandbox::WinCachePolicy::Redirect => "redirect",
-                    cmx_agent_sandbox::WinCachePolicy::Allow => "allow",
-                    cmx_agent_sandbox::WinCachePolicy::Deny => "deny",
-                },
-                "extra_write_roots": s.extra_write_roots.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),
-                "hardened_read": s.hardened_read,
-            })))
-        }
-        AppRequest::SetSandboxSettings { net, require_os, cmd_risk_screen, win_cache_policy, extra_write_roots, hardened_read } => {
-            let mut s = cmx_agent_sandbox::settings::get();
-            s.net = match net.to_lowercase().as_str() {
-                "open" => cmx_agent_sandbox::NetMode::Open,
-                "poison" => cmx_agent_sandbox::NetMode::Poison,
-                "enforce" => cmx_agent_sandbox::NetMode::Enforce,
-                other => return Err(AppError::BadRequest(format!("sandbox.net 非法值 '{other}'（open|poison|enforce）"))),
-            };
-            if let Some(v) = require_os { s.require_os = v; }
-            if let Some(v) = cmd_risk_screen { s.cmd_risk_screen = v; }
-            if let Some(p) = win_cache_policy {
-                s.win_cache_policy = match p.to_lowercase().as_str() {
-                    "redirect" => cmx_agent_sandbox::WinCachePolicy::Redirect,
-                    "allow" => cmx_agent_sandbox::WinCachePolicy::Allow,
-                    "deny" => cmx_agent_sandbox::WinCachePolicy::Deny,
-                    other => return Err(AppError::BadRequest(format!("win_cache_policy 非法值 '{other}'"))),
-                };
-            }
-            // extra_write_roots 防线校验（红队3 P1-2）：`..` 穿越/根路径/超量直接拒——
-            // 该字段等价于扩写围栏，不能静默单请求拆沙箱。
-            if extra_write_roots.len() > 16 {
-                return Err(AppError::BadRequest("extra_write_roots 超过 16 条上限".into()));
-            }
-            for e in &extra_write_roots {
-                let bad = e.is_empty()
-                    || e.contains("..")
-                    || e == "/"
-                    || e == "\\"
-                    || (e.len() >= 2 && e.as_bytes()[1] == b':');
-                if bad {
-                    return Err(AppError::BadRequest(format!(
-                        "extra_write_roots 非法条目 '{e}'（空串/../盘符根/卷根不允许）"
-                    )));
-                }
-            }
-            s.extra_write_roots = extra_write_roots.into_iter().map(PathBuf::from).collect();
-            s.hardened_read = hardened_read;
-            let persisted = cmx_agent_sandbox::settings::set(s.clone()).map_err(AppError::BadRequest)?;
-            Ok(AppResponse::ok(serde_json::json!({ "saved": true, "persisted": persisted, "net": s.net.as_str() })))
+        AppRequest::SetPolicy { approval } => {
+            let approval = parse_enum("approval", &approval).map_err(AppError::BadRequest)?;
+            Ok(AppResponse::ok(app.set_policy(approval)?))
         }
         AppRequest::GetModelConfig { id, reveal } => {
             Ok(AppResponse::ok(app.get_model_config(id.as_deref(), reveal.unwrap_or(false))))

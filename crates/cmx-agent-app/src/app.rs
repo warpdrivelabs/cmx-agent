@@ -644,20 +644,39 @@ impl AgentApp {
         false
     }
 
-    /// 把登录用户写进各共享槽（令牌槽 / PDP 主体 / current_user）。登录与回放共用。
+    /// 把登录用户写进各共享槽（令牌槽 / PDP 主体 / 策略主体 / current_user）。登录与回放共用。
     async fn apply_session(&self, user: LoggedInUser) {
+        // 换号防线：不登出直接登录/注册另一账号时，前任用户的「全部允许」授权与待决审批/提问
+        // 一并失效——免审批授权不得跨登录身份沿用（存量缺口，本次收敛）。
+        let switching = {
+            let cur = self.current_user.lock().expect("current_user lock");
+            cur.as_ref().is_some_and(|c| c.user_id != user.user_id)
+        };
+        if switching {
+            if let Some(a) = &self.approver {
+                a.revoke_all();
+            }
+            self.agent.questions().revoke_all();
+        }
         // 把 access_token 写入共享令牌槽 → 之后连接器读写自动带 Bearer（auth=on 服务如 cmx-flow 必需）。
         if let Some(ts) = &self.token_store
             && let Ok(mut g) = ts.write() {
                 *g = Some(user.access_token.clone());
             }
+        let subj = {
+            let mut s = cmx_agent_core::Subject::new(user.user_id.clone());
+            s.roles = user.roles.clone();
+            s
+        };
+        // 策略主体同步为真实登录用户：AuthGuard 按回合主体判权（IM 绑定主体不再串用桌面身份），
+        // 桌面回合的主体即此值，与下方 PDP 预热用的 Subject 完全一致（缓存键命中）。
+        {
+            let mut p = self.agent.policy();
+            p.subject = subj.clone();
+            self.agent.set_policy(p);
+        }
         // U13：把授权主体换成真实登录用户(userId+roles)并重热 PDP → 数据权限门按此人判定。
         if let (Some(pep), Some(identity)) = (&self.data_auth_pep, &self.auth_identity) {
-            let subj = {
-                let mut s = cmx_agent_core::Subject::new(user.user_id.clone());
-                s.roles = user.roles.clone();
-                s
-            };
             if let Ok(mut g) = identity.write() {
                 *g = subj.clone();
             }
@@ -764,6 +783,12 @@ impl AgentApp {
             && let Ok(mut g) = identity.write() {
                 *g = cmx_agent_core::Subject::new("anon");
             }
+        // 策略主体同步复位（与登录时的同步对称，防登出后桌面回合仍携带旧用户身份判权）。
+        {
+            let mut p = self.agent.policy();
+            p.subject = cmx_agent_core::Subject::new("anon");
+            self.agent.set_policy(p);
+        }
         // 会话文件同步删除 → 下次启动不回放（真登出，而非"重启还挂着旧会话"）。
         if let Some(path) = &self.auth_session_path {
             let _ = std::fs::remove_file(path);
@@ -1375,19 +1400,16 @@ impl AgentApp {
             "active": id, "persisted": persisted, "note": note }))
     }
 
-    /// 运行时切换两旋钮（前门 set_policy）：沙箱能力 × 审批许可。
-    /// 其余 Policy 项（max_steps / allowed_roots / subject）照抄当前值；仅本进程生效，不持久化。
+    /// 审批策略仅在本进程生效，不改变工作目录、主体或步数上限。
     pub fn set_policy(
         &self,
-        sandbox: cmx_agent_core::SandboxMode,
         approval: cmx_agent_core::ApprovalPolicy,
     ) -> AppResult<serde_json::Value> {
         let mut p = self.agent.policy();
-        p.sandbox = sandbox;
         p.approval = approval;
         self.agent.set_policy(p);
-        tracing::info!("cmx-agent 策略切换：sandbox={sandbox:?} · approval={approval:?}");
-        Ok(serde_json::json!({ "sandbox": sandbox, "approval": approval }))
+        tracing::info!("cmx-agent 审批策略切换：approval={approval:?}");
+        Ok(serde_json::json!({ "approval": approval }))
     }
 
     /// U15：列出插件（前门 list_plugins → master-detail 视图）。
@@ -1623,9 +1645,7 @@ impl AgentApp {
         self.send_inner(session_id, user_input, None, Some(subject.clone()), None).await
     }
 
-    /// [`Self::send`] 的回合级权限档覆盖版：`Some(覆盖档)` 时本回合（含子智能体）的
-    /// 沙箱/审批以覆盖为准——只 scope 在本回合任务树上，**不写全局档**，桌面并发回合
-    /// 不受影响。IM 无人值守「默认全权」（[`cmx_agent_core::TurnPolicyOverride::FULL_ACCESS`]）由此接入。
+    /// 审批覆盖仅作用于本回合及子智能体，不改变桌面全局策略。
     pub async fn send_with_policy(
         &self,
         session_id: &str,
@@ -2166,14 +2186,14 @@ impl AgentApp {
     pub fn select_workspace(&self, id: Option<&str>) -> AppResult<serde_json::Value> {
         let registry = self.workspace_registry()?;
         let value = registry.select(id)?;
-        registry.set_allowed_roots(&self.agent)?;
+        registry.set_workspace_roots(&self.agent)?;
         Ok(value)
     }
 
     pub fn create_workspace(&self, name: &str) -> AppResult<serde_json::Value> {
         let registry = self.workspace_registry()?;
         let value = registry.create_managed(name)?;
-        registry.set_allowed_roots(&self.agent)?;
+        registry.set_workspace_roots(&self.agent)?;
         Ok(value)
     }
 
@@ -2184,7 +2204,7 @@ impl AgentApp {
     ) -> AppResult<serde_json::Value> {
         let registry = self.workspace_registry()?;
         let value = registry.add_local(path, name)?;
-        registry.set_allowed_roots(&self.agent)?;
+        registry.set_workspace_roots(&self.agent)?;
         Ok(value)
     }
 
@@ -2192,7 +2212,7 @@ impl AgentApp {
     pub fn remove_workspace(&self, id: &str) -> AppResult<serde_json::Value> {
         let registry = self.workspace_registry()?;
         let value = registry.remove(id)?;
-        registry.set_allowed_roots(&self.agent)?;
+        registry.set_workspace_roots(&self.agent)?;
         Ok(value)
     }
 
@@ -2870,7 +2890,7 @@ impl AgentApp {
     /// 先取该会话 `session_locks` permit（与回合生命周期串行——红队 N1：防落在「回合收尾
     /// 摘 flag 之后、对账回写之前」的窗口被旧 flag 覆盖），再校验会话存在（红队 N6：防
     /// put_meta 造幽灵会话），然后写 meta + 落 Note 事件（审计 + UI 系统行）。
-    /// im-assistant / im-* 会话拒绝（IM 共享会话 + 无人值守 FULL_ACCESS，不进只读规划态）。
+    /// im-assistant / im-* 会话拒绝（IM 共享会话 + 无人值守 UNATTENDED，不进只读规划态）。
     pub async fn set_plan_mode(&self, session_id: &str, enabled: bool) -> AppResult<serde_json::Value> {
         if session_id == ASSISTANT_SESSION_ID || session_id.starts_with("im-") {
             return Err(AppError::BadRequest("IM 助理会话不支持计划模式".into()));

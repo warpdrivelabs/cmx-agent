@@ -1,12 +1,11 @@
-//! `run_tests` —— 自动识别工作区构建系统并跑测试（cargo/npm/pytest/go），或执行自定义测试命令。需 workspace-write。
+//! `run_tests` —— 自动识别工作区构建系统并跑测试（cargo/npm/pytest/go），或执行自定义测试命令。
 
 use async_trait::async_trait;
-use cmx_agent_core::guard::SandboxMode;
 use cmx_agent_core::tool::GuardHints;
 use cmx_agent_core::{Tool, ToolCtx, ToolError, ToolResult, ToolSpec};
 use serde_json::{Value, json};
 
-use crate::{proc, sandbox};
+use crate::{paths, proc};
 
 pub struct RunTestsTool;
 
@@ -47,47 +46,29 @@ impl Tool for RunTestsTool {
         }))
         .guard(GuardHints {
             requires_auth: Some("exec".into()),
+            // 与 shell 一致：执行命令前需人工审批（含自动识别与自定义命令）。
+            requires_approval: cmx_agent_core::tool::Approval::Conditional,
             idempotent: false,
             ..Default::default()
         })
     }
 
     async fn invoke(&self, input: Value, ctx: &ToolCtx<'_>) -> Result<ToolResult, ToolError> {
-        if !ctx.sandbox.allows_write() {
-            return Ok(ToolResult::err("run_tests: 需 workspace-write 沙箱"));
-        }
-        let Some(cwd) = sandbox::first_root(ctx) else {
-            return Ok(ToolResult::err("run_tests: no allowed_roots"));
+        let cwd = match paths::working_dir(ctx) {
+            Ok(p) => p,
+            Err(e) => return Ok(ToolResult::err(format!("run_tests: {e}"))),
         };
         let timeout = input
             .get("timeout_ms")
             .and_then(|v| v.as_u64())
             .unwrap_or(120_000);
-        // OS 沙箱（S1a）：WorkspaceWrite 档走受限令牌原生 spawn（profile=Shell：.git deny 生效，
-        // 测试误删 .git 同样被拒；git 类操作归 git 工具）。辅助闭包：档位分路。
-        let pctx = cmx_agent_sandbox::ProcCtx {
-            sandbox: ctx.sandbox,
-            roots: ctx.allowed_roots,
-            profile: cmx_agent_sandbox::Profile::Shell,
-        };
-        let sandboxed = ctx.sandbox == SandboxMode::WorkspaceWrite;
-
         if let Some(cmd) = input.get("command").and_then(|v| v.as_str()) {
-            // 与 shell 工具同一探测链/argv 模板（P0：不再硬编码 sh -c）。
-            let out = if sandboxed {
-                proc::run_cmd_profiled(&pctx, cmd, cwd, timeout).await
-            } else {
-                proc::run_cmd(cmd, cwd, timeout).await
-            };
+            let out = proc::run_cmd(cmd, &cwd, timeout).await;
             return Ok(ToolResult::ok(json!({"framework":"custom","command":cmd,"result":out})));
         }
-        match detect(cwd) {
+        match detect(&cwd) {
             Some((prog, args, fw)) => {
-                let out = if sandboxed {
-                    proc::run_profiled(&pctx, prog, &args, cwd, timeout).await
-                } else {
-                    proc::run(prog, &args, cwd, timeout).await
-                };
+                let out = proc::run(prog, &args, &cwd, timeout).await;
                 Ok(ToolResult::ok(json!({
                     "framework": fw,
                     "command": format!("{prog} {}", args.join(" ")),
@@ -104,7 +85,6 @@ impl Tool for RunTestsTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cmx_agent_core::guard::SandboxMode;
     use std::path::PathBuf;
 
     fn tmp() -> (PathBuf, Vec<PathBuf>) {
@@ -130,7 +110,7 @@ mod tests {
     #[tokio::test]
     async fn custom_command_runs() {
         let (root, roots) = tmp();
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
+        let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
         let r = RunTestsTool
             .invoke(json!({"command":"echo tests-ok"}), &ctx)
             .await
@@ -144,7 +124,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_framework_errors() {
         let (root, roots) = tmp();
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
+        let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
         let r = RunTestsTool.invoke(json!({}), &ctx).await.unwrap();
         assert!(!r.ok);
         std::fs::remove_dir_all(&root).ok();

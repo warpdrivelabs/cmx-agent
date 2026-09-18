@@ -506,13 +506,8 @@
 .jump-btm:hover{color:var(--ink);border-color:var(--ink2)}
 /* 提交/审批置忙：选项行禁点（.qopt 是 label，disabled 属性无效，用 pointer-events） */
 .tool.qcard.busy .qopt,.tool.approval.busy .qopt{pointer-events:none;opacity:.6}
-/* 工具卡耗时（>2s 才显示）；沙箱徽标同理——两者禁止内部换行，长命令的收缩由
-   .tc-sub 省略号承担（2026-09-17：挂工作区后徽标出现，长命令下「16 秒」「工作区
-   沙箱」各自内折成两行） */
+/* 工具卡耗时（>2s 才显示）：禁止内部换行，长命令的收缩由 .tc-sub 省略号承担 */
 .tc-dur{font-size:11px;color:var(--muted);font-weight:400;margin-left:2px;white-space:nowrap;flex:0 0 auto}
-/* S3 沙箱徽标：档位 chip（双主题令牌派生，零硬编码色值）；degraded 黄标警示 */
-.tc-sbx{font-size:11px;color:var(--muted);font-weight:400;margin-left:2px;white-space:nowrap;flex:0 0 auto}
-.tc-sbx-deg{color:var(--gold);font-weight:500}
 
 /* 拦截错误卡：红标签+正文分离（opencode ContentError 式） */
 .tcerr{display:flex;gap:8px;align-items:baseline;font-size:12px;padding:2px 0}

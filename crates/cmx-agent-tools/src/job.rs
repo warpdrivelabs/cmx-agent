@@ -30,7 +30,7 @@ impl Drop for JobHandle {
 }
 
 /// 给子进程挂一个 kill-on-close 作业。失败返回 None（降级为旧行为：只杀直接子进程），
-/// 绝不让沙箱工程问题打断命令执行。
+/// 不让作业挂载失败打断命令执行。
 pub(crate) fn attach_child_job(child_raw_handle: usize) -> Option<JobHandle> {
     unsafe {
         let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());

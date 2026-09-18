@@ -8,7 +8,7 @@ use cmx_agent_core::{Tool, ToolCtx, ToolError, ToolResult, ToolSpec};
 use serde_json::{Value, json};
 use walkdir::WalkDir;
 
-use crate::sandbox;
+use crate::paths;
 
 pub struct RepoMapTool;
 
@@ -31,6 +31,8 @@ impl Tool for RepoMapTool {
         .schema(json!({
             "type": "object",
             "properties": {
+                "path": { "type": "string", "description": "目标目录，支持绝对路径；相对路径基于工作目录，默认 '.'" },
+                "include_ignored": { "type": "boolean", "default": false, "description": "展示 .git、target 等默认省略的目录" },
                 "max_depth": { "type": "integer", "default": 3 },
                 "max_entries": { "type": "integer", "default": 400 }
             }
@@ -45,23 +47,27 @@ impl Tool for RepoMapTool {
     async fn invoke(&self, input: Value, ctx: &ToolCtx<'_>) -> Result<ToolResult, ToolError> {
         let max_depth = input.get("max_depth").and_then(|v| v.as_u64()).unwrap_or(3) as usize;
         let max_entries = input.get("max_entries").and_then(|v| v.as_u64()).unwrap_or(400) as usize;
-        let Some(root) = sandbox::first_root(ctx) else {
-            return Ok(ToolResult::err("repo_map: no allowed_roots"));
+        let path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+        let root = match paths::resolve(path, ctx) {
+            Ok(p) => p,
+            Err(e) => return Ok(ToolResult::err(format!("repo_map: {e}"))),
         };
+        let include_ignored = input.get("include_ignored").and_then(|v| v.as_bool()).unwrap_or(false);
 
         let mut lines: Vec<String> = Vec::new();
         let mut by_ext: BTreeMap<String, u64> = BTreeMap::new();
         let mut total_files = 0u64;
         let mut truncated = false;
 
-        let walker = WalkDir::new(root)
+        let walker = WalkDir::new(&root)
+            .follow_links(true)
             .min_depth(1)
             .max_depth(max_depth)
             .sort_by_file_name()
             .into_iter()
             .filter_entry(|e| {
-                // 跳过忽略目录
-                !(e.file_type().is_dir()
+                // 仅是摘要降噪选项，调用方可显式展示全部目录。
+                include_ignored || !(e.file_type().is_dir()
                     && e.file_name().to_str().map(ignored).unwrap_or(false))
             });
 
@@ -107,7 +113,6 @@ impl Tool for RepoMapTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cmx_agent_core::guard::SandboxMode;
     use std::path::PathBuf;
 
     fn setup() -> (PathBuf, Vec<PathBuf>) {
@@ -124,7 +129,7 @@ mod tests {
     #[tokio::test]
     async fn maps_tree_and_ignores_target() {
         let (root, roots) = setup();
-        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
+        let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
         let r = RepoMapTool.invoke(json!({}), &ctx).await.unwrap();
         assert!(r.ok, "{r:?}");
         let tree = r.output["tree"].as_str().unwrap();

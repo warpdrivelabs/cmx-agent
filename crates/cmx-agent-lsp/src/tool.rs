@@ -70,17 +70,13 @@ impl LspTool {
 }
 
 fn resolve(path: &str, ctx: &ToolCtx) -> Result<PathBuf, String> {
-    if ctx.allowed_roots.is_empty() {
-        return Err("no allowed_roots".into());
+    // 语言服务器仍需工作根作为 rootUri；源文件可以位于该目录之外。
+    if ctx.workspace_roots.is_empty() {
+        return Err("no workspace_roots".into());
     }
     let raw = PathBuf::from(path);
-    let abs = if raw.is_absolute() { raw } else { ctx.allowed_roots[0].join(raw) };
-    let canon = std::fs::canonicalize(&abs).unwrap_or(abs);
-    let ok = ctx.allowed_roots.iter().any(|r| {
-        let r = std::fs::canonicalize(r).unwrap_or_else(|_| r.clone());
-        canon.starts_with(&r)
-    });
-    if ok { Ok(canon) } else { Err(format!("path '{path}' escapes sandbox")) }
+    let abs = if raw.is_absolute() { raw } else { ctx.workspace_roots[0].join(raw) };
+    Ok(std::fs::canonicalize(&abs).unwrap_or(abs))
 }
 
 fn file_uri(p: &Path) -> String {
@@ -111,7 +107,7 @@ impl Tool for LspTool {
             "type": "object",
             "properties": {
                 "operation": {"type":"string","enum":["hover","definition","references","document_symbol","diagnostics"]},
-                "path": {"type":"string","description":"工作区内源文件路径"},
+                "path": {"type":"string","description":"源文件绝对路径或相对工作区路径"},
                 "line": {"type":"integer","description":"0 基行号（hover/definition/references 需要）"},
                 "character": {"type":"integer","description":"0 基列号"}
             },
@@ -141,7 +137,7 @@ impl Tool for LspTool {
             .get(&ext)
             .and_then(|c| c.language_id.clone())
             .unwrap_or_else(|| ext.trim_start_matches('.').to_string());
-        let root_uri = file_uri(&ctx.allowed_roots[0]);
+        let root_uri = file_uri(&ctx.workspace_roots[0]);
         let uri = file_uri(&abs);
 
         let client = match self.client_for(&ext, &root_uri).await {

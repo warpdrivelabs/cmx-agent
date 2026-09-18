@@ -43,7 +43,7 @@ async fn main() {
         std::env::var("CMX_AGENT_WEB_PORT").ok().as_deref(),
     );
 
-    // 数据根 & 工作区（沙箱根）：与 Tauri 壳同一数据根（ProjectDirs，CMX_AGENT_DATA_DIR 可覆盖）——
+    // 数据根 & 工作目录：与 Tauri 壳同一数据根（ProjectDirs，CMX_AGENT_DATA_DIR 可覆盖）——
     // model.json / 会话双壳共享，配置一次两壳生效。此前落 %TEMP% 会被清临时目录连坐丢失。
     let data_dir = cmx_agent_app::shared_data_dir();
     let workdir = data_dir.join("workspaces").join("default");
@@ -137,7 +137,7 @@ fn register_enabled_from_env() -> bool {
 
 /// 环回守卫：Host 必须是本机回环；带 Origin 头（浏览器跨站场景）必须是回环源。
 /// 此前 /api 零校验——任意网页可用跨站 text/plain 简单请求（无预检）驱动本机 agent
-/// （set_policy 拆沙箱 / add_local_workspace / send 全家）。同时给所有响应补 CSP，
+/// （set_policy / add_local_workspace / send 等）。同时给所有响应补 CSP，
 /// 与 Tauri 壳对齐（script-src 不放 unsafe-inline）。
 async fn loopback_guard(
     req: axum::extract::Request,

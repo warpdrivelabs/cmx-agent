@@ -27,7 +27,7 @@ async function scfgOpen(){
   const active = (d.active&&d.active.length) ? d.active : (d.kind?[d.kind]:[]);
   _scfgEnabled = { feishu:active.includes("feishu"), qq:active.includes("qq"), wechat:active.includes("wechat") };
   document.getElementById("scfg-enabled").checked= d.enabled!==false;
-  // 无人值守全权（默认开）：旧配置无该字段时后端 masked()/默认 JSON 均回 true。
+  // 无人值守自动执行（默认开）：旧配置无该字段时后端 masked()/默认 JSON 均回 true。
   document.getElementById("scfg-full-access").checked = d.full_access!==false;
   document.getElementById("scfg-app-id").value  = d.app_id||"";
   // 明文回填（用户拍板「点眼睛展示完整字符串」）：password 型平时掩码成圆点，点眼睛见全串；

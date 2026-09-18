@@ -263,17 +263,17 @@ impl WorkspaceRegistry {
         self.current_context().map(|(_, _, path)| path)
     }
 
-    pub fn set_allowed_roots(&self, agent: &cmx_agent_core::Agent) -> AppResult<()> {
+    pub fn set_workspace_roots(&self, agent: &cmx_agent_core::Agent) -> AppResult<()> {
         let roots = self.current_path().into_iter().collect();
         let mut policy = agent.policy();
-        policy.allowed_roots = roots;
+        policy.workspace_roots = roots;
         agent.set_policy(policy);
         Ok(())
     }
 
     /// 把 agent 文件根切到指定空间；空间不存在返回 `false`（调用方回落当前空间）。
     /// 回合开始前按「会话所属空间」定根用，保证 fs 工具与 @ 提示看同一个根。
-    pub fn set_allowed_roots_for(&self, id: &str, agent: &cmx_agent_core::Agent) -> AppResult<bool> {
+    pub fn set_workspace_roots_for(&self, id: &str, agent: &cmx_agent_core::Agent) -> AppResult<bool> {
         let path = {
             let state = self.state.read().expect("workspace state");
             state.items.iter().find(|w| w.id == id).map(|w| w.path.clone())
@@ -281,7 +281,7 @@ impl WorkspaceRegistry {
         match path {
             Some(path) => {
                 let mut policy = agent.policy();
-                policy.allowed_roots = vec![path];
+                policy.workspace_roots = vec![path];
                 agent.set_policy(policy);
                 Ok(true)
             }

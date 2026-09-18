@@ -4,7 +4,7 @@
 //! - [`AgentApp`]：用例级 façade（新建/发消息/列/读/删会话），每回合增量落库。
 //! - [`SessionStore`] / [`FileSessionStore`]：会话事件 JSONL 落库（可回放）。
 //! - [`protocol`]：JSON 前门命令协议 = Tauri `invoke` 边界 = Headless 请求体。
-//! - [`DesktopAppBuilder`]：一键装配（沙箱根=工作区 + 内置工具 + 五层守卫）。
+//! - [`DesktopAppBuilder`]：一键装配工作目录、内置工具与守卫。
 //!
 //! Tauri WebView 外壳（`shell/`）在联网装好 tauri 后启用；它只是把 `invoke` 转成 [`protocol::dispatch`]，
 //! 不含任何业务逻辑——故本 crate 全离线可测，桌面壳只是"最后一层薄壳"。

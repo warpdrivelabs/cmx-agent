@@ -26,7 +26,7 @@ mod plan;
 pub mod proc;
 mod repo_map;
 mod run_tests;
-mod sandbox;
+mod paths;
 mod shell;
 mod task;
 #[cfg(test)]

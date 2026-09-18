@@ -1,4 +1,4 @@
-//! `glob` —— 在工作区内按 glob 模式列出文件（如 `**/*.rs`）。结果为相对工作根的路径。
+//! `glob` —— 在指定目录（默认工作目录）按 glob 模式列出文件（如 `**/*.rs`）。结果为相对工作根的路径。
 
 use async_trait::async_trait;
 use cmx_agent_core::tool::GuardHints;
@@ -6,18 +6,19 @@ use cmx_agent_core::{Tool, ToolCtx, ToolError, ToolResult, ToolSpec};
 use serde_json::{Value, json};
 use walkdir::WalkDir;
 
-use crate::sandbox;
+use crate::paths;
 
 pub struct GlobTool;
 
 #[async_trait]
 impl Tool for GlobTool {
     fn spec(&self) -> ToolSpec {
-        ToolSpec::new("glob", "在工作区内按 glob 模式列出文件（如 **/*.rs），返回相对路径")
+        ToolSpec::new("glob", "在指定目录（默认工作目录）按 glob 模式列出文件（如 **/*.rs），返回相对路径")
             .schema(json!({
                 "type": "object",
                 "properties": {
-                    "pattern": { "type": "string", "description": "glob，如 **/*.rs、src/*.ts" },
+                    "path": { "type": "string", "description": "搜索目录，支持绝对路径；相对路径基于工作目录，默认 '.'" },
+                    "pattern": { "type": "string", "description": "相对搜索目录的 glob，如 **/*.rs、src/*.ts" },
                     "max_results": { "type": "integer", "default": 500 }
                 },
                 "required": ["pattern"]
@@ -34,8 +35,10 @@ impl Tool for GlobTool {
             return Ok(ToolResult::err("glob: 'pattern' is required"));
         };
         let max = input.get("max_results").and_then(|v| v.as_u64()).unwrap_or(500) as usize;
-        let Some(root) = sandbox::first_root(ctx) else {
-            return Ok(ToolResult::err("glob: no allowed_roots (sandbox denies all fs)"));
+        let path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+        let root = match paths::resolve(path, ctx) {
+            Ok(p) => p,
+            Err(e) => return Ok(ToolResult::err(format!("glob: {e}"))),
         };
         let pat = match glob::Pattern::new(pattern) {
             Ok(p) => p,
@@ -48,11 +51,11 @@ impl Tool for GlobTool {
         };
         let mut hits = Vec::new();
         let mut truncated = false;
-        for entry in WalkDir::new(root).follow_links(false).into_iter().flatten() {
+        for entry in WalkDir::new(&root).follow_links(true).into_iter().flatten() {
             if !entry.file_type().is_file() {
                 continue;
             }
-            let rel = match entry.path().strip_prefix(root) {
+            let rel = match entry.path().strip_prefix(&root) {
                 Ok(r) => r,
                 Err(_) => continue,
             };
@@ -77,7 +80,6 @@ impl Tool for GlobTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cmx_agent_core::guard::SandboxMode;
     use std::path::PathBuf;
 
     fn setup() -> (PathBuf, Vec<PathBuf>) {
@@ -92,7 +94,7 @@ mod tests {
     #[tokio::test]
     async fn matches_rs_files() {
         let (root, roots) = setup();
-        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
+        let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
         let r = GlobTool.invoke(json!({"pattern":"**/*.rs"}), &ctx).await.unwrap();
         assert!(r.ok, "{r:?}");
         assert_eq!(r.output["count"], 2);
@@ -102,7 +104,7 @@ mod tests {
     #[tokio::test]
     async fn matches_single_dir() {
         let (root, roots) = setup();
-        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
+        let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
         let r = GlobTool.invoke(json!({"pattern":"*.md"}), &ctx).await.unwrap();
         assert_eq!(r.output["count"], 1);
         std::fs::remove_dir_all(&root).ok();

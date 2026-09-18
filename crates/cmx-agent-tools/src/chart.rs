@@ -1,12 +1,12 @@
 //! `chart` —— 把数据渲染成图表（手写 SVG，无额外依赖）：bar 柱状 / line 折线 / pie 饼图。
-//! 写一份 .svg 到工作区（save_as），并把 SVG 内联返回给前端展示。需 workspace-write（写文件）。
+//! 可将 SVG 写到 save_as 指定路径，并内联返回给前端展示。
 
 use async_trait::async_trait;
 use cmx_agent_core::tool::GuardHints;
 use cmx_agent_core::{Tool, ToolCtx, ToolError, ToolResult, ToolSpec};
 use serde_json::{Value, json};
 
-use crate::sandbox;
+use crate::paths;
 
 pub struct ChartTool;
 
@@ -27,7 +27,7 @@ impl Tool for ChartTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec::new(
             "chart",
-            "把数据渲染成图表 SVG（bar 柱状 / line 折线 / pie 饼图）。给 labels + series；可 save_as 存到工作区。",
+            "把数据渲染成图表 SVG（bar 柱状 / line 折线 / pie 饼图）。给 labels + series；可 save_as 存到指定路径。",
         )
         .schema(json!({
             "type": "object",
@@ -42,11 +42,11 @@ impl Tool for ChartTool {
                     }, "required": ["values"] },
                     "description": "一或多个数据系列（pie 只取第一个）"
                 },
-                "save_as": { "type": "string", "description": "可选：存到工作区的 .svg 文件名" }
+                "save_as": { "type": "string", "description": "可选：.svg 文件路径（相对工作目录或绝对路径）" }
             },
             "required": ["type","labels","series"]
         }))
-        .guard(GuardHints { requires_auth: Some("fs:write".into()), idempotent: false, writes: true, ..Default::default() })
+        .guard(GuardHints { requires_auth: Some("fs:write".into()), idempotent: false, writes: true, write_path_args: vec!["save_as".into()], ..Default::default() })
     }
 
     async fn invoke(&self, input: Value, ctx: &ToolCtx<'_>) -> Result<ToolResult, ToolError> {
@@ -87,10 +87,7 @@ impl Tool for ChartTool {
         // 可选写文件
         let mut saved: Option<String> = None;
         if let Some(name) = input.get("save_as").and_then(|v| v.as_str()) {
-            if !ctx.sandbox.allows_write() {
-                return Ok(ToolResult::err("chart: save_as 需 workspace-write 沙箱"));
-            }
-            match sandbox::resolve(name, ctx) {
+            match paths::resolve(name, ctx) {
                 Ok(p) => match std::fs::write(&p, svg.as_bytes()) {
                     Ok(()) => saved = Some(p.display().to_string()),
                     Err(e) => return Ok(ToolResult::err(format!("chart: 写文件失败 {e}"))),
@@ -290,7 +287,6 @@ fn fmt_num(v: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cmx_agent_core::guard::SandboxMode;
     use std::path::PathBuf;
 
     fn ctx_roots() -> Vec<PathBuf> {
@@ -300,7 +296,7 @@ mod tests {
     #[tokio::test]
     async fn bar_chart_returns_svg() {
         let roots = ctx_roots();
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
+        let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
         let r = ChartTool
             .invoke(json!({"type":"bar","title":"销量","labels":["一月","二月","三月"],
                 "series":[{"name":"A","values":[10,20,15]}]}), &ctx)
@@ -316,7 +312,7 @@ mod tests {
     #[tokio::test]
     async fn pie_and_save() {
         let roots = ctx_roots();
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
+        let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
         let r = ChartTool
             .invoke(json!({"type":"pie","labels":["北","南"],"series":[{"values":[60,40]}],"save_as":"p.svg"}), &ctx)
             .await
@@ -331,7 +327,7 @@ mod tests {
     #[tokio::test]
     async fn empty_errors() {
         let roots = ctx_roots();
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
+        let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
         let r = ChartTool.invoke(json!({"type":"bar","labels":[],"series":[]}), &ctx).await.unwrap();
         assert!(!r.ok);
         std::fs::remove_dir_all(&roots[0]).ok();

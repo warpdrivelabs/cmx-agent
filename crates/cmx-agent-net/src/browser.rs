@@ -1,7 +1,7 @@
-//! `browser_read`（headless Chrome 渲染 JS 后取正文）+ `browser_screenshot`（截图存工作区）。
+//! `browser_read`（headless Chrome 渲染 JS 后取正文）+ `browser_screenshot`（截图存本地）。
 //!
 //! 走**子进程调本机 Chrome/Chromium**（`--headless --dump-dom` / `--screenshot`），不引 CDP/WebSocket 依赖。
-//! URL 来自模型 → 过 [`crate::ensure_public_url`] SSRF 基线；截图输出路径过沙箱围栏。
+//! URL 来自模型 → 过 [`crate::ensure_public_url`] SSRF 基线；截图相对路径按首个工作根或当前目录解析。
 //! 相比 [`crate::WebFetchTool`]（静态 HTML），本工具能读 **JS 渲染后**的动态页面（SPA 等）。
 
 use std::path::{Path, PathBuf};
@@ -147,51 +147,17 @@ pub(crate) async fn render_screenshot(url: &str, out_path: &Path, w: u32, h: u32
     }
 }
 
-// ── 沙箱输出路径解析（截图落工作区）：镜像 cmx-agent-office 的 canonicalize_partial ──
+// ── 截图输出路径：绝对路径直接使用，相对路径按首个工作根或当前目录解析 ──
 fn resolve_out(path: &str, ctx: &ToolCtx) -> Result<PathBuf, String> {
-    if ctx.allowed_roots.is_empty() {
-        return Err("no allowed_roots".into());
-    }
     let raw = PathBuf::from(path);
-    let abs = if raw.is_absolute() {
-        raw
-    } else {
-        ctx.allowed_roots[0].join(raw)
+    if raw.is_absolute() {
+        return Ok(raw);
+    }
+    let root = match ctx.workspace_roots.first() {
+        Some(root) => root.clone(),
+        None => std::env::current_dir().map_err(|e| format!("current_dir: {e}"))?,
     };
-    let canon = canonicalize_partial(&abs);
-    let ok = ctx.allowed_roots.iter().any(|r| {
-        let r = std::fs::canonicalize(r).unwrap_or_else(|_| normalize(r));
-        canon.starts_with(&r)
-    });
-    if ok {
-        Ok(abs)
-    } else {
-        Err(format!("path '{path}' escapes sandbox"))
-    }
-}
-fn canonicalize_partial(p: &Path) -> PathBuf {
-    for anc in p.ancestors() {
-        if let Ok(c) = std::fs::canonicalize(anc) {
-            if let Ok(rest) = p.strip_prefix(anc) {
-                return c.join(rest);
-            }
-            return c;
-        }
-    }
-    normalize(p)
-}
-fn normalize(p: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for c in p.components() {
-        match c {
-            std::path::Component::ParentDir => {
-                out.pop();
-            }
-            std::path::Component::CurDir => {}
-            o => out.push(o.as_os_str()),
-        }
-    }
-    out
+    Ok(root.join(raw))
 }
 
 /// `browser_read`：Chrome 无头渲染(执行 JS)后取正文。`allow_private`：放开私网(builder 从 env 读)。
@@ -258,7 +224,7 @@ impl Tool for BrowserReadTool {
     }
 }
 
-/// `browser_screenshot`：Chrome 无头把网页截图存工作区(PNG)。需 workspace-write。
+/// `browser_screenshot`：Chrome 无头把网页截图保存到指定路径(PNG)。
 #[derive(Default)]
 pub struct BrowserScreenshotTool {
     pub allow_private: bool,
@@ -276,13 +242,13 @@ impl Tool for BrowserScreenshotTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec::new(
             "browser_screenshot",
-            "用本机 Chrome 无头把网页截图为 PNG 存到工作区。给 path(工作区内.png) + 可选 width/height。需 workspace-write。",
+            "用本机 Chrome 无头把网页截图为 PNG 存到指定路径。给 path(.png) + 可选 width/height；相对路径按首个工作根或当前目录解析。",
         )
         .schema(json!({
             "type": "object",
             "properties": {
                 "url": { "type": "string", "description": "网页 URL（http/https）" },
-                "path": { "type": "string", "description": "工作区内输出 PNG 路径" },
+                "path": { "type": "string", "description": "输出 PNG 路径（绝对路径或相对工作根/当前目录）" },
                 "width": { "type": "integer", "default": 1280 },
                 "height": { "type": "integer", "default": 900 },
                 "wait_ms": { "type": "integer", "default": 4000 }
@@ -293,15 +259,13 @@ impl Tool for BrowserScreenshotTool {
             requires_auth: Some("net:browser".into()),
             idempotent: false,
             network: true,
-            writes: true, // 截图落盘工作区
+            writes: true, // 截图写入本地文件
+            write_path_args: vec!["path".into()],
             ..Default::default()
         })
     }
 
     async fn invoke(&self, input: Value, ctx: &ToolCtx<'_>) -> Result<ToolResult, ToolError> {
-        if !ctx.sandbox.allows_write() {
-            return Ok(ToolResult::err("browser_screenshot: 需 workspace-write 沙箱"));
-        }
         let Some(url) = input.get("url").and_then(|v| v.as_str()) else {
             return Ok(ToolResult::err("browser_screenshot: 'url' 必填"));
         };
@@ -351,12 +315,50 @@ mod tests {
     }
 
     #[test]
-    fn escapes_sandbox_rejected() {
-        let roots = vec![PathBuf::from("/tmp/cmx-u8-root")];
-        std::fs::create_dir_all(&roots[0]).ok();
-        let ctx = ToolCtx { sandbox: cmx_agent_core::guard::SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
-        assert!(resolve_out("shot.png", &ctx).is_ok());
-        assert!(resolve_out("../escape.png", &ctx).is_err());
+    fn screenshot_paths_allow_outside_workspace() {
+        let root = tmp_profile();
+        let workspace = root.join("workspace");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::create_dir(&workspace).unwrap();
+        let roots = vec![workspace.clone(), root.join("second")];
+        let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
+        assert_eq!(resolve_out("shot.png", &ctx).unwrap(), workspace.join("shot.png"));
+        let outside = root.join("shot.png");
+        assert_eq!(resolve_out(outside.to_str().unwrap(), &ctx).unwrap(), outside);
+        let relative = resolve_out("../shot.png", &ctx).unwrap();
+        // 只在本测试创建的临时目录内写入，验证根外输出可落盘。
+        std::fs::write(&relative, b"test output").unwrap();
+        assert_eq!(std::fs::read(&outside).unwrap(), b"test output");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn screenshot_paths_without_workspace_use_current_dir() {
+        let ctx = ToolCtx { workspace_roots: &[], session_id: "test" };
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(resolve_out("shot.png", &ctx).unwrap(), cwd.join("shot.png"));
+        let absolute = tmp_profile().join("shot.png");
+        assert_eq!(resolve_out(absolute.to_str().unwrap(), &ctx).unwrap(), absolute);
+    }
+
+    #[tokio::test]
+    async fn browser_tools_still_reject_private_and_non_http_urls() {
+        let ctx = ToolCtx { workspace_roots: &[], session_id: "test" };
+        let output = tmp_profile().join("shot.png");
+        for (url, error) in [
+            ("http://127.0.0.1/", "拒绝访问内网地址"),
+            ("http://169.254.169.254/", "拒绝访问内网地址"),
+            ("file:///unused.html", "仅支持 http/https"),
+        ] {
+            let r = BrowserReadTool::default().invoke(json!({"url":url}), &ctx).await.unwrap();
+            assert!(!r.ok, "{r:?}");
+            assert!(r.output["error"].as_str().unwrap().contains(error), "{r:?}");
+            let r = BrowserScreenshotTool::default()
+                .invoke(json!({"url":url,"path":output}), &ctx).await.unwrap();
+            assert!(!r.ok, "{r:?}");
+            assert!(r.output["error"].as_str().unwrap().contains(error), "{r:?}");
+        }
+        assert!(!output.exists());
     }
 
     // 真机 Chrome 管线：用 file:// 验 JS 渲染 + 截图（本环境 http 被墙，file 可用）。无 Chrome 则跳过。

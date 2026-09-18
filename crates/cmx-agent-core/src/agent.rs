@@ -1,5 +1,5 @@
 //! 回合循环（方案图 4）。一个 **Turn** = 多个 **Step**；每个 Step：
-//! ① 模型推理 → ② 工具路由 → ③ 护栏前置(pre) → ④ 审批闸门 → ⑤ 沙箱执行 → ⑥ 观察回灌(post)。
+//! ① 模型推理 → ② 工具路由 → ③ 护栏前置(pre) → ④ 审批闸门 → ⑤ 工具执行 → ⑥ 观察回灌(post)。
 //! 回合内循环直到：模型不再要工具（Completed）/ 达到 max_steps（MaxSteps）/ 被停机（Stopped）。
 //!
 //! 不变量落地：每一步"模型可见"的产物（模型输出、工具调用、工具结果）都先 append 进日志，
@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::error::{AgentError, AgentResult};
 use crate::event::{EventKind, StopReason};
-use crate::guard::{GuardCtx, GuardDecision, GuardPhase, GuardPipeline, SandboxMode, Subject};
+use crate::guard::{GuardCtx, GuardDecision, GuardPhase, GuardPipeline, Subject};
 use crate::model::{ModelContext, ModelResponse, ModelSeam};
 use crate::question::{normalize_ask_input, QuestionOutcome, QuestionService};
 use crate::session::Session;
@@ -30,7 +30,7 @@ tokio::task_local! {
     pub static SUBAGENT_TURN: bool;
 }
 
-/// 审批策略（两旋钮之「许可」——何时问你）。对齐 codex `approval_policy`。
+/// 审批策略：决定如何解决守卫的审批要求；不改变权限或计划模式约束。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ApprovalPolicy {
@@ -41,24 +41,24 @@ pub enum ApprovalPolicy {
     OnRequest,
     /// 逢写必问：任何非幂等工具都要审批（谨慎档）。
     UnlessTrusted,
+    /// 无人值守：仅自动批准 Conditional 且非 high_risk 的要求；其余审批直接拒绝。
+    /// 交互提问与 exit_plan 同样不挂起等待用户。
+    Auto,
 }
 
-/// 回合级权限档覆盖：本回合的沙箱/审批两旋钮以覆盖为准（其余 Policy 字段照抄全局档）。
+/// 回合级审批档覆盖：本回合以覆盖为准（其余 Policy 字段照抄全局档）。
 /// 只作用于显式 scope 的那个回合任务树（含 `task` 子智能体——子回合在同任务树上继承），
-/// **不写共享全局档**，桌面并发回合互不影响。IM 无人值守「默认全权」即经它实现。
+/// **不写共享全局档**，桌面并发回合互不影响。IM 无人值守即经它实现。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TurnPolicyOverride {
-    pub sandbox: SandboxMode,
     pub approval: ApprovalPolicy,
 }
 
 impl TurnPolicyOverride {
-    /// 无人值守全权档（IM 遥控默认）：沙箱完全放行 + 从不打断。条件级人审被
-    /// [`crate::guard::ApprovalGuard`] 的 danger 豁免跳过（不弹卡）；Always 级硬人审被
-    /// `policy:never` 直接拒绝——宁拒不挂，无人值守没有「等 300 秒超时」的受害者。
-    pub const FULL_ACCESS: Self = Self {
-        sandbox: SandboxMode::DangerFullAccess,
-        approval: ApprovalPolicy::Never,
+    /// 无人值守档（IM 遥控默认）：条件级、非高危审批自动放行；硬人审与高危操作
+    /// 直接拒绝，不弹卡也不挂起。权限守卫与计划模式仍然生效。
+    pub const UNATTENDED: Self = Self {
+        approval: ApprovalPolicy::Auto,
     };
 }
 
@@ -98,8 +98,8 @@ pub trait Approver: Send + Sync {
     /// 返回 (是否批准, 审批人标识)。
     async fn resolve(&self, call: &ToolCall, reason: &str) -> (bool, String);
 
-    /// 该会话是否已被授予「本对话全部允许」——若是，内核跳过审批直接放行（不再弹审批卡）。默认 false。
-    /// 交互式审批者据此实现「本对话全部允许」：用户点一次后，本会话后续需审批的工具全部自动放行。
+    /// 该会话是否已被授予「本对话全部允许」。默认 false。
+    /// 交互策略下可跳过普通审批；Always / high_risk 仍逐次询问，无人值守策略优先。
     fn is_preapproved(&self, _session_id: &str) -> bool {
         false
     }
@@ -160,24 +160,23 @@ impl Approver for AutoApprover {
     }
 }
 
-/// 内核策略：两旋钮 + 步数上限 + 允许的文件根 + 主体。
+/// 内核策略：审批策略 + 步数上限 + 工作区根 + 主体。
 #[derive(Debug, Clone)]
 pub struct Policy {
-    pub sandbox: SandboxMode,
     pub approval: ApprovalPolicy,
     /// 单回合最大 Step 数（防失控循环）。
     pub max_steps: usize,
-    pub allowed_roots: Vec<PathBuf>,
+    /// 相对路径的解析基准，不限制工具可访问的路径。
+    pub workspace_roots: Vec<PathBuf>,
     pub subject: Subject,
 }
 
 impl Default for Policy {
     fn default() -> Self {
         Self {
-            sandbox: SandboxMode::WorkspaceWrite,
             approval: ApprovalPolicy::OnRequest,
             max_steps: 500,
-            allowed_roots: vec![],
+            workspace_roots: vec![],
             subject: Subject::new("anon"),
         }
     }
@@ -225,7 +224,7 @@ pub struct Agent {
     /// （CLI/e2e）——内核只认 `enabled()` 门控；非交互来源（IM/无人值守/子回合）在 pre 相
     /// 直接回灌 dismissed，不发生挂起。
     questions: Arc<QuestionService>,
-    /// 策略（两旋钮等）。RwLock：`Agent` 经 Arc 共享，两旋钮须运行时可切（前门 `set_policy`）；
+    /// 策略（审批策略等）。RwLock：`Agent` 经 Arc 共享，审批策略须运行时可切（前门 `set_policy`）；
     /// 回合内按快照读取（clone），写入方仅 set_policy。
     policy: std::sync::RwLock<Policy>,
 }
@@ -260,13 +259,12 @@ impl Agent {
         *self.policy.write().expect("policy lock poisoned") = p;
     }
 
-    /// 回合内生效的策略快照：任务树上挂了 [`TURN_POLICY_OVERRIDE`] 时，其 sandbox/approval
-    /// 盖过全局档（IM 无人值守全权等回合级场景），其余字段照抄全局档。回合流程内的
-    /// 守卫/审批判定一律经此取值；全局档直读只允许在回合外（UI 展示、set_policy）。
+    /// 回合内生效的策略快照：任务树上挂了 [`TURN_POLICY_OVERRIDE`] 时，其 approval
+    /// 盖过全局档（IM 无人值守等回合级场景），其余字段照抄全局档。回合流程内的
+    /// 守卫/审批判定一律经此取值；同批工具与审批共用一次快照。
     fn effective_policy(&self) -> Policy {
         let mut p = self.policy();
         if let Ok(ov) = TURN_POLICY_OVERRIDE.try_with(|ov| *ov) {
-            p.sandbox = ov.sandbox;
             p.approval = ov.approval;
         }
         p
@@ -378,10 +376,9 @@ impl Agent {
             .await
     }
 
-    /// [`Self::run_turn_observed_as_cancellable`] 的回合级权限档覆盖版：`Some(覆盖档)` 时
-    /// 本回合（含 `task` 子智能体——同任务树继承 task-local）的沙箱/审批以覆盖为准，
-    /// 不写全局档；`None` 与原方法完全一致。IM 无人值守「默认全权」由此实现——
-    /// IM 桥驱动的回合全权执行，桌面回合仍走全局两旋钮。
+    /// [`Self::run_turn_observed_as_cancellable`] 的回合级审批档覆盖版：`Some(覆盖档)` 时
+    /// 本回合（含 `task` 子智能体——同任务树继承 task-local）的审批以覆盖为准，
+    /// 不写全局档；`None` 与原方法完全一致。IM 桥使用无人值守档，桌面回合仍走全局审批策略。
     ///
     /// `plan`：计划模式活开关（§7.1）。`Some(flag)` 时整个回合 future 在
     /// [`TURN_PLAN_MODE`] 作用域内——守卫每批现读，exit_plan 批准后同回合放行写；
@@ -574,7 +571,7 @@ impl Agent {
             question: Option<QuestionTicket>,
         }
 
-        // 本批工具调用的策略快照（两旋钮运行时可切；一批内取一致值；回合级覆盖优先）。
+        // 本批工具调用的策略快照（审批策略运行时可切；一批内取一致值；回合级覆盖优先）。
         let policy = self.effective_policy();
         let subject = turn_subject.unwrap_or(&policy.subject);
         // —— ①–④ 前置(串行)：落库调用、路由、pre 守卫、审批 ——
@@ -608,8 +605,8 @@ impl Agent {
                     phase: GuardPhase::PreExecute,
                     call,
                     spec: &spec,
-                    sandbox: policy.sandbox,
                     subject,
+                    workspace_roots: roots.unwrap_or(&policy.workspace_roots),
                     result: None,
                 };
                 self.guards.run(&gctx)
@@ -634,8 +631,9 @@ impl Agent {
                 }
                 GuardDecision::NeedApproval { reason } => {
                     // 审批闸门（可交互挂起等待用户）——串行，避免多卡片竞态。
-                    let (ok, note) =
-                        self.resolve_approval(session, call, &spec.name, &reason).await;
+                    let (ok, note) = self
+                        .resolve_approval(session, call, &spec, &reason, policy.approval)
+                        .await;
                     if !ok {
                         self.push_result(
                             session,
@@ -655,8 +653,9 @@ impl Agent {
                             .resolve_approval(
                                 session,
                                 call,
-                                &spec.name,
+                                &spec,
                                 "policy UnlessTrusted: non-idempotent tool",
+                                policy.approval,
                             )
                             .await;
                         if !ok {
@@ -676,13 +675,13 @@ impl Agent {
             if spec.user_interactive {
                 // 门控矩阵：挂起只允许发生在"用户看得见、答得了"的桌面交互回合。
                 // - 服务降级（CLI/e2e 装配）：fail-open，直接 dismissed；
-                // - policy=Never（无人值守档，含 IM FULL_ACCESS 覆盖）：对齐"宁拒不挂"语义，
+                // - policy=Never/Auto（含 IM UNATTENDED 覆盖）：对齐"宁拒不挂"语义，
                 //   IM tick 串行内联 await 回合，挂起会冻死整条 IM 通道；
                 // - task 子回合：TurnCancel 旗标在子回合内不可达、事件不实时外送，挂起即失控。
                 //   （红队 N4 的内核级闸门：子代理另有 ToolRegistry 层收走交互控制面工具，双保险。）
                 let subagent = SUBAGENT_TURN.try_with(|s| *s).unwrap_or(false);
                 if !self.questions.enabled()
-                    || policy.approval == ApprovalPolicy::Never
+                    || matches!(policy.approval, ApprovalPolicy::Never | ApprovalPolicy::Auto)
                     || subagent
                 {
                     let note = if spec.name == crate::exit_plan::EXIT_PLAN_TOOL_NAME {
@@ -722,7 +721,7 @@ impl Agent {
                         rx,
                         kind: TicketKind::ExitPlan {
                             plan: plan_text,
-                            roots: roots.unwrap_or(&policy.allowed_roots).to_vec(),
+                            roots: roots.unwrap_or(&policy.workspace_roots).to_vec(),
                         },
                     });
                 } else {
@@ -773,13 +772,12 @@ impl Agent {
             return;
         }
 
-        // —— ⑤ 沙箱执行(并发)：只有工具体 invoke() 并发；ToolCtx 只读、被所有 future 共享借用。
+        // —— ⑤ 工具执行(并发)：只有工具体 invoke() 并发；ToolCtx 只读、被所有 future 共享借用。
         // join_all 在同一任务上协作式并发：子智能体/网络 I/O 型工具在此段真并行推进。
         let tctx = ToolCtx {
-            sandbox: policy.sandbox,
-            // 回合级文件根：app 层按「会话所属空间」快照传入（None=回落共享 policy 的当前空间根）。
-            // 旧实现直接读共享 policy.allowed_roots——两会话并发回合互相覆盖对方的工作空间根（lost update）。
-            allowed_roots: roots.unwrap_or(&policy.allowed_roots),
+            // 回合级路径基准：app 按「会话所属空间」快照传入，不写共享策略，避免并发覆盖。
+            // None 回落本批策略快照；这些根只解析相对路径，不限制工具访问。
+            workspace_roots: roots.unwrap_or(&policy.workspace_roots),
             // 会话归属（阶段一）：子智能体每父会话并发计数等 per-session 能力用。
             session_id: &session.id,
         };
@@ -819,8 +817,8 @@ impl Agent {
                     phase: GuardPhase::PostExecute,
                     call: p.call,
                     spec: &p.spec,
-                    sandbox: policy.sandbox,
                     subject,
+                    workspace_roots: roots.unwrap_or(&policy.workspace_roots),
                     result: Some(&result),
                 };
                 self.guards.run(&gctx)
@@ -931,32 +929,45 @@ impl Agent {
         }
     }
 
-    /// 触发并记录一次人在环审批，返回 (是否批准, 用户附言——拒绝时给模型的自愈提示)。
+    /// 记录并解决审批要求，返回 (是否批准, 用户附言——拒绝时给模型的自愈提示)。
+    /// 使用本批策略快照，不在等待审批前后重新读取共享策略。
     async fn resolve_approval(
         &self,
         session: &mut Session,
         call: &ToolCall,
-        tool: &str,
+        spec: &ToolSpec,
         reason: &str,
+        approval: ApprovalPolicy,
     ) -> (bool, Option<String>) {
         let summary = call_summary(call);
-        if self.effective_policy().approval == ApprovalPolicy::Never {
-            // 不打断策略：视 NeedApproval 为拒绝
+        if matches!(approval, ApprovalPolicy::Never | ApprovalPolicy::Auto) {
+            // 无人值守不调用 Approver（包括会话预授权）：Never 全拒，Auto 仅放行低风险条件审批。
+            let approved = approval == ApprovalPolicy::Auto
+                && spec.guard.requires_approval == Approval::Conditional
+                && !spec.guard.high_risk;
             session.log.append(EventKind::ApprovalRequested {
                 call_id: call.id.clone(),
-                tool: tool.to_string(),
+                tool: spec.name.clone(),
                 reason: reason.to_string(),
                 summary,
             });
             session.log.append(EventKind::ApprovalResolved {
                 call_id: call.id.clone(),
-                approved: false,
-                by: "policy:never".into(),
+                approved,
+                by: if approval == ApprovalPolicy::Auto {
+                    "policy:auto"
+                } else {
+                    "policy:never"
+                }
+                .into(),
             });
-            return (false, None);
+            return (approved, None);
         }
-        // 本对话已授予「全部允许」→ 自动放行（留审计事件，不再弹审批卡）。
-        if self.approver.is_preapproved(&session.id) {
+        // 会话「全部允许」不能代替 Always / high_risk 的逐次审批。
+        if spec.guard.requires_approval != Approval::Always
+            && !spec.guard.high_risk
+            && self.approver.is_preapproved(&session.id)
+        {
             session.log.append(EventKind::ApprovalResolved {
                 call_id: call.id.clone(),
                 approved: true,
@@ -966,7 +977,7 @@ impl Agent {
         }
         session.log.append(EventKind::ApprovalRequested {
             call_id: call.id.clone(),
-            tool: tool.to_string(),
+            tool: spec.name.clone(),
             reason: reason.to_string(),
             summary,
         });

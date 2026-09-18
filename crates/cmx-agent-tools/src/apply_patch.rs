@@ -1,4 +1,4 @@
-//! `apply_patch` —— 应用 Codex 风格补丁包（Add/Update/Delete File，含 hunk）。需 workspace-write。
+//! `apply_patch` —— 应用 Codex 风格补丁包（Add/Update/Delete File，含 hunk）。
 //!
 //! 格式：
 //! ```text
@@ -20,7 +20,7 @@ use cmx_agent_core::tool::GuardHints;
 use cmx_agent_core::{Tool, ToolCtx, ToolError, ToolResult, ToolSpec};
 use serde_json::{Value, json};
 
-use crate::sandbox;
+use crate::paths;
 
 pub struct ApplyPatchTool;
 
@@ -162,6 +162,8 @@ impl Tool for ApplyPatchTool {
         }))
         .guard(GuardHints {
             requires_auth: Some("fs:write".into()),
+            // 补丁路径内嵌于文本、无法在守卫按字段做目录边界判定，统一需人工审批（安全从严）。
+            requires_approval: cmx_agent_core::tool::Approval::Conditional,
             idempotent: false,
             writes: true,
             ..Default::default()
@@ -169,9 +171,6 @@ impl Tool for ApplyPatchTool {
     }
 
     async fn invoke(&self, input: Value, ctx: &ToolCtx<'_>) -> Result<ToolResult, ToolError> {
-        if !ctx.sandbox.allows_write() {
-            return Ok(ToolResult::err("apply_patch: 当前沙箱为只读（需 workspace-write）"));
-        }
         let Some(patch) = input.get("patch").and_then(|v| v.as_str()) else {
             return Ok(ToolResult::err("apply_patch: 'patch' is required"));
         };
@@ -179,20 +178,17 @@ impl Tool for ApplyPatchTool {
             Ok(o) => o,
             Err(e) => return Ok(ToolResult::err(format!("apply_patch: {e}"))),
         };
-        // 先全部校验路径在沙箱内（任一越界则整体拒绝，避免半应用）。
-        for op in &ops {
-            let p = match op {
-                Op::Add { path, .. } | Op::Delete { path } | Op::Update { path, .. } => path,
-            };
-            if let Err(e) = sandbox::resolve(p, ctx) {
-                return Ok(ToolResult::err(format!("apply_patch: {e}")));
-            }
-        }
         let mut changed = Vec::new();
         for op in &ops {
+            let path = match op {
+                Op::Add { path, .. } | Op::Delete { path } | Op::Update { path, .. } => path,
+            };
+            let target = match paths::resolve(path, ctx) {
+                Ok(p) => p,
+                Err(e) => return Ok(ToolResult::err(format!("apply_patch: {e}"))),
+            };
             match op {
                 Op::Add { path, content } => {
-                    let target = sandbox::resolve(path, ctx).unwrap();
                     if let Some(parent) = target.parent() {
                         let _ = std::fs::create_dir_all(parent);
                     }
@@ -202,14 +198,12 @@ impl Tool for ApplyPatchTool {
                     changed.push(json!({"op":"add","path":path}));
                 }
                 Op::Delete { path } => {
-                    let target = sandbox::resolve(path, ctx).unwrap();
                     if let Err(e) = std::fs::remove_file(&target) {
                         return Ok(ToolResult::err(format!("apply_patch: 删 {path} 失败 {e}")));
                     }
                     changed.push(json!({"op":"delete","path":path}));
                 }
                 Op::Update { path, hunks } => {
-                    let target = sandbox::resolve(path, ctx).unwrap();
                     let content = match std::fs::read_to_string(&target) {
                         Ok(c) => c,
                         Err(e) => return Ok(ToolResult::err(format!("apply_patch: 读 {path} 失败 {e}"))),
@@ -233,7 +227,6 @@ impl Tool for ApplyPatchTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cmx_agent_core::guard::SandboxMode;
     use std::path::PathBuf;
 
     fn tmp() -> (PathBuf, Vec<PathBuf>) {
@@ -263,7 +256,7 @@ mod tests {
         let (root, roots) = tmp();
         std::fs::write(root.join("upd.txt"), "keep\nold\ntail\n").unwrap();
         std::fs::write(root.join("del.txt"), "bye").unwrap();
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
+        let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
         let patch = "*** Begin Patch\n\
 *** Add File: new/added.txt\n\
 +hello\n\
@@ -286,12 +279,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn escape_denied_whole_patch() {
-        let (root, roots) = tmp();
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
-        let patch = "*** Begin Patch\n*** Add File: ../evil.txt\n+x\n*** End Patch\n";
+    async fn patch_can_add_update_and_delete_outside_workspace() {
+        let (base, _) = tmp();
+        let roots = vec![base.join("workspace")];
+        std::fs::create_dir_all(&roots[0]).unwrap();
+        let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
+        let patch = "*** Begin Patch\n*** Add File: ../outside.txt\n+old\n*** Update File: ../outside.txt\n@@\n-old\n+new\n*** End Patch\n";
         let r = ApplyPatchTool.invoke(json!({"patch":patch}), &ctx).await.unwrap();
-        assert!(!r.ok);
-        std::fs::remove_dir_all(&root).ok();
+        assert!(r.ok, "{r:?}");
+        assert_eq!(std::fs::read_to_string(base.join("outside.txt")).unwrap(), "new");
+        let r = ApplyPatchTool.invoke(json!({"patch":"*** Delete File: ../outside.txt\n"}), &ctx).await.unwrap();
+        assert!(r.ok, "{r:?}");
+        assert!(!base.join("outside.txt").exists());
+        std::fs::remove_dir_all(base).unwrap();
     }
 }

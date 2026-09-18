@@ -96,11 +96,10 @@ impl Tool for UpdatePlanTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cmx_agent_core::guard::SandboxMode;
     use std::path::PathBuf;
 
     fn ctx(roots: &[PathBuf]) -> ToolCtx<'_> {
-        ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: roots, session_id: "test" }
+        ToolCtx { workspace_roots: roots, session_id: "test" }
     }
 
     #[tokio::test]

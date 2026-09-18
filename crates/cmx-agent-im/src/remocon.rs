@@ -46,9 +46,7 @@ pub struct ImRemoconConfig {
     /// 鉴权，群聊多用户用，需在桌面端取码完成绑定）。
     #[serde(default = "default_true")]
     pub personal: bool,
-    /// 无人值守全权（默认 true）：IM 回合以回合级覆盖档执行——沙箱完全放行、从不弹审批卡
-    /// （审批档 Never：条件级人审被 danger 豁免，Always 级硬人审直接拒绝，不挂 300 秒）。
-    /// false = IM 回合跟随桌面全局两旋钮（桌面切了什么档 IM 就是什么档）。
+    /// 无人值守默认开启：自动执行普通操作，强制审批或高风险操作直接拒绝；关闭时跟随桌面审批策略。
     #[serde(default = "default_true")]
     pub full_access: bool,
     #[serde(default)]
@@ -250,9 +248,7 @@ pub struct ResolvedIm {
     pub allow: Option<HashSet<String>>,
     /// 个人模式（im.json 来源读 `personal`；env 来源恒 false = 绑定模式，env 语义不变）。
     pub personal: bool,
-    /// 无人值守全权（im.json 来源读 `full_access`，默认 true；env 来源恒 true）：IM 回合以
-    /// 回合级覆盖档 [`cmx_agent_core::TurnPolicyOverride::FULL_ACCESS`] 执行——沙箱完全放行、
-    /// 从不打断（不弹审批卡）。false = IM 回合跟随桌面全局两旋钮（与桌面会话同档）。
+    /// 无人值守审批覆盖（im.json 默认 true；env 来源恒 true），关闭时跟随桌面审批策略。
     pub full_access: bool,
     /// `"env"`（开发联调）或 `"im.json"`（GUI 面板）。
     pub source: &'static str,

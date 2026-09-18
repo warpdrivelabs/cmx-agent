@@ -5,7 +5,6 @@
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 
-use cmx_agent_core::guard::SandboxMode;
 use cmx_agent_core::{Tool, ToolCtx};
 use cmx_agent_net::{WebFetchTool, WebSearchTool};
 use serde_json::json;
@@ -71,11 +70,7 @@ async fn web_fetch_and_search_via_mock() {
     std::thread::sleep(std::time::Duration::from_millis(250)); // 等 serve_forever 就绪
 
     let roots = vec![std::path::PathBuf::from("/tmp")];
-    let ctx = ToolCtx {
-         sandbox: SandboxMode::WorkspaceWrite,
-         allowed_roots: &roots,
-         session_id: "test",
-     };
+    let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
 
     // ── web_fetch：抽正文 + 标题，剔除 script/head（allow_private 放开 localhost）──
     let r = WebFetchTool { allow_private: true }

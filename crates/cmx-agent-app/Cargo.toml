@@ -11,7 +11,6 @@ unsafe_code = "forbid"
 [dependencies]
 cmx-agent-core.workspace = true
 cmx-agent-tools.workspace = true
-cmx-agent-sandbox.workspace = true
 cmx-agent-connectors.workspace = true
 cmx-agent-model.workspace = true
 cmx-agent-lsp.workspace = true

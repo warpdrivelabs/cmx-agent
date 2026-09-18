@@ -5,9 +5,8 @@
 
 ## 这是什么
 
-「形 / 核 / 体」三层混合智能体的 **核 + 多壳后端**。当前 **M2 推进中（14 crate，325 测试全绿、
-clippy 零告警）**：M0 内核（回合循环/守卫/会话日志/模型缝）之上已落地——会话 JSONL 落库、本地文件
-工具沙箱、JSON 前门协议（= Tauri invoke 边界）、真实模型缝（OpenAI 兼容 + 断流自愈）、企业连接器、
+「形 / 核 / 体」三层混合智能体的 **核 + 多壳后端**。当前 **M2 推进中（主 workspace 13 crate）**：M0 内核（回合循环/守卫/会话日志/模型缝）之上已落地——会话 JSONL 落库、本地文件
+工具、JSON 前门协议（= Tauri invoke 边界）、真实模型缝（OpenAI 兼容 + 断流自愈）、企业连接器、
 MCP/LSP/办公/联网/IM/插件面（飞书/QQ/微信 ClawBot/Telegram 四通道）、Web 桌面壳与 Tauri 原生壳、
 Windows 原生支持（shell 探测链 + Job Object）。
 
@@ -37,9 +36,11 @@ echo '{"cmd":"send","session_id":"s1","text":"算 2+3"}' | \
    新增模型可见信息时，务必同时新增对应 `EventKind` 并落日志——`invariant_tests.rs` 会守住这条。
 2. **fail-closed**：守卫管道遇第一个非 Allow 即短路拒绝；工具失败转 `ToolResult::err` 回灌（不 panic、
    不中止回合）。禁止"出错就放行"。
-3. **两旋钮正交**：`SandboxMode`（能力）与 `ApprovalPolicy`（许可）独立；改一个别默认改另一个。
+3. **审批与计划模式独立**：`ApprovalPolicy` 控制操作确认，计划模式保持只读白名单；工具按当前系统账号权限执行，不再提供执行沙箱或路径围栏。
 4. **工具即契约**：每个 `Tool` 必须给出 `GuardHints`（requires_auth / requires_approval /
-   idempotent / high_risk）——护栏据此施闸，不靠猜。
+   idempotent / high_risk / write_path_args / approval_arg_values）——护栏据此施闸，不靠猜。
+   写目标路径类工具声明 `write_path_args`（工作目录内放行、目录外需审批）；参数分支类工具
+   （如 git 子命令）声明 `approval_arg_values`（命中写值集合即需审批）。
 5. **crate 分层**：`core`（无 IO 内核）← `tools`（内置工具）← `cli`（前门）。core 的集成测试用
    tools 走 dev-dep 环（Cargo 允许），不得让 core 的 **normal** 依赖反向指向 tools。
 
@@ -48,8 +49,7 @@ echo '{"cmd":"send","session_id":"s1","text":"算 2+3"}' | \
 | crate | 职责 |
 |---|---|
 | `cmx-agent-core` | 内核：agent/回合循环 · guard/守卫 · event/会话日志 · model/模型缝 · session · tool/注册表 |
-| `cmx-agent-sandbox` | OS 级进程沙箱（S0-S3）：Windows 受限令牌+ACL+原生 spawn / Linux Landlock+seccomp / 能力探测 fail-closed / 命令风险屏 / SandboxSettings |
-| `cmx-agent-tools` | 内置工具：fs_* / shell（Windows 探测链+Job Object+受限 spawn）· grep/glob/git/run_tests · chart 等 |
+| `cmx-agent-tools` | 内置工具：fs_* / shell（Windows 探测链+Job Object）· grep/glob/git/run_tests · chart 等 |
 | `cmx-agent-connectors` | 企业连接器：cmx-flow/rules/onto/report 微服务对接 + 门户认证 |
 | `cmx-agent-model` | 真实模型缝：OpenAI 兼容（流式 + 断流自愈重试）· 多 provider 配置 |
 | `cmx-agent-mcp` / `cmx-agent-lsp` | 外部 MCP server 接入 / LSP 代码智能 |
@@ -76,9 +76,9 @@ echo '{"cmd":"send","session_id":"s1","text":"算 2+3"}' | \
    append-only 内核日志同构。回合号从日志派生（`Session::next_turn_no`），故重启可续。
 8. **会话 id 即路径**：`FileSessionStore` 必须挡路径注入（`/`、`..`、`\0`）——`store_tests.rs` 守住。
 9. **前门错误进信封**：`dispatch` 永不 panic/Err，错误转 `{ok:false,error:{code,...}}` 稳定错误码。
-10. **两旋钮运行时可切**：`Agent::policy` 经 RwLock 持有，前门 `set_policy` 热切
-   （`sandbox: read-only|workspace-write|danger-full-access` × `approval: never|on-request|unless-trusted`）；
-   回合内按快照读取，改 `Policy` 相关代码须保持快照语义。
+10. **审批策略运行时可切**：`Agent::policy` 经 RwLock 持有，前门 `set_policy` 只热切
+   `approval: never|on-request|unless-trusted|auto`；回合内按快照读取，改 `Policy` 须保持快照语义。
+   `auto` 仅自动批准普通条件审批，强制审批或高风险操作直接拒绝；`never` 拒绝所有审批要求。
 11. **Windows 适配（2026-09-08 方案，详见 `../../documents/plans/20260908_cmx-agent_*.md`）**：
    子进程一律走 `proc::run`/`run_cmd`，**禁止再硬编码 shell**——探测链 `CMX_AGENT_SHELL > pwsh >
    powershell > sh(git.exe 反推) > cmd` 缓存于进程内；PowerShell 命令须带 UTF-8 前缀；
@@ -86,14 +86,14 @@ echo '{"cmd":"send","session_id":"s1","text":"算 2+3"}' | \
 
 ## 路线（M0→M6，见方案图 10）
 
-M0 核 ✅ → M1 桌面壳(Tauri)+本地文件 → M2 工具平面(接 cmx-*)+技能 → M3 五层护栏接地+OS/WASM 沙箱
+M0 核 ✅ → M1 桌面壳(Tauri)+本地文件 → M2 工具平面(接 cmx-*)+技能 → M3 权限与审批接地
 → M4 多智能体编排 → M5 IM 远程+记忆 → M6 Rust 核下沉+GA。**每个里程碑都要有可回放会话日志 +
 护栏红队用例 + 真机 e2e 断言。**
 
 ## 测试口径
 
 改内核后至少跑：`cargo test` 全绿 + `cargo clippy --all-targets` 零告警。
-新增能力必须带测试；安全相关（守卫/沙箱/审批）必须含"该拒被拒"的负例。
+新增能力必须带测试；安全相关（守卫/权限/审批）必须含"该拒被拒"的负例。
 
 ## 前端开发规范（frontend/，agent 与开发者必读）
 

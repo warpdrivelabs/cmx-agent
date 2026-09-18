@@ -3,7 +3,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use cmx_agent_core::guard::SandboxMode;
 use cmx_agent_core::{Tool, ToolCtx};
 use cmx_agent_plugin::{
     build_plugin_tools, install_manifest, load_plugins, scan_plugin_summaries, uninstall_plugin,
@@ -15,13 +14,6 @@ fn tmp(tag: &str) -> PathBuf {
     let p = std::env::temp_dir().join(format!("cmx-plugin-{tag}-{n}"));
     std::fs::create_dir_all(&p).unwrap();
     p
-}
-// S1b 沙箱语义（方案 §6.1）：子进程 cwd=first_root，根必须真实存在（fail-closed 校验）——
-// Windows 上 "/tmp" 非真实路径，改用真实临时目录。
-fn ctx_roots() -> Vec<PathBuf> {
-    let d = std::env::temp_dir().join(format!("cmx-plugin-roots-{}", std::process::id()));
-    std::fs::create_dir_all(&d).unwrap();
-    vec![d]
 }
 
 #[tokio::test]
@@ -53,13 +45,43 @@ return;
     assert_eq!(tools.len(), 1);
     assert_eq!(tools[0].spec().name, "say_hi");
 
-    let roots = ctx_roots();
-    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
+    let roots = vec![dir.clone()];
+    let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
     let r = tools[0].invoke(json!({"who":"world"}), &ctx).await.unwrap();
     assert!(r.ok, "{r:?}");
     let stdout = r.output["stdout"].as_str().unwrap_or_default().trim();
     assert_eq!(stdout, "hi world"); // {who} 占位替换 + 命令执行
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn command_plugin_can_use_working_directory_outside_workspace() {
+    use cmx_agent_plugin::{CommandPluginTool, PluginManifest};
+    use cmx_agent_tools::proc;
+    let base = tmp("outside-cwd");
+    let roots = vec![base.join("workspace")];
+    let outside = base.join("outside");
+    std::fs::create_dir_all(&roots[0]).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let shell = proc::resolve_shell();
+    let argv = proc::shell_argv(&shell, "echo plugin-outside > marker.txt").unwrap();
+    let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
+    for working_dir in ["../outside", outside.to_str().unwrap()] {
+        let manifest: PluginManifest = serde_json::from_value(json!({
+            "name":"write_marker", "kind":"command", "command":shell.program,
+            "args":argv[1..], "working_dir":working_dir, "requires_approval":true,
+        })).unwrap();
+        let tool = CommandPluginTool::new(manifest);
+        assert_eq!(tool.spec().guard.requires_approval, cmx_agent_core::tool::Approval::Always);
+        let r = tool.invoke(json!({}), &ctx).await.unwrap();
+        assert!(r.ok, "{r:?}");
+        assert_eq!(r.output["exit_code"], 0, "{r:?}");
+        assert!(r.output.get("sandbox").is_none());
+        assert!(!std::fs::read(outside.join("marker.txt")).unwrap().is_empty());
+        assert!(!roots[0].join("marker.txt").exists());
+        std::fs::remove_file(outside.join("marker.txt")).unwrap();
+    }
+    std::fs::remove_dir_all(base).unwrap();
 }
 
 #[tokio::test]
@@ -90,8 +112,8 @@ httpd=socketserver.TCPServer(("127.0.0.1",0),H); print(httpd.server_address[1]);
     )).unwrap();
 
     let (tools, _) = load_plugins(&dir);
-    let roots = ctx_roots();
-    let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
+    let roots = vec![dir.clone()];
+    let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
     let r = tools[0].invoke(json!({"city":"BJ"}), &ctx).await.unwrap();
     let _ = child.kill(); let _ = child.wait();
     assert!(r.ok, "{r:?}");
@@ -105,8 +127,8 @@ async fn plugin_install_then_list_roundtrip() {
     let dir = tmp("inst");
     let tools = build_plugin_tools(&dir); // 空目录 → 仅 list + install
     let install: Arc<dyn Tool> = tools.iter().find(|t| t.spec().name == "plugin_install").unwrap().clone();
-    let roots = ctx_roots();
-    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
+    let roots = vec![dir.clone()];
+    let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
     let r = install.invoke(json!({"manifest":{"name":"echo_p","kind":"command","command":"echo","args":["x"]}}), &ctx).await.unwrap();
     assert!(r.ok, "{r:?}");
     assert_eq!(r.output["installed"], true);
@@ -153,8 +175,8 @@ async fn wasm_plugin_invokes_module() {
     assert_eq!(tools.len(), 1, "wasm 为同步载体，应产出 1 个工具");
     assert_eq!(tools[0].spec().name, "adder");
 
-    let roots = ctx_roots();
-    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
+    let roots = vec![dir.clone()];
+    let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
     let r = tools[0].invoke(json!({"a":2,"b":3}), &ctx).await.unwrap();
     assert!(r.ok, "{r:?}");
     assert_eq!(r.output["kind"], "wasm");
@@ -210,8 +232,8 @@ httpd=socketserver.TCPServer(("127.0.0.1",0),H); print(httpd.server_address[1]);
     let all = build_plugin_tools(&dir);
     let market: Arc<dyn Tool> = all.iter().find(|t| t.spec().name == "plugin_marketplace").unwrap().clone();
     let install: Arc<dyn Tool> = all.iter().find(|t| t.spec().name == "plugin_install").unwrap().clone();
-    let roots = ctx_roots();
-    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
+    let roots = vec![dir.clone()];
+    let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
 
     // ① 浏览市场：列出 2 个可安装插件
     let r = market.invoke(json!({ "url": url }), &ctx).await.unwrap();

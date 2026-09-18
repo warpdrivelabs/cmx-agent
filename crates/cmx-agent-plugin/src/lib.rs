@@ -91,7 +91,7 @@ pub struct PluginManifest {
     /// wasm 运行时二进制（缺省 wasmer；亦可环境变量 CMX_AGENT_WASM_RUNTIME）。
     #[serde(default)]
     pub runtime: Option<String>,
-    /// 子进程工作目录（S1b，方案 §6.1）：缺省 = 工作区根（第一个 allowed_roots）；
+    /// 子进程工作目录（S1b，方案 §6.1）：缺省 = 工作区根（第一个 workspace_roots）；
     /// 相对路径按工作区根解释。注意：wasmer WASI 默认 preopen cwd——改 cwd 即改模块文件视图。
     #[serde(default)]
     pub working_dir: Option<String>,
@@ -112,15 +112,12 @@ impl PluginManifest {
             } else {
                 cmx_agent_core::tool::Approval::Never
             },
-            idempotent: !self.requires_approval,
-            // D5（方案 §十）：OS 沙箱就绪后 high_risk 硬拒退役——写/执行类插件改为
-            // 「沙箱内放行 + Always 审批」（此前 WorkspaceWrite 下 HighRiskGuard 审批前硬拦，
-            // 插件到不了执行段，OS 沙箱受益面失真；connectors.rs 同类注释场景一并核过：连接器
-            // 为 in-process HTTP 工具，不受进程沙箱影响，维持现状标注）。
+            idempotent: false, // requires_approval 不代表幂等；覆盖/写副作用一律按非幂等从严
             high_risk: false,
-            // 插件（http/command/wasm）能力任意：按可联网+可写标注，ReadOnly 沙箱中央全禁（最保守）。
+            // 插件能力任意，保守标注可联网、可写；审批仍由清单控制。
             network: true,
             writes: true,
+            ..Default::default()
         }
     }
     fn tool_spec(&self) -> ToolSpec {
@@ -261,43 +258,17 @@ pub fn read_mcp_tools(plugins_dir: &Path, name: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// 从一份（刚安装的）清单构造其**同步载体工具**（http/command/wasm），供热注册。
-/// mcp（需异步连接）/未知 kind → None（这类仍需重启由壳异步装配）。`plugins_dir` 为 plugins 根，
-/// S1b 子进程 cwd 解析（方案 §6.1 语义对照表）：manifest.working_dir 绝对路径原样、
-/// 相对路径按**工作区根**（第一个 allowed_roots）解释；缺省 = 工作区根；无 roots = 继承
-/// agent 进程 cwd（保持旧语义——旧实现不设 cwd）。
-pub(crate) fn proc_cwd(ctx: &ToolCtx<'_>, manifest: &PluginManifest) -> Option<std::path::PathBuf> {
-    if let Some(wd) = &manifest.working_dir {
-        let p = std::path::Path::new(wd);
-        if p.is_absolute() {
-            return Some(p.to_path_buf());
-        }
-        return ctx.allowed_roots.first().map(|r| r.join(p));
+/// 子进程 cwd：绝对 working_dir 原样使用；相对值基于第一工作根，无根则基于进程 cwd。
+pub(crate) fn proc_cwd(ctx: &ToolCtx<'_>, manifest: &PluginManifest) -> Option<PathBuf> {
+    let path = Path::new(manifest.working_dir.as_deref().unwrap_or("."));
+    if path.is_absolute() {
+        return Some(path.to_path_buf());
     }
-    ctx.allowed_roots.first().cloned().or_else(|| std::env::current_dir().ok())
+    let base = ctx.workspace_roots.first().cloned().or_else(|| std::env::current_dir().ok())?;
+    Some(base.join(path))
 }
 
-/// S1b 插件子进程统一出口：WorkspaceWrite 档走受限令牌原生 spawn（profile=Plugin），
-/// 其余档沿用既有 proc::run（无包装）。返回 run/run_profiled 的结构化 JSON。
-pub(crate) async fn plugin_spawn(
-    ctx: &ToolCtx<'_>,
-    program: &str,
-    args: &[String],
-    cwd: &std::path::Path,
-    timeout_ms: u64,
-) -> serde_json::Value {
-    if ctx.sandbox == cmx_agent_core::guard::SandboxMode::WorkspaceWrite {
-        let pctx = cmx_agent_sandbox::ProcCtx {
-            sandbox: ctx.sandbox,
-            roots: ctx.allowed_roots,
-            profile: cmx_agent_sandbox::Profile::Plugin,
-        };
-        cmx_agent_tools::proc::run_profiled(&pctx, program, args, cwd, timeout_ms).await
-    } else {
-        cmx_agent_tools::proc::run(program, args, cwd, timeout_ms).await
-    }
-}
-
+/// 从已安装清单构造同步工具（http/command/wasm），供热注册；mcp/未知 kind 返回 None。
 /// 内部按净化名拼插件目录以解析 wasm 相对 module。
 pub fn tool_for_installed(plugins_dir: &Path, manifest: &Value) -> Option<Arc<dyn Tool>> {
     let m: PluginManifest = serde_json::from_value(manifest.clone()).ok()?;
@@ -462,6 +433,7 @@ impl Tool for PluginInstallTool {
             high_risk: true,
             network: true, // 安装=市场拉取 + 落盘插件目录
             writes: true,
+            ..Default::default()
         })
     }
     async fn invoke(&self, input: Value, _ctx: &ToolCtx<'_>) -> Result<ToolResult, ToolError> {
@@ -530,6 +502,24 @@ mod tests {
         let arr = plugin_summaries(std::slice::from_ref(&m));
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["homepage"], "https://wasmer.io/");
+    }
+
+    #[test]
+    fn process_working_directory_resolution() {
+        let cwd = std::env::current_dir().unwrap();
+        let roots = vec![cwd.join("first"), cwd.join("second")];
+        let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
+        let mut manifest: PluginManifest = serde_json::from_value(json!({
+            "name":"cwd", "kind":"command", "command":"unused",
+        })).unwrap();
+        assert_eq!(proc_cwd(&ctx, &manifest).unwrap(), roots[0].join("."));
+        manifest.working_dir = Some("../outside".into());
+        assert_eq!(proc_cwd(&ctx, &manifest).unwrap(), roots[0].join("../outside"));
+        let empty_ctx = ToolCtx { workspace_roots: &[], session_id: "test" };
+        assert_eq!(proc_cwd(&empty_ctx, &manifest).unwrap(), cwd.join("../outside"));
+        manifest.working_dir = Some(cwd.to_string_lossy().into_owned());
+        assert_eq!(proc_cwd(&ctx, &manifest).unwrap(), cwd);
+        assert_eq!(proc_cwd(&empty_ctx, &manifest).unwrap(), cwd);
     }
 
     #[test]

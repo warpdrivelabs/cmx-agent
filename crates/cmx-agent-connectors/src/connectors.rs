@@ -209,11 +209,11 @@ impl Tool for FlowStartInstance {
             requires_auth: Some("flow:write".into()),
             requires_approval: Approval::Always,
             idempotent: false,
-            // 企业写=仅审批门：Approval::Always 经 X4 人工批准后执行；不标 high_risk，
-            // 否则 HighRiskGuard 会在桌面壳 WorkspaceWrite 沙箱下于审批前硬拦（走不到审批卡）。
+            // 企业写由 PEP 授权，并经 Approval::Always 人工批准后执行。
             high_risk: false,
-            network: true, // 连接器走 HTTP 调企业引擎：ReadOnly 沙箱中央禁网
-            writes: false, // 写副作用由 PEP/审批门管，不进 ReadOnly 写闸
+            network: true, // 连接器走 HTTP 调企业引擎
+            writes: false, // 远端业务写入，非本地文件写入
+            ..Default::default()
         })
     }
 
@@ -268,11 +268,11 @@ impl Tool for FlowCompleteTask {
             requires_auth: Some("flow:write".into()),
             requires_approval: Approval::Always,
             idempotent: false,
-            // 企业写=仅审批门：Approval::Always 经 X4 人工批准后执行；不标 high_risk，
-            // 否则 HighRiskGuard 会在桌面壳 WorkspaceWrite 沙箱下于审批前硬拦（走不到审批卡）。
+            // 企业写由 PEP 授权，并经 Approval::Always 人工批准后执行。
             high_risk: false,
-            network: true, // 连接器走 HTTP 调企业引擎：ReadOnly 沙箱中央禁网
-            writes: false, // 写副作用由 PEP/审批门管，不进 ReadOnly 写闸
+            network: true, // 连接器走 HTTP 调企业引擎
+            writes: false, // 远端业务写入，非本地文件写入
+            ..Default::default()
         })
     }
 
@@ -333,11 +333,11 @@ impl Tool for OntoPutObject {
             requires_auth: Some("onto:write".into()),
             requires_approval: Approval::Always,
             idempotent: false,
-            // 企业写=仅审批门：Approval::Always 经 X4 人工批准后执行；不标 high_risk，
-            // 否则 HighRiskGuard 会在桌面壳 WorkspaceWrite 沙箱下于审批前硬拦（走不到审批卡）。
+            // 企业写由 PEP 授权，并经 Approval::Always 人工批准后执行。
             high_risk: false,
-            network: true, // 连接器走 HTTP 调企业引擎：ReadOnly 沙箱中央禁网
-            writes: false, // 写副作用由 PEP/审批门管，不进 ReadOnly 写闸
+            network: true, // 连接器走 HTTP 调企业引擎
+            writes: false, // 远端业务写入，非本地文件写入
+            ..Default::default()
         })
     }
 
@@ -391,11 +391,11 @@ impl Tool for OntoExecuteAction {
             // 试算(dryRun)无副作用；真写需审批。守卫按 Always 稳妥兜底，dryRun 亦过卡（可接受）。
             requires_approval: Approval::Always,
             idempotent: false,
-            // 企业写=仅审批门：Approval::Always 经 X4 人工批准后执行；不标 high_risk，
-            // 否则 HighRiskGuard 会在桌面壳 WorkspaceWrite 沙箱下于审批前硬拦（走不到审批卡）。
+            // 企业写由 PEP 授权，并经 Approval::Always 人工批准后执行。
             high_risk: false,
-            network: true, // 连接器走 HTTP 调企业引擎：ReadOnly 沙箱中央禁网
-            writes: false, // 写副作用由 PEP/审批门管，不进 ReadOnly 写闸
+            network: true, // 连接器走 HTTP 调企业引擎
+            writes: false, // 远端业务写入，非本地文件写入
+            ..Default::default()
         })
     }
 
@@ -447,11 +447,11 @@ impl Tool for ReportCompute {
             requires_auth: Some("report:write".into()),
             requires_approval: Approval::Always,
             idempotent: false,
-            // 企业写=仅审批门：Approval::Always 经 X4 人工批准后执行；不标 high_risk，
-            // 否则 HighRiskGuard 会在桌面壳 WorkspaceWrite 沙箱下于审批前硬拦（走不到审批卡）。
+            // 企业写由 PEP 授权，并经 Approval::Always 人工批准后执行。
             high_risk: false,
-            network: true, // 连接器走 HTTP 调企业引擎：ReadOnly 沙箱中央禁网
-            writes: false, // 写副作用由 PEP/审批门管，不进 ReadOnly 写闸
+            network: true, // 连接器走 HTTP 调企业引擎
+            writes: false, // 远端业务写入，非本地文件写入
+            ..Default::default()
         })
     }
 
@@ -730,11 +730,11 @@ impl Tool for EngineChain {
             requires_auth: Some("onto:write".into()),
             requires_approval: Approval::Always,
             idempotent: false,
-            // 企业写=仅审批门：Approval::Always 经 X4 人工批准后执行；不标 high_risk，
-            // 否则 HighRiskGuard 会在桌面壳 WorkspaceWrite 沙箱下于审批前硬拦（走不到审批卡）。
+            // 企业写由 PEP 授权，并经 Approval::Always 人工批准后执行。
             high_risk: false,
-            network: true, // 连接器走 HTTP 调企业引擎：ReadOnly 沙箱中央禁网
-            writes: false, // 写副作用由 PEP/审批门管，不进 ReadOnly 写闸
+            network: true, // 连接器走 HTTP 调企业引擎
+            writes: false, // 远端业务写入，非本地文件写入
+            ..Default::default()
         })
     }
 

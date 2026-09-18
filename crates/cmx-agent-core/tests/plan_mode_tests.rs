@@ -11,15 +11,14 @@ use cmx_agent_core::agents::builtin_specs;
 use cmx_agent_core::model::{ModelResponse, MockModel};
 use cmx_agent_core::question::QuestionService;
 use cmx_agent_core::{
-    Agent, ApprovalGuard, GuardPipeline, PlanModeGuard, SandboxGuard, Session, Tool, ToolRegistry,
-    ToolResult, ToolSpec, TURN_PLAN_MODE,
+    Agent, ApprovalGuard, ApprovalPolicy, GuardPipeline, PlanModeGuard, Session, Tool, ToolRegistry,
+    ToolResult, ToolSpec, TurnPolicyOverride, TURN_PLAN_MODE,
 };
 use serde_json::json;
 
 fn test_guards() -> GuardPipeline {
-    // 与 DesktopAppBuilder 相同的顺序（plan 在 sandbox 之后）：本测试无 high_risk/approval 也够用。
+    // 计划模式在审批前拒绝，审批策略不能覆盖用户的只读意图。
     let mut g = GuardPipeline::new();
-    g.add(Arc::new(SandboxGuard));
     g.add(Arc::new(PlanModeGuard));
     g.add(Arc::new(ApprovalGuard));
     g
@@ -203,6 +202,45 @@ async fn exit_plan_approval_unlocks_write_same_turn() {
         matches!(&e.kind, cmx_agent_core::EventKind::QuestionResolved { answered: true, .. })
     });
     assert!(note, "QuestionResolved 事件应落库");
+}
+
+#[tokio::test]
+async fn unattended_exit_plan_never_asks_or_unlocks_writes() {
+    for approval in [ApprovalPolicy::Never, ApprovalPolicy::Auto] {
+        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let model = Arc::new(MockModel::new([
+            ModelResponse::calls(vec![cmx_agent_core::ToolCall::with_id(
+                "c1", "exit_plan", json!({"plan": "批准后写文件"}),
+            )]),
+            ModelResponse::calls(vec![cmx_agent_core::ToolCall::with_id(
+                "c2", "shell_probe", json!({}),
+            )]),
+            ModelResponse::text("等待用户"),
+        ]));
+        let questions = Arc::new(QuestionService::interactive(None));
+        let agent = build_agent(model, questions.clone(), vec![
+            Arc::new(cmx_agent_core::ExitPlanTool),
+            Arc::new(Probe { name: "shell_probe", ran: ran.clone() }),
+        ]);
+        let flag = plan_flag(true);
+        let mut s = Session::new("unattended-plan");
+        tokio::time::timeout(Duration::from_secs(1),
+            agent.run_turn_observed_as_cancellable_with_policy(
+                &mut s, "提交计划", None, None, None, None,
+                Some(TurnPolicyOverride { approval }), Some(flag.clone()),
+            )
+        ).await.expect("无人值守不得等待计划审批").unwrap();
+        assert!(flag.load(std::sync::atomic::Ordering::SeqCst), "未人工批准不得退出计划模式");
+        assert!(!ran.load(std::sync::atomic::Ordering::SeqCst), "无人值守不得绕过计划模式执行写工具");
+        assert!(questions.pending_in_session(None).is_empty());
+        assert!(!s.log.iter().any(|e| matches!(e.kind, cmx_agent_core::EventKind::QuestionAsked { .. })));
+        assert!(s.log.iter().any(|e| matches!(&e.kind,
+            cmx_agent_core::EventKind::ToolResult { call_id, output, .. }
+                if call_id == "c1" && output["dismissed"] == json!(true))));
+        assert!(s.log.iter().any(|e| matches!(&e.kind,
+            cmx_agent_core::EventKind::GuardDecision { guard, decision: cmx_agent_core::GuardDecision::Deny { .. }, .. }
+                if guard == "plan_mode")));
+    }
 }
 
 #[tokio::test]

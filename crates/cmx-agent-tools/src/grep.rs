@@ -1,4 +1,4 @@
-//! `grep` —— 在工作区内用正则搜索文件内容，返回匹配行（file:line:text）。regex + walkdir。
+//! `grep` —— 在指定路径（默认工作目录）用正则搜索文件内容，返回匹配行（file:line:text）。regex + walkdir。
 
 use async_trait::async_trait;
 use cmx_agent_core::tool::GuardHints;
@@ -6,17 +6,18 @@ use cmx_agent_core::{Tool, ToolCtx, ToolError, ToolResult, ToolSpec};
 use serde_json::{Value, json};
 use walkdir::WalkDir;
 
-use crate::sandbox;
+use crate::paths;
 
 pub struct GrepTool;
 
 #[async_trait]
 impl Tool for GrepTool {
     fn spec(&self) -> ToolSpec {
-        ToolSpec::new("grep", "在工作区内用正则搜索文件内容，返回匹配行（file:line:text）")
+        ToolSpec::new("grep", "在指定路径（默认工作目录）用正则搜索文件内容，返回匹配行（file:line:text）")
             .schema(json!({
                 "type": "object",
                 "properties": {
+                    "path": { "type": "string", "description": "搜索路径，支持绝对路径；相对路径基于工作目录，默认 '.'" },
                     "pattern": { "type": "string", "description": "正则表达式" },
                     "glob": { "type": "string", "description": "可选，仅搜索匹配此 glob 的文件，如 **/*.rs" },
                     "ignore_case": { "type": "boolean", "default": false },
@@ -41,8 +42,10 @@ impl Tool for GrepTool {
             .get("glob")
             .and_then(|v| v.as_str())
             .and_then(|g| glob::Pattern::new(g).ok());
-        let Some(root) = sandbox::first_root(ctx) else {
-            return Ok(ToolResult::err("grep: no allowed_roots (sandbox denies all fs)"));
+        let path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+        let root = match paths::resolve(path, ctx) {
+            Ok(p) => p,
+            Err(e) => return Ok(ToolResult::err(format!("grep: {e}"))),
         };
         let re = match regex::RegexBuilder::new(pattern).case_insensitive(ignore_case).build() {
             Ok(r) => r,
@@ -51,11 +54,11 @@ impl Tool for GrepTool {
         let gopts = glob::MatchOptions::new();
         let mut matches = Vec::new();
         let mut truncated = false;
-        'outer: for entry in WalkDir::new(root).follow_links(false).into_iter().flatten() {
+        'outer: for entry in WalkDir::new(&root).follow_links(true).into_iter().flatten() {
             if !entry.file_type().is_file() {
                 continue;
             }
-            let rel = match entry.path().strip_prefix(root) {
+            let rel = match entry.path().strip_prefix(&root) {
                 Ok(r) => r,
                 Err(_) => continue,
             };
@@ -97,7 +100,6 @@ impl Tool for GrepTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cmx_agent_core::guard::SandboxMode;
     use std::path::PathBuf;
 
     fn setup() -> (PathBuf, Vec<PathBuf>) {
@@ -112,7 +114,7 @@ mod tests {
     #[tokio::test]
     async fn finds_regex_matches() {
         let (root, roots) = setup();
-        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
+        let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
         let r = GrepTool.invoke(json!({"pattern":"fn \\w+"}), &ctx).await.unwrap();
         assert!(r.ok, "{r:?}");
         assert_eq!(r.output["count"], 2); // foo + bar in a.rs
@@ -122,7 +124,7 @@ mod tests {
     #[tokio::test]
     async fn glob_filter_and_ignore_case() {
         let (root, roots) = setup();
-        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
+        let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
         let r = GrepTool
             .invoke(json!({"pattern":"foo","glob":"**/*.rs","ignore_case":true}), &ctx)
             .await

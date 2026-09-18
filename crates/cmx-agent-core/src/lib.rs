@@ -4,7 +4,7 @@
 //! dsh 的工具注册表/append-only 会话日志/pre-execute-post 守卫管道 + 不变量「Model-visible means logged」。
 //!
 //! 该 crate 与平台/框架解耦：不依赖 DB / Web / cmx-container 基础设施，便于快速、确定性地测试。
-//! 真实模型、真实沙箱、cmx-* 工具、持久化都以 trait 注入，在上层 crate 提供实现。
+//! 真实模型、cmx-* 工具、持久化都以 trait 注入，在上层 crate 提供实现。
 
 pub mod agent;
 pub mod agents;
@@ -30,7 +30,7 @@ pub use event::{CompactionReason, EventKind, EventSink, SessionEvent, SessionLog
 pub use exit_plan::{ExitPlanTool, EXIT_PLAN_TOOL_NAME};
 pub use guard::{
     ApprovalGuard, AuthGuard, Guard, GuardCtx, GuardDecision, GuardPhase, GuardPipeline,
-    HighRiskGuard, PlanModeGuard, PLAN_READ_TOOLS, SandboxGuard, SandboxMode, Subject,
+    HighRiskGuard, PlanModeGuard, PLAN_READ_TOOLS, Subject, WorkspaceWriteGuard,
 };
 pub use model::{
     MockModel, ModelContext, ModelError, ModelMessage, ModelResponse, ModelSeam, ModelUsage,

@@ -1,9 +1,8 @@
 //! `command` 载体：把一条 shell 命令包装成工具。`command`/`args` 里的 `{arg}` 取自入参。
 //! 写/执行类清单应置 `requires_approval:true` → 调用前过审批卡（人在环兜底任意命令）。
 //!
-//! S1b（方案 §6.1）：弃自有 spawn 改道共享执行器 `proc::run_profiled`（profile=Plugin）——
-//! 超时钳制 / 64KB 截断 / Job Object 整树收尸 / OS 沙箱（受限令牌）一次包装全量生效；
-//! cwd 由 manifest.working_dir 或工作区根决定（旧实现继承 agent 进程 cwd，语义变化见对照表）。
+//! 通过共享执行器 `proc::run` 保留超时钳制、64KB 截断和 Job Object 进程树清理。
+//! cwd 由 manifest.working_dir 或第一工作根决定，无工作根时使用进程 cwd。
 
 use async_trait::async_trait;
 use cmx_agent_core::{Tool, ToolCtx, ToolError, ToolResult, ToolSpec};
@@ -37,10 +36,10 @@ impl Tool for CommandPluginTool {
         let Some(cwd) = crate::proc_cwd(ctx, &self.manifest) else {
             return Ok(ToolResult::err(format!("插件 {}: 无法解析工作目录", self.manifest.name)));
         };
-        let out = crate::plugin_spawn(ctx, &program, &args, &cwd, timeout).await;
+        let out = cmx_agent_tools::proc::run(&program, &args, &cwd, timeout).await;
 
         // 保 schema：顶层键与旧版一致（service/plugin/kind/exit_code/stdout/stderr），
-        // 并入 sandbox / timed_out / error 审计字段（ToolResult 通道，模型可见、落库）。
+        // 保留 timed_out / error 字段（ToolResult 通道，模型可见、落库）。
         let mut v = json!({
             "service": "cmx-plugin",
             "plugin": self.manifest.name,
@@ -50,9 +49,6 @@ impl Tool for CommandPluginTool {
             "stderr": out.get("stderr").cloned().unwrap_or_else(|| json!("")),
         });
         let m = v.as_object_mut().expect("command plugin result object");
-        if let Some(sb) = out.get("sandbox") {
-            m.insert("sandbox".into(), sb.clone());
-        }
         if out.get("timed_out").and_then(|t| t.as_bool()).unwrap_or(false) {
             m.insert("timed_out".into(), Value::Bool(true));
             m.insert("error".into(), json!("插件子进程超时（已整树终止）"));

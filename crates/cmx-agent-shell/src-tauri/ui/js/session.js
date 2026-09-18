@@ -894,9 +894,18 @@ async function startFromHome(){
   const text=box.value.trim(); if(!text) return;
   box.value=""; autoGrow(box);
   const id="task-"+Date.now();
-  // 首页选的「📋 计划模式」前置到新会话（改造三）：先落 set_plan_mode 再打开会话，
-  // openSession 拉到的 meta 已带 plan_mode，下拉与回合守卫直接就位。
-  if(permMode==="plan"){ try{ await call({cmd:"set_plan_mode", session_id:id, enabled:true}); }catch(_){} }
+  // 首页选的「📋 计划模式」前置到新会话：先 create_session 再 set_plan_mode——
+  // set_plan_mode 要求会话已存在，旧序对未建会话静默失败后照常发送，
+  // 用户以为在计划模式、后端实际不是（确定性缺口，本次修复；失败必须显式提示）。
+  if(permMode==="plan"){
+    const c=await call({cmd:"create_session", id});
+    if(c && c.ok!==false){
+      const r=await call({cmd:"set_plan_mode", session_id:id, enabled:true});
+      if(!r || r.ok===false) showToast("计划模式开启失败："+(r&&r.error?r.error.message:"未知错误"));
+    }else{
+      showToast("新建任务失败："+(c&&c.error?c.error.message:"未知错误"));
+    }
+  }
   await openSession(id, text);
 }
 // 文本域自动增高（随内容 26→200px）

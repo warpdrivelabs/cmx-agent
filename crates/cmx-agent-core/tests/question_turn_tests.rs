@@ -6,7 +6,7 @@ use std::time::Duration;
 use cmx_agent_core::event::EventKind;
 use cmx_agent_core::{
     Agent, ApprovalPolicy, AutoApprover, GuardPipeline, MockModel, ModelResponse, Policy,
-    QuestionService, SandboxMode, Session, ToolCall, SUBAGENT_TURN,
+    QuestionService, Session, ToolCall, SUBAGENT_TURN,
 };
 use serde_json::json;
 
@@ -28,7 +28,6 @@ fn agent_with(model: MockModel, approval: ApprovalPolicy, svc: Option<Arc<Questi
         .guards(GuardPipeline::new()) // 无守卫 = 全放行，聚焦提问路径本身
         .approver(Arc::new(AutoApprover::approve()))
         .policy(Policy {
-            sandbox: SandboxMode::WorkspaceWrite,
             approval,
             ..Default::default()
         });
@@ -112,25 +111,29 @@ async fn ask_user_hangs_until_answered_then_continues() {
 }
 
 #[tokio::test]
-async fn ask_user_gated_for_policy_never() {
-    let svc = Arc::new(QuestionService::interactive(None));
-    let model = MockModel::new([
-        ModelResponse::calls(vec![ToolCall::with_id("c1", "ask_user", ask_input())]),
-        ModelResponse::text("无人值守，自行继续"),
-    ]);
-    let agent = agent_with(model, ApprovalPolicy::Never, Some(svc));
-    let mut s = Session::new("q-s2");
-    let out = agent.run_turn(&mut s, "问我").await.unwrap();
-    assert_eq!(out.reason, cmx_agent_core::event::StopReason::Completed);
-    let evs = s.log.events();
-    assert_eq!(
-        count(evs, |k| matches!(k, EventKind::QuestionAsked { .. })),
-        0,
-        "policy=Never（无人值守/IM 全权）不得发生提问挂起"
-    );
-    // dismissed 回灌、回合继续
-    assert!(evs.iter().any(|e| matches!(&e.kind, EventKind::ToolResult { ok: true, output, .. }
-        if output.get("dismissed") == Some(&json!(true)))));
+async fn ask_user_gated_for_unattended_policies() {
+    for approval in [ApprovalPolicy::Never, ApprovalPolicy::Auto] {
+        let svc = Arc::new(QuestionService::interactive(None));
+        let model = MockModel::new([
+            ModelResponse::calls(vec![ToolCall::with_id("c1", "ask_user", ask_input())]),
+            ModelResponse::text("无人值守，自行继续"),
+        ]);
+        let agent = agent_with(model, approval, Some(svc.clone()));
+        let mut s = Session::new("q-s2");
+        let out = tokio::time::timeout(Duration::from_secs(1), agent.run_turn(&mut s, "问我"))
+            .await.expect("无人值守不得等待回答").unwrap();
+        assert_eq!(out.reason, cmx_agent_core::event::StopReason::Completed);
+        let evs = s.log.events();
+        assert_eq!(
+            count(evs, |k| matches!(k, EventKind::QuestionAsked { .. })),
+            0,
+            "{approval:?} 不得发生提问挂起"
+        );
+        assert!(svc.pending_in_session(None).is_empty());
+        // dismissed 回灌、回合继续
+        assert!(evs.iter().any(|e| matches!(&e.kind, EventKind::ToolResult { ok: true, output, .. }
+            if output.get("dismissed") == Some(&json!(true)))));
+    }
 }
 
 #[tokio::test]

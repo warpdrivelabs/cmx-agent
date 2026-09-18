@@ -3,7 +3,6 @@
 
 use std::sync::Arc;
 
-use cmx_agent_core::guard::SandboxMode;
 use cmx_agent_core::{Tool, ToolCtx};
 use cmx_agent_mcp::{McpServerConfig, connect_server};
 use serde_json::json;
@@ -71,7 +70,7 @@ async fn mcp_end_to_end_via_mock_server() {
     assert!(names.contains(&"mcp_mock_boom".to_string()));
 
     let roots: Vec<std::path::PathBuf> = vec![];
-    let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
+    let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
 
     // 调 echo → 转发 tools/call → 返回文本
     let echo: &Arc<dyn Tool> = tools.iter().find(|t| t.spec().name == "mcp_mock_echo").unwrap();

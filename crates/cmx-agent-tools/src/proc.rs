@@ -1,4 +1,4 @@
-//! 共享子进程执行器（shell / git / run_tests 复用）：cwd 限定 + 超时 + 输出截断 + 并发读防死锁。
+//! 共享子进程执行器（shell / git / run_tests 复用）：工作目录 + 超时 + 输出截断 + 并发读防死锁。
 //!
 //! Windows 适配（2026-09-08 方案 P0/P1/P1.5）：
 //! - **shell 探测链**（[`resolve_shell`]）：`CMX_AGENT_SHELL > pwsh > powershell > sh（PATH 或由
@@ -10,20 +10,13 @@
 //! - **Job Object**：超时 Terminate 整棵进程树（`start_kill` 只杀直接子进程，孙进程会孤儿化）；
 //! - 输出按字节读 + `from_utf8_lossy`：非 UTF-8 输出（cmd/GBK）至少不整段丢失。
 //!
-//! OS 沙箱（方案 20260914_沙箱OS级隔离完善方案 S0-S3，v1.1）：[`run_profiled`] /
-//! [`run_cmd_profiled`] 在 WorkspaceWrite 档走 [`cmx_agent_sandbox::spawn_native`] 原生受限
-//! spawn（Windows 受限令牌+ACL / Linux Landlock+seccomp），包装结果以 `sandbox` 字段嵌进返回
-//! JSON（ToolResult 通道审计，core 不动）；ReadOnly/DangerFullAccess 与沙箱降级走既有 [`run`]。
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use cmx_agent_sandbox::{ProcCtx, WrapDecision};
 use serde_json::{Value, json};
 use tokio::io::AsyncReadExt;
-
-pub use cmx_agent_sandbox::Profile;
 
 pub const MAX_OUT: usize = 64 * 1024;
 pub const DEFAULT_TIMEOUT_MS: u64 = 30_000;
@@ -251,6 +244,8 @@ pub async fn run(program: &str, args: &[String], cwd: &Path, timeout_ms: u64) ->
                 j.terminate(); // 先灭整树（孙进程收尸），start_kill 仅兜底直接子进程。
             }
             let _ = child.start_kill();
+            // 等待直接子进程退出，确保返回时已释放 cwd/文件句柄。
+            let _ = child.wait().await;
             let (out, _) = truncate(String::from_utf8_lossy(&out_buf).into_owned());
             let (err, _) = truncate(String::from_utf8_lossy(&err_buf).into_owned());
             json!({
@@ -260,158 +255,6 @@ pub async fn run(program: &str, args: &[String], cwd: &Path, timeout_ms: u64) ->
                 "stderr": err,
                 "timed_out": true,
                 "note": format!("超时（{timeout_ms}ms）已终止"),
-            })
-        }
-    }
-}
-
-/// 解析 shell 并执行一条命令字符串（**沙箱感知**：WorkspaceWrite 档走 OS 沙箱原生 spawn）。
-pub async fn run_cmd_profiled(ctx: &ProcCtx<'_>, cmd: &str, cwd: &Path, timeout_ms: u64) -> Value {
-    let sh = resolve_shell();
-    let net = cmx_agent_sandbox::settings::get().net;
-    match shell_argv(&sh, cmd) {
-        Ok(argv) => run_profiled(ctx, &sh.program, &argv[1..], cwd, timeout_ms).await,
-        Err(e) => json!({
-            "ok": false, "error": e,
-            "sandbox": {
-                "wrapped": false, "denied": Value::Null, "net": net.as_str(),
-                "profile": ctx.profile.as_str(), "degraded": Value::Null,
-            },
-        }),
-    }
-}
-
-/// 运行 `program args...`（**沙箱感知**）：
-/// - ReadOnly / DangerFullAccess → 既有 [`run`]（不包装）；
-/// - WorkspaceWrite → `cmx_agent_sandbox::wrap_decision` 分路：Wrap=原生受限 spawn
-///   （`spawn_blocking` + tokio timeout 适配阻塞执行模型；超时先整树终止再收兜底输出）；
-///   Denied=fail-closed 拒绝；Degraded=require_os=false 的裸跑降级（带 degraded 标记）。
-///   包装结果嵌 `sandbox` 字段（wrapped/net/profile/degraded/elapsed_ms）——ToolResult 通道
-///   审计：模型可见、SessionLog 落库，*Model-visible means logged* 不变式不破。
-pub async fn run_profiled(ctx: &ProcCtx<'_>, program: &str, args: &[String], cwd: &Path, timeout_ms: u64) -> Value {
-    let timeout_ms = timeout_ms.clamp(1, MAX_TIMEOUT_MS);
-    let net = cmx_agent_sandbox::settings::get().net;
-    match cmx_agent_sandbox::wrap_decision(ctx) {
-        WrapDecision::NoWrap => run(program, args, cwd, timeout_ms).await,
-        WrapDecision::Denied { reason } => json!({
-            "ok": false,
-            "error": reason,
-            "sandbox": {
-                "wrapped": false, "denied": reason, "net": net.as_str(),
-                "profile": ctx.profile.as_str(), "degraded": Value::Null,
-            },
-        }),
-        WrapDecision::Degraded { reason } => {
-            let mut v = run(program, args, cwd, timeout_ms).await;
-            if let Value::Object(ref mut m) = v {
-                // net 如实报「未应用」（degraded 裸跑不走 spawn_native，黑洞代理/缓存重定向都
-                // 不生效——红队2 P1-2：报 poison 实际畅通 = 审计失真）。
-                m.insert(
-                    "sandbox".into(),
-                    json!({
-                        "wrapped": false, "net": net.as_str(), "net_applied": false,
-                        "profile": ctx.profile.as_str(), "degraded": reason,
-                    }),
-                );
-            }
-            v
-        }
-        WrapDecision::Wrap => {
-            let t0 = std::time::Instant::now();
-            let child = match cmx_agent_sandbox::spawn_native(ctx, program, args, cwd) {
-                Ok(c) => c,
-                Err(reason) => {
-                    // 错误分类（红队2 P2-4/P1-3，前缀由 win::spawn 标注）：
-                    // [vol]/[acl]/[token] = 沙箱设施类——require_os=true 走 fail-closed 拒绝；
-                    //   false 走降级裸跑（方案 §4.3 FAT 卷逃生门；env 注入不可用，net 如实报未应用）。
-                    // [spawn] = 普通启动失败（程序不存在等）——不加沙箱话术，普通错误回灌。
-                    // 其余（[sandbox]）= 沙箱机制失败——恒 fail-closed 拒绝。
-                    if reason.starts_with("[vol]") || reason.starts_with("[acl]") || reason.starts_with("[token]") {
-                        if cmx_agent_sandbox::settings::get().require_os {
-                            return json!({
-                                "ok": false,
-                                "error": cmx_agent_sandbox::deny_text(&reason),
-                                "sandbox": {
-                                    "wrapped": false, "denied": reason, "net": net.as_str(),
-                                    "profile": ctx.profile.as_str(), "degraded": Value::Null,
-                                },
-                            });
-                        }
-                        let mut v = run(program, args, cwd, timeout_ms).await;
-                        if let Value::Object(ref mut m) = v {
-                            m.insert(
-                                "sandbox".into(),
-                                json!({
-                                    "wrapped": false, "net": net.as_str(), "net_applied": false,
-                                    "profile": ctx.profile.as_str(), "degraded": reason,
-                                }),
-                            );
-                        }
-                        return v;
-                    }
-                    if let Some(plain) = reason.strip_prefix("[spawn] ") {
-                        return json!({
-                            "ok": false, "error": plain,
-                            "sandbox": {
-                                "wrapped": false, "denied": Value::Null, "net": net.as_str(),
-                                "profile": ctx.profile.as_str(), "degraded": Value::Null,
-                            },
-                        });
-                    }
-                    return json!({
-                        "ok": false,
-                        "error": cmx_agent_sandbox::deny_text(&reason),
-                        "sandbox": {
-                            "wrapped": false, "denied": reason, "net": net.as_str(),
-                            "profile": ctx.profile.as_str(), "degraded": Value::Null,
-                        },
-                    });
-                }
-            };
-            // 超时杀树与阻塞读并存：克隆一份句柄当杀树柄，阻塞读任务把结果写共享槽。
-            let killer = child.clone();
-            type SpawnSlot = std::sync::Arc<tokio::sync::Mutex<Option<(i32, Vec<u8>, Vec<u8>)>>>;
-            let slot: SpawnSlot = std::sync::Arc::new(tokio::sync::Mutex::new(None));
-            let slot2 = slot.clone();
-            let jh = tokio::task::spawn_blocking(move || {
-                let r = child.read_wait();
-                *slot2.blocking_lock() = Some(r);
-            });
-            let timed_out = tokio::time::timeout(Duration::from_millis(timeout_ms), jh).await.is_err();
-            if timed_out {
-                killer.terminate_tree();
-            }
-            // 非超时路径任务已完；超时路径终止后管道 EOF → 任务毫秒级收敛（5s 兜底轮询）。
-            let deadline = std::time::Instant::now() + Duration::from_secs(5);
-            let mut result = slot.lock().await.take();
-            while result.is_none() && std::time::Instant::now() < deadline {
-                tokio::time::sleep(Duration::from_millis(50)).await;
-                result = slot.lock().await.take();
-            }
-            let Some((code, out_raw, err_raw)) = result else {
-                return json!({
-                    "ok": false, "exit_code": Value::Null, "timed_out": true,
-                    "sandbox": {
-                        "wrapped": true, "net": net.as_str(), "profile": ctx.profile.as_str(),
-                        "degraded": Value::Null,
-                    },
-                    "note": format!("超时（{timeout_ms}ms）已整树终止；输出未及回收"),
-                });
-            };
-            let (out, ot) = truncate(String::from_utf8_lossy(&out_raw).into_owned());
-            let (err, et) = truncate(String::from_utf8_lossy(&err_raw).into_owned());
-            json!({
-                "ok": code == 0,
-                "exit_code": code,
-                "stdout": out,
-                "stderr": err,
-                "truncated": ot || et,
-                "timed_out": timed_out,
-                "note": timed_out.then(|| format!("超时（{timeout_ms}ms）已整树终止")),
-                "sandbox": {
-                    "wrapped": true, "net": net.as_str(), "profile": ctx.profile.as_str(),
-                    "degraded": Value::Null, "elapsed_ms": t0.elapsed().as_millis() as u64,
-                },
             })
         }
     }
@@ -501,60 +344,6 @@ mod tests {
             assert!(r.program.ends_with("usr\\bin\\sh.exe"), "{}", r.program);
             let _ = fs::remove_dir_all(&dir);
         }
-    }
-
-    /// 沙箱路径（run_profiled → 受限令牌 + spawn 属性挂 Job）下超时整树收尸（红队 P2-2 验收锚：
-    /// 孙进程零漏杀，且必须覆盖 spawn 属性路线而非旧 attach 路线）。
-    #[cfg(windows)]
-    #[tokio::test]
-    async fn profiled_timeout_kills_tree_under_sandbox() {
-        use cmx_agent_core::guard::SandboxMode;
-        let root = std::env::temp_dir().join(format!("cmx-pf-tree-{}", std::process::id()));
-        fs::create_dir_all(&root).unwrap();
-        let child_ps1 = root.join("child.ps1");
-        fs::write(&child_ps1, format!(
-            "Set-Content -Path '{}' -Value $PID -Encoding ascii
-Start-Sleep -Seconds 60
-",
-            root.join("gpid.txt").display()
-        )).unwrap();
-        let parent_ps1 = root.join("parent.ps1");
-        fs::write(&parent_ps1, format!(
-            "$p = Start-Process powershell -ArgumentList '-NoProfile','-File','{}' -PassThru -WindowStyle Hidden
-Set-Content -Path '{}' -Value $p.Id -Encoding ascii
-Wait-Process -Id $p.Id
-",
-            child_ps1.display(), root.join("ppid.txt").display()
-        )).unwrap();
-        let args = vec!["-NoProfile".to_string(), "-File".to_string(), parent_ps1.to_string_lossy().into_owned()];
-        let ctx = ProcCtx {
-            sandbox: SandboxMode::WorkspaceWrite,
-            roots: std::slice::from_ref(&root),
-            profile: Profile::Shell,
-        };
-        let out = run_profiled(&ctx, "powershell", &args, &root, 8_000).await;
-        assert_eq!(out["timed_out"], serde_json::json!(true), "{out}");
-        assert_eq!(out["sandbox"]["wrapped"], serde_json::json!(true), "须走沙箱包装路径");
-        let alive = |pid: u32| {
-            let o = std::process::Command::new("tasklist")
-                .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
-                .output().unwrap();
-            String::from_utf8_lossy(&o.stdout).contains(&format!("\",{pid},\""))
-        };
-        let mut pids = Vec::new();
-        for f in ["ppid.txt", "gpid.txt"] {
-            if let Ok(s) = fs::read_to_string(root.join(f))
-                && let Ok(pid) = s.trim().parse::<u32>() { pids.push(pid); }
-        }
-        assert_eq!(pids.len(), 2, "父子两代都应记录了 PID");
-        for _ in 0..25 {
-            if !pids.iter().any(|&p| alive(p)) { break; }
-            std::thread::sleep(std::time::Duration::from_millis(200));
-        }
-        for &p in &pids {
-            assert!(!alive(p), "PID {p} 应已被整树收尸（沙箱 Job 路线）");
-        }
-        let _ = fs::remove_dir_all(&root);
     }
 
     #[cfg(windows)]

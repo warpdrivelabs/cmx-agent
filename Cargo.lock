@@ -482,7 +482,6 @@ dependencies = [
  "cmx-agent-net",
  "cmx-agent-office",
  "cmx-agent-plugin",
- "cmx-agent-sandbox",
  "cmx-agent-tools",
  "directories",
  "rfd",
@@ -639,7 +638,6 @@ dependencies = [
  "async-trait",
  "cmx-agent-core",
  "cmx-agent-mcp",
- "cmx-agent-sandbox",
  "cmx-agent-tools",
  "reqwest",
  "serde",
@@ -649,25 +647,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "cmx-agent-sandbox"
-version = "0.1.0"
-dependencies = [
- "cmx-agent-core",
- "libc",
- "regex",
- "serde",
- "serde_json",
- "windows-sys 0.59.0",
-]
-
-[[package]]
 name = "cmx-agent-tools"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "chrono",
  "cmx-agent-core",
- "cmx-agent-sandbox",
  "csv",
  "glob",
  "regex",

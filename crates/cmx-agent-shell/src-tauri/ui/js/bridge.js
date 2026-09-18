@@ -8,29 +8,28 @@ async function call(req){
   const r = await fetch("/api",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(req)});
   return await r.json();
 }
-// ── 权限三模式（方案 20260914 改造三）：输入框下拉「🛡 变更前确认 / 📋 计划模式 / ⚡ 完全访问」。
-// confirm = 工作区可写 + 按需审批（原默认档）；plan = 安全档 + 会话级计划模式（守卫白名单默认拒，
-// 比旧「只读」档更强）；full = 完全访问 + 从不打断。切档 = set_policy（全局两旋钮）+ 会话内联动
-// set_plan_mode；选择记 localStorage（旧两旋钮值自动迁移），首页选择由 startFromHome 前置到新会话。──
+// ── 操作审批三模式：输入框下拉「变更前确认 / 计划模式 / 自动执行」。
+// confirm = 按需审批；plan = 按需审批 + 会话级计划模式（守卫白名单默认拒）；
+// full = 自动执行普通需确认工具，强制审批或高风险操作仍拒绝。
+// 切档 = set_policy（全局审批策略）+ 会话内联动 set_plan_mode；选择记 localStorage，
+// 首页选择由 startFromHome 前置到新会话。──
 const PERM_MAP = {
-  confirm: { sandbox: "workspace-write", approval: "on-request", plan: false },
-  plan:    { sandbox: "workspace-write", approval: "on-request", plan: true },
-  full:    { sandbox: "danger-full-access", approval: "never", plan: false },
+  confirm: { approval: "on-request", plan: false },
+  plan:    { approval: "on-request", plan: true },
+  full:    { approval: "auto", plan: false },
 };
 let permMode = "confirm";   // 全局当前档（plan 态本身按会话独立，见 _SESSION_META[...].plan_mode）
 function permMigrate(v){
   if (v && PERM_MAP[v]) return v;
-  if (v === "danger-full-access/never") return "full";
-  if (v) return "confirm";            // 旧 workspace-write/on-request / read-only/on-request → confirm
   return null;
 }
 function permSaved(){ let v=null; try{ v=localStorage.getItem("cmx-perm"); }catch(_){} return permMigrate(v); }
 /** 把某实例下拉回填到指定档（不落盘不广播；im-* 会话由调用方先禁 plan 项） */
 function permSetSelect(sel, mode){ if (sel && PERM_MAP[mode] && !sel.querySelector("option[value='"+mode+"']:disabled")) sel.value = mode; }
-/** 应用一个权限档：全局两旋钮 +（给 sessionId 时）联动会话级计划模式；成功后落盘并广播同步 */
+/** 应用一个审批档：全局审批策略 +（给 sessionId 时）联动会话级计划模式；成功后落盘并广播同步 */
 async function applyPermMode(mode, sessionId){
   const m = PERM_MAP[mode]; if (!m) return false;
-  const r = await call({cmd:"set_policy", sandbox:m.sandbox, approval:m.approval});
+  const r = await call({cmd:"set_policy", approval:m.approval});
   if (!r || r.ok === false) { showToast("切换权限失败：" + (r && r.error ? r.error.message : "未知错误")); return false; }
   if (sessionId != null){
     const p = await call({cmd:"set_plan_mode", session_id:sessionId, enabled:m.plan});
@@ -63,7 +62,7 @@ document.addEventListener("cmx-perm-changed", () => {
   permMode = mode;
   document.querySelectorAll("select[data-role=perm]").forEach(sel => permSetSelect(sel, mode));
   const m = PERM_MAP[mode];
-  call({cmd:"set_policy", sandbox:m.sandbox, approval:m.approval}).then(r => {
+  call({cmd:"set_policy", approval:m.approval}).then(r => {
     if (!r || r.ok === false) console.warn("恢复权限档失败", r);
   });
 })();

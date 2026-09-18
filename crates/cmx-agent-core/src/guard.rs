@@ -6,46 +6,15 @@
 //! ② 确定性校验（pre）——工具 inputSchema 校验 + CmxErrCode（M0 预留，见 tools crate）。
 //! ③ 人在环    [`ApprovalGuard`]（pre）——高风险转 [`crate::agent::Approver`]。
 //! ④ 全量审计（贯穿）——由 [`crate::session::Session`] 把每条裁决落日志实现，非单独 Guard。
-//! ⑤ 沙箱执行  [`HighRiskGuard`]（pre）+ 工具在 [`SandboxMode`] 下执行。
+//! ⑤ 高危审批  [`HighRiskGuard`]（pre）——高危工具必须经审批，不能自动放行。
 //!
 //! 失败即闭合（fail-closed）：任一 Guard 返回 Deny，调用即被拒，绝不"出错就放行"。
 
 use serde::{Deserialize, Serialize};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use crate::tool::{Approval, ToolCall, ToolSpec};
-
-/// 沙箱模式（两旋钮之「能力」——能做什么）。对齐 codex `sandbox_mode`。
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "kebab-case")]
-pub enum SandboxMode {
-    /// 只读：禁止写文件/联网/高危（SandboxGuard 中央闸 + 各工具自检双保险）。
-    #[default]
-    ReadOnly,
-    /// 工作区可写：可读写 allowed_roots、允许只读型联网（检索/抓取），禁高危（日常推荐）。
-    WorkspaceWrite,
-    /// 完全访问：放行高危（≈ --yolo，仅自动化+显式最小权限时用）。
-    DangerFullAccess,
-}
-
-impl SandboxMode {
-    pub fn allows_high_risk(self) -> bool {
-        matches!(self, SandboxMode::DangerFullAccess)
-    }
-
-    pub fn allows_write(self) -> bool {
-        matches!(
-            self,
-            SandboxMode::WorkspaceWrite | SandboxMode::DangerFullAccess
-        )
-    }
-
-    /// ReadOnly 禁网；WorkspaceWrite / DangerFullAccess 允许只读型联网工具
-    /// （web_fetch/web_search/browser 等，写副作用另由 `writes` 闸与各工具自检管）。
-    pub fn allows_network(self) -> bool {
-        !matches!(self, SandboxMode::ReadOnly)
-    }
-}
 
 /// 守卫相位。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -86,9 +55,11 @@ pub struct GuardCtx<'a> {
     pub phase: GuardPhase,
     pub call: &'a ToolCall,
     pub spec: &'a ToolSpec,
-    pub sandbox: SandboxMode,
     /// 主体身份（M0：租户/用户/角色，接 IAM 后扩展）。
     pub subject: &'a Subject,
+    /// 工作目录根（相对路径解析基准）：[`WorkspaceWriteGuard`] 据此判定写入是否越出工作目录。
+    /// 不是安全围栏——沙箱已移除，这里只用于审批分级。
+    pub workspace_roots: &'a [PathBuf],
     /// post 相可见的工具结果（pre 相为 None）。
     pub result: Option<&'a crate::tool::ToolResult>,
 }
@@ -220,16 +191,6 @@ impl Guard for ApprovalGuard {
     }
 
     fn check(&self, ctx: &GuardCtx<'_>) -> GuardDecision {
-        // danger-full-access（≈ --yolo）：沙箱完全放行代表用户显式信任，Conditional 级人审
-        // 跳过不再弹卡——否则"设了完全访问还被 approval rejected 拦住"自相矛盾。
-        // 但 Always 级（硬人审）不豁免：两旋钮正交，能力旋钮不得吞掉许可旋钮的全部闸门
-        // （旧实现连 Always 一并跳过，ApprovalPolicy 形同虚设）。
-        // UnlessTrusted 策略级逢写必问不受此影响（在内核另行处理）。
-        if ctx.sandbox.allows_high_risk()
-            && !matches!(ctx.spec.guard.requires_approval, Approval::Always)
-        {
-            return GuardDecision::Allow;
-        }
         match ctx.spec.guard.requires_approval {
             Approval::Never => GuardDecision::Allow,
             Approval::Conditional | Approval::Always => GuardDecision::NeedApproval {
@@ -239,7 +200,7 @@ impl Guard for ApprovalGuard {
     }
 }
 
-/// ⑤ 高危拦截：标注 `high_risk` 的工具仅在 danger-full-access 沙箱放行，否则拒绝。
+/// ⑤ 高危审批：标注 `high_risk` 的工具总是需要审批，即使审批标注为 Never。
 pub struct HighRiskGuard;
 
 impl Guard for HighRiskGuard {
@@ -252,30 +213,57 @@ impl Guard for HighRiskGuard {
     }
 
     fn check(&self, ctx: &GuardCtx<'_>) -> GuardDecision {
-        if ctx.spec.guard.high_risk && !ctx.sandbox.allows_high_risk() {
-            let mode = match ctx.sandbox {
-                SandboxMode::ReadOnly => "只读",
-                SandboxMode::WorkspaceWrite => "工作区可写",
-                SandboxMode::DangerFullAccess => "完全访问",
-            };
-            GuardDecision::deny(format!(
-                "工具「{}」属于高危操作，沙箱「{}」模式下不允许执行",
-                ctx.spec.name, mode
-            ))
+        if ctx.spec.guard.high_risk {
+            GuardDecision::NeedApproval {
+                reason: format!("工具「{}」属于高危操作，需要人工审批", ctx.spec.name),
+            }
         } else {
             GuardDecision::Allow
         }
     }
 }
 
-/// ⑤ 沙箱中央闸：按 `GuardHints.writes`/`network` 标注对 ReadOnly 沙箱做**中央**拒绝——
-/// 工具内 `allows_write()`/联网自检之外的第二道闸，未来新工具漏写自检也有兜底
-/// （旧实现完全依赖每工具自律，net 系列工具即漏网：ReadOnly 下 web_fetch 照跑）。
-pub struct SandboxGuard;
+/// 词法归一化路径：移除 `.`，按 `..` 回退。不触碰文件系统（core 无 IO 不变量）。
+fn normalize_lexical(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in p.components() {
+        match comp {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
 
-impl Guard for SandboxGuard {
+/// 目标路径是否越出所有工作目录根（词法判定，不解析符号链接——审批分级用，非安全围栏）。
+/// 绝对路径按原样判定；相对路径按第一个根拼接；无根时视为不可校验（越界，从严要求审批）。
+fn escapes_workspace(path: &str, roots: &[PathBuf]) -> bool {
+    let raw = PathBuf::from(path);
+    let candidate = if raw.is_absolute() {
+        normalize_lexical(&raw)
+    } else {
+        match roots.first() {
+            Some(root) => normalize_lexical(&root.join(&raw)),
+            None => return true,
+        }
+    };
+    !roots.iter().any(|r| candidate.starts_with(normalize_lexical(r)))
+}
+
+/// 工作目录写入审批分级（沙箱移除后的确定性缺口修复）：
+/// - `write_path_args` 非空：逐字段取路径，任一目标越出工作目录 → 需审批（目录内放行）。
+/// - `approval_arg_values`：入参指定字段命中取值集合（如 git 写子命令）→ 需审批。
+///
+/// 装配在 [`ApprovalGuard`] 之前；只把「越界写 / 写命令」从 Allow 升级为 NeedApproval，
+/// 不放宽任何静态 `requires_approval`。
+pub struct WorkspaceWriteGuard;
+
+impl Guard for WorkspaceWriteGuard {
     fn name(&self) -> &str {
-        "sandbox"
+        "workspace_write"
     }
 
     fn phases(&self) -> &[GuardPhase] {
@@ -283,27 +271,33 @@ impl Guard for SandboxGuard {
     }
 
     fn check(&self, ctx: &GuardCtx<'_>) -> GuardDecision {
-        let sandbox = ctx.sandbox;
-        if ctx.spec.guard.writes && !sandbox.allows_write() {
-            return GuardDecision::deny(format!(
-                "tool '{}' writes and is blocked under sandbox {sandbox:?}",
-                ctx.spec.name
-            ));
+        if let Some((field, values)) = &ctx.spec.guard.approval_arg_values
+            && let Some(v) = ctx.call.input.get(field).and_then(|v| v.as_str())
+            && values.iter().any(|x| x == v)
+        {
+            return GuardDecision::NeedApproval {
+                reason: format!("工具「{}」的「{v}」为写操作，需要人工审批", ctx.spec.name),
+            };
         }
-        if ctx.spec.guard.network && !sandbox.allows_network() {
-            return GuardDecision::deny(format!(
-                "tool '{}' needs network and is blocked under sandbox {sandbox:?}",
-                ctx.spec.name
-            ));
+        for field in &ctx.spec.guard.write_path_args {
+            if let Some(path) = ctx.call.input.get(field).and_then(|v| v.as_str())
+                && escapes_workspace(path, ctx.workspace_roots)
+            {
+                return GuardDecision::NeedApproval {
+                    reason: format!(
+                        "工具「{}」写入工作目录之外的路径「{path}」，需要人工审批",
+                        ctx.spec.name
+                    ),
+                };
+            }
         }
         GuardDecision::Allow
     }
 }
 
 /// 计划模式白名单（方案 §7.2 定稿；23 名逐一核对注册名）。**默认拒绝 + 显式白名单**：
-/// hints 黑名单不可行（MCP 代理工具未调 `.guard()` hints 全默认、git/run_tests 无 writes 标注、
-/// 连接器 6 个写侧工具显式 `writes:false`——翻标注会改 ReadOnly 现网行为），白名单下零 hints 改动
-/// 即可拦住 MCP/git/shell/run_tests/连接器写侧/fs_write 及一切后装工具（新工具默认拒绝，fail-closed）。
+/// 白名单可拦住 MCP/git/shell/run_tests/连接器写侧/fs_write 及一切后装工具，
+/// 新工具默认拒绝（fail-closed），不依赖各工具的副作用标注。
 pub const PLAN_READ_TOOLS: &[&str] = &[
     // 本地只读
     "fs_read",
@@ -337,8 +331,8 @@ pub const PLAN_READ_TOOLS: &[&str] = &[
 ];
 
 /// 计划模式守卫（阶段二）：[`super::agent::TURN_PLAN_MODE`] 活开关开启时，工具名不在
-/// [`PLAN_READ_TOOLS`] 一律拒绝（§7.2）。装配在 SandboxGuard 之后、HighRiskGuard 之前；
-/// **danger 档不豁免**——守卫不读沙箱/审批旋钮，计划模式是用户意图，比旋钮硬。
+/// [`PLAN_READ_TOOLS`] 一律拒绝（§7.2）。装配在 HighRiskGuard / ApprovalGuard 之前；
+/// 不受审批策略影响，无人值守 Auto 也不能绕过计划模式。
 pub struct PlanModeGuard;
 
 impl Guard for PlanModeGuard {

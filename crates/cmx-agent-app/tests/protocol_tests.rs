@@ -197,55 +197,44 @@ async fn get_events_paginates_with_limit_total_start() {
     assert_eq!(win["data"]["start"].as_u64().unwrap() as usize, total - 2);
 }
 
-/// set_policy（两旋钮热切换）：合法值立即生效并回显；非法值进 bad_request 信封（错误信息带合法值清单）。
 #[tokio::test]
 async fn set_policy_roundtrips_and_rejects_invalid_values() {
     let tmp = TempDir::new("proto-policy");
     let app = app_with(&tmp, MockModel::new([ModelResponse::text("ok")]));
+    let before = app.agent().policy();
 
-    // 合法切换：read-only × on-request
-    let v: serde_json::Value = serde_json::from_str(
-        &dispatch_json(&app, r#"{"cmd":"set_policy","sandbox":"read-only","approval":"on-request"}"#)
-            .await,
-    )
-    .unwrap();
-    assert_eq!(v["ok"], true, "{v:?}");
-    assert_eq!(v["data"]["sandbox"], "read-only");
-    assert_eq!(v["data"]["approval"], "on-request");
+    for approval in ["on-request", "auto", "never", "unless-trusted", "on-request"] {
+        let req = serde_json::json!({"cmd":"set_policy", "approval":approval});
+        let v: serde_json::Value =
+            serde_json::from_str(&dispatch_json(&app, &req.to_string()).await).unwrap();
+        assert_eq!(v["ok"], true, "{v:?}");
+        assert_eq!(v["data"], serde_json::json!({"approval":approval}));
+        let current = app.agent().policy();
+        assert_eq!(current.max_steps, before.max_steps);
+        assert_eq!(current.workspace_roots, before.workspace_roots);
+        assert_eq!(current.subject.user, before.subject.user);
+    }
 
-    // 切到危险档再切回（验证重复切换稳定）
     let v: serde_json::Value = serde_json::from_str(
-        &dispatch_json(&app, r#"{"cmd":"set_policy","sandbox":"danger-full-access","approval":"never"}"#)
-            .await,
-    )
-    .unwrap();
-    assert_eq!(v["ok"], true, "{v:?}");
-    assert_eq!(v["data"]["sandbox"], "danger-full-access");
-    assert_eq!(v["data"]["approval"], "never");
-    let v: serde_json::Value = serde_json::from_str(
-        &dispatch_json(&app, r#"{"cmd":"set_policy","sandbox":"workspace-write","approval":"on-request"}"#)
-            .await,
-    )
-    .unwrap();
-    assert_eq!(v["ok"], true, "{v:?}");
-
-    // 非法 sandbox：bad_request + 合法值提示
-    let v: serde_json::Value = serde_json::from_str(
-        &dispatch_json(&app, r#"{"cmd":"set_policy","sandbox":"yolo","approval":"never"}"#).await,
-    )
-    .unwrap();
-    assert_eq!(v["ok"], false, "{v:?}");
-    assert_eq!(v["error"]["code"], "bad_request");
-    assert!(v["error"]["message"].as_str().unwrap().contains("read-only"));
-
-    // 非法 approval：同样 bad_request
-    let v: serde_json::Value = serde_json::from_str(
-        &dispatch_json(&app, r#"{"cmd":"set_policy","sandbox":"read-only","approval":"always"}"#).await,
-    )
-    .unwrap();
+        &dispatch_json(&app, r#"{"cmd":"set_policy","approval":"always"}"#).await,
+    ).unwrap();
     assert_eq!(v["ok"], false, "{v:?}");
     assert_eq!(v["error"]["code"], "bad_request");
     assert!(v["error"]["message"].as_str().unwrap().contains("on-request"));
+}
+
+#[tokio::test]
+async fn removed_sandbox_commands_are_rejected() {
+    let tmp = TempDir::new("proto-no-sandbox");
+    let app = app_with(&tmp, MockModel::saying("ok"));
+    for cmd in ["get_sandbox_settings", "set_sandbox_settings"] {
+        let req = serde_json::json!({"cmd":cmd, "net":"open"});
+        let v: serde_json::Value =
+            serde_json::from_str(&dispatch_json(&app, &req.to_string()).await).unwrap();
+        assert_eq!(v["ok"], false, "{v:?}");
+    }
+    assert!(!tmp.path().join("settings.json").exists());
+    assert!(!tmp.path().join("sandbox_sid.json").exists());
 }
 
 // ── 多 provider 配置（providers.json）：播种 / 增删改 / 激活切换 / 掩码 ──────────────

@@ -63,7 +63,7 @@ pub struct AgentSpec {
     /// 给模型的选型描述（进 task 工具 description 枚举说明）。
     #[serde(default)]
     pub description: String,
-    /// 工具集选择（额外收紧，不是放宽——守卫/审批/沙箱照常全量生效）。
+    /// 工具集选择（额外收紧，不是放宽——权限守卫/审批/计划模式照常全量生效）。
     #[serde(default)]
     pub tools: ToolSelection,
     /// 专属模型 provider id（`p-<nanos>` / `builtin-mlamp`）；None = 继承默认（父当前模型槽）。

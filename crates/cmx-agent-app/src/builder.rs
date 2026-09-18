@@ -1,5 +1,5 @@
 //! [`DesktopAppBuilder`]：一键装配桌面壳后端。给定工作目录 + 模型缝，产出一个 [`AgentApp`]，
-//! 其沙箱根设为工作目录（本地文件工具只能碰工作区）、挂上全部内置工具与五层守卫。
+//! 工作目录用于相对路径解析，挂上全部内置工具与认证、计划模式和审批守卫。
 //!
 //! 真实模型缝（HTTP 客户端）在此注入即可；桌面壳/CLI/Headless 前门均复用同一装配。
 
@@ -9,7 +9,7 @@ use std::sync::Arc;
 use cmx_agent_connectors::{AuthConfig, AuthProvider, ConnectorConfig, ConnectorRegistry};
 use cmx_agent_core::{
     Agent, ApprovalGuard, ApprovalPolicy, Approver, AuthGuard, AutoApprover, GuardPipeline,
-    HighRiskGuard, ModelSeam, Policy, SandboxGuard, SandboxMode, Subject,
+    HighRiskGuard, ModelSeam, Policy, Subject,
 };
 use cmx_agent_tools::default_registry;
 
@@ -23,7 +23,6 @@ pub struct DesktopAppBuilder {
     data_dir: PathBuf,
     model: Arc<dyn ModelSeam>,
     approver: Arc<dyn Approver>,
-    sandbox: SandboxMode,
     approval: ApprovalPolicy,
     subject: Subject,
     system: Option<String>,
@@ -46,7 +45,7 @@ pub struct DesktopAppBuilder {
 }
 
 impl DesktopAppBuilder {
-    /// `workdir`：智能体可读写的工作区（沙箱根）。`data_dir`：会话落库根。`model`：模型缝。
+    /// `workdir` 为默认工作目录，`data_dir` 为会话数据目录。
     pub fn new(
         workdir: impl Into<PathBuf>,
         data_dir: impl Into<PathBuf>,
@@ -57,7 +56,6 @@ impl DesktopAppBuilder {
             data_dir: data_dir.into(),
             model,
             approver: Arc::new(AutoApprover::reject()),
-            sandbox: SandboxMode::WorkspaceWrite,
             approval: ApprovalPolicy::OnRequest,
             subject: Subject::new("desktop-user"),
             system: Some(default_office_system_prompt()),
@@ -137,11 +135,6 @@ impl DesktopAppBuilder {
         self
     }
 
-    pub fn sandbox(mut self, s: SandboxMode) -> Self {
-        self.sandbox = s;
-        self
-    }
-
     pub fn approval(mut self, p: ApprovalPolicy) -> Self {
         self.approval = p;
         self
@@ -157,12 +150,7 @@ impl DesktopAppBuilder {
         self
     }
 
-    /// 装配。沙箱根 = workdir；挂全部内置工具 + 五层守卫（Auth/HighRisk/Approval）；
-    /// 若启用连接器，把 flow/onto/report 三连接器工具也挂进注册表，并把 ConnectorRegistry 交给 app 供面板查询。
     pub fn build(self) -> AppResult<AgentApp> {
-        // S0 沙箱应用级配置：绑定数据根（settings.json + SANDBOX_SID 对持久化读入；方案 §6.3）。
-        // builder 持 data_dir（Tauri 全局根 / Web 壳共享根）——桌面单机语义，全局配置而非 per-user。
-        cmx_agent_sandbox::settings::init(Some(self.data_dir.clone()));
         // U13 数据权限：启用则 AuthGuard 用真 PEP（PDP /decide 判定 + 缓存 + fail-closed）；否则 allow_all 占位。
         // 授权按**当前登录用户**（共享 identity 单元，登录后由 app 更新 + 重热）——非静态 desktop 主体。
         let identity: Arc<std::sync::RwLock<Subject>> =
@@ -190,10 +178,19 @@ impl DesktopAppBuilder {
                 let pep_guard = pep_arc.clone();
                 let id_guard = identity.clone();
                 data_auth_wire = Some((pep_arc, identity.clone()));
-                // 守卫按共享 identity 判权（忽略静态 ctx.subject）→ 登录后即以真实用户角色接地。
-                AuthGuard::new(move |_ctx_subj, perm| {
+                // 守卫按**回合主体**判权（ctx.subject）：桌面回合 = 登录同步进 policy.subject 的真实用户；
+                // IM 绑定回合 = 绑定用户。旧实现忽略 ctx 主体、恒读共享桌面 identity——IM 绑定用户
+                // 的权限被桌面登录人覆盖（串用，存量缺陷，本次收敛）。共享 identity 仍保留（登录重热用）。
+                AuthGuard::new(move |ctx_subj, perm| {
                     let subj = id_guard.read().expect("auth identity");
-                    pep_guard.cached_allow(&subj, perm)
+                    let effective = if ctx_subj.user == "anon" || ctx_subj.user.is_empty() {
+                        // 未登录桌面占位主体（未过 apply_session）：回落共享 identity（登录态或匿名）。
+                        subj.clone()
+                    } else {
+                        ctx_subj.clone()
+                    };
+                    drop(subj);
+                    pep_guard.cached_allow(&effective, perm)
                 })
             }
             None => AuthGuard::allow_all(), // 未启用数据权限：显式放行占位
@@ -201,20 +198,16 @@ impl DesktopAppBuilder {
         let mut guards = GuardPipeline::new();
         guards
             .add(Arc::new(auth_guard))
-            .add(Arc::new(SandboxGuard))
-            // 阶段二：计划模式守卫（默认拒绝 + PLAN_READ_TOOLS 白名单；TURN_PLAN_MODE 未 scope
-            // 时恒放行）。装配在 sandbox 之后、high_risk 之前；danger 档不豁免（用户意图比旋钮硬）。
             .add(Arc::new(cmx_agent_core::PlanModeGuard))
-            // S3 命令级风险屏（advisory 层：命中破坏模式升 NeedApproval，不硬拒；方案 §3.5）。
-            .add(Arc::new(cmx_agent_sandbox::CmdRiskGuard))
             .add(Arc::new(HighRiskGuard))
+            // 写入审批分级：工作目录内写放行、目录外写与写命令升级为需审批（沙箱移除后补位）。
+            .add(Arc::new(cmx_agent_core::WorkspaceWriteGuard))
             .add(Arc::new(ApprovalGuard));
 
         let policy = Policy {
-            sandbox: self.sandbox,
             approval: self.approval,
             max_steps: 500,
-            allowed_roots: vec![self.workdir.clone()],
+            workspace_roots: vec![self.workdir.clone()],
             subject: self.subject,
         };
 
@@ -355,7 +348,7 @@ impl DesktopAppBuilder {
             &self.data_dir,
             Some(&self.workdir),
         )?;
-        workspaces.set_allowed_roots(&agent)?;
+        workspaces.set_workspace_roots(&agent)?;
         let app = AgentApp::new(agent, store)
             .with_token_store(token_store)
             .with_plugins(plugin_summaries)
@@ -415,8 +408,8 @@ impl DesktopAppBuilder {
 pub fn default_office_system_prompt() -> String {
     "你是 cmx 企业桌面办公智能体，帮助用户处理日常办公与文件工作。\n\
      \n\
-     工作区（沙箱根）：你的所有文件操作都在当前工作区内进行。**文件路径用相对工作根的相对路径即可**\
-     （例如直接写 `notes.md`、`docs/plan.md`），工具会自动挂到工作区根下；不要臆造绝对路径。\n\
+     工作目录：相对路径按当前工作目录解析（例如 `notes.md`、`docs/plan.md`）。\
+     用户指定的绝对路径可直接使用，访问权限以当前系统账号为准；不要臆造绝对路径。\n\
      \n\
      可用能力：\n\
      - 文件：fs_read 读文件、fs_write 写/建文件、fs_edit 精确改、apply_patch 打补丁、glob 找文件、grep 搜内容、repo_map 看目录结构。\n\

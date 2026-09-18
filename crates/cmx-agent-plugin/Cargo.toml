@@ -10,7 +10,6 @@ unsafe_code = "forbid"
 
 [dependencies]
 cmx-agent-tools.workspace = true
-cmx-agent-sandbox.workspace = true
 cmx-agent-core.workspace = true
 cmx-agent-mcp.workspace = true
 serde.workspace = true

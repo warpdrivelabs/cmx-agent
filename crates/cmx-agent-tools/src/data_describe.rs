@@ -8,7 +8,7 @@ use cmx_agent_core::tool::GuardHints;
 use cmx_agent_core::{Tool, ToolCtx, ToolError, ToolResult, ToolSpec};
 use serde_json::{Value, json};
 
-use crate::sandbox;
+use crate::paths;
 
 pub struct DataDescribeTool;
 
@@ -17,12 +17,12 @@ impl Tool for DataDescribeTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec::new(
             "data_describe",
-            "分析工作区内的 CSV/TSV 数据：行数、每列类型与统计（数值列 min/max/mean/sum，文本列 distinct/top 值）+ 采样",
+            "分析 CSV/TSV 数据：行数、每列类型与统计（数值列 min/max/mean/sum，文本列 distinct/top 值）+ 采样",
         )
         .schema(json!({
             "type": "object",
             "properties": {
-                "path": { "type": "string", "description": "工作区内 CSV/TSV 路径" },
+                "path": { "type": "string", "description": "CSV/TSV 路径（相对工作目录或绝对路径）" },
                 "delimiter": { "type": "string", "description": "分隔符，默认 ','（TSV 用 '\\t'）" },
                 "sample_rows": { "type": "integer", "default": 5, "description": "返回前若干行采样" }
             },
@@ -35,7 +35,7 @@ impl Tool for DataDescribeTool {
         let Some(path) = input.get("path").and_then(|v| v.as_str()) else {
             return Ok(ToolResult::err("data_describe: 'path' is required"));
         };
-        let abs = match sandbox::resolve(path, ctx) {
+        let abs = match paths::resolve(path, ctx) {
             Ok(p) => p,
             Err(e) => return Ok(ToolResult::err(format!("data_describe: {e}"))),
         };
@@ -154,7 +154,6 @@ impl ColStat {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cmx_agent_core::guard::SandboxMode;
     use std::path::PathBuf;
 
     fn setup(csv: &str) -> (PathBuf, Vec<PathBuf>) {
@@ -166,7 +165,7 @@ mod tests {
     #[tokio::test]
     async fn describes_numeric_and_text() {
         let (root, roots) = setup("city,pop,region\nBJ,100,north\nSH,90,east\nBJ,80,north\n");
-        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
+        let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
         let r = DataDescribeTool.invoke(json!({"path":"d.csv"}), &ctx).await.unwrap();
         assert!(r.ok, "{r:?}");
         assert_eq!(r.output["rows"], 3);
@@ -187,7 +186,7 @@ mod tests {
     #[tokio::test]
     async fn missing_file_errors() {
         let (root, roots) = setup("a\n1\n");
-        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
+        let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
         let r = DataDescribeTool.invoke(json!({"path":"nope.csv"}), &ctx).await.unwrap();
         assert!(!r.ok);
         std::fs::remove_dir_all(&root).ok();

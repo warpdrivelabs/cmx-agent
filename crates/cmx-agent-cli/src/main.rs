@@ -16,7 +16,7 @@ use std::sync::Arc;
 use cmx_agent_app::DesktopAppBuilder;
 use cmx_agent_core::{
     Agent, ApprovalGuard, ApprovalPolicy, AuthGuard, AutoApprover, GuardPipeline, HighRiskGuard,
-    MockModel, ModelResponse, Policy, SandboxMode, Session, ToolCall,
+    MockModel, ModelResponse, Policy, Session, ToolCall,
 };
 use cmx_agent_tools::default_registry;
 
@@ -232,10 +232,10 @@ async fn demo(args: Vec<String>) -> anyhow::Result<()> {
     guards
         .add(Arc::new(AuthGuard::allow_all()))
         .add(Arc::new(HighRiskGuard))
+        .add(Arc::new(cmx_agent_core::WorkspaceWriteGuard))
         .add(Arc::new(ApprovalGuard));
 
     let policy = Policy {
-        sandbox: SandboxMode::WorkspaceWrite,
         approval: ApprovalPolicy::OnRequest,
         ..Default::default()
     };

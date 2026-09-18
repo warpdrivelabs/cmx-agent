@@ -1,21 +1,19 @@
-//! `git` —— 工作区内的版本控制（白名单子命令）。读类(status/diff/log/show/branch/ls-files)任意沙箱可用；
-//! 写类(add/commit/checkout/restore)需 workspace-write。比裸 shell 更安全（受控子命令）。
+//! `git` —— 在工作目录执行版本控制（保留受控子命令白名单）。
 
 use async_trait::async_trait;
-use cmx_agent_core::guard::SandboxMode;
 use cmx_agent_core::tool::GuardHints;
 use cmx_agent_core::{Tool, ToolCtx, ToolError, ToolResult, ToolSpec};
 use serde_json::{Value, json};
 
-use crate::{proc, sandbox};
+use crate::{paths, proc};
 
 pub struct GitTool;
 
-/// 只读子命令（任意沙箱可用）。
+/// 查询类子命令。
 const READ_SUBS: &[&str] = &[
     "status", "diff", "log", "show", "branch", "ls-files", "rev-parse", "blame", "remote",
 ];
-/// 写类子命令（需 workspace-write）。
+/// 写类子命令。
 const WRITE_SUBS: &[&str] = &["add", "commit", "checkout", "restore", "switch", "stash", "init"];
 
 #[async_trait]
@@ -37,6 +35,11 @@ impl Tool for GitTool {
         .guard(GuardHints {
             requires_auth: Some("exec".into()),
             idempotent: false,
+            // 写子命令（add/commit/checkout 等）执行前需审批；读子命令（status/diff/log）放行。
+            approval_arg_values: Some((
+                "subcommand".into(),
+                WRITE_SUBS.iter().map(|s| s.to_string()).collect(),
+            )),
             ..Default::default()
         })
     }
@@ -52,13 +55,9 @@ impl Tool for GitTool {
                 "git: 子命令 '{sub}' 不在白名单（读:{READ_SUBS:?} 写:{WRITE_SUBS:?}）"
             )));
         }
-        if is_write && !ctx.sandbox.allows_write() {
-            return Ok(ToolResult::err(format!(
-                "git {sub}: 写类子命令需 workspace-write 沙箱"
-            )));
-        }
-        let Some(cwd) = sandbox::first_root(ctx) else {
-            return Ok(ToolResult::err("git: no allowed_roots"));
+        let cwd = match paths::working_dir(ctx) {
+            Ok(p) => p,
+            Err(e) => return Ok(ToolResult::err(format!("git: {e}"))),
         };
         let mut args: Vec<String> = vec![sub.to_string()];
         if let Some(a) = input.get("args").and_then(|v| v.as_array()) {
@@ -72,17 +71,7 @@ impl Tool for GitTool {
             .get("timeout_ms")
             .and_then(|v| v.as_u64())
             .unwrap_or(proc::DEFAULT_TIMEOUT_MS);
-        // OS 沙箱（S1a）：WorkspaceWrite 档走受限令牌原生 spawn，profile=Git（.git 合法写，无 deny）。
-        let out = if ctx.sandbox == SandboxMode::WorkspaceWrite {
-            let pctx = cmx_agent_sandbox::ProcCtx {
-                sandbox: ctx.sandbox,
-                roots: ctx.allowed_roots,
-                profile: cmx_agent_sandbox::Profile::Git,
-            };
-            proc::run_profiled(&pctx, "git", &args, cwd, timeout).await
-        } else {
-            proc::run("git", &args, cwd, timeout).await
-        };
+        let out = proc::run("git", &args, &cwd, timeout).await;
         Ok(ToolResult::ok(out))
     }
 }
@@ -90,13 +79,12 @@ impl Tool for GitTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cmx_agent_core::guard::SandboxMode;
     use std::path::PathBuf;
 
     async fn init_repo() -> (PathBuf, Vec<PathBuf>) {
         let root = crate::testutil::unique_dir("cmx-git");
         let roots = vec![root.clone()];
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
+        let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
         GitTool.invoke(json!({"subcommand":"init"}), &ctx).await.unwrap();
         // 配置身份，避免 commit 报错（局部配置）
         proc::run("git", &["config".into(),"user.email".into(),"t@t".into()], &root, 5000).await;
@@ -107,7 +95,7 @@ mod tests {
     #[tokio::test]
     async fn status_on_empty_repo() {
         let (root, roots) = init_repo().await;
-        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
+        let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
         let r = GitTool.invoke(json!({"subcommand":"status","args":["--short"]}), &ctx).await.unwrap();
         assert!(r.ok, "{r:?}");
         assert_eq!(r.output["exit_code"], 0);
@@ -118,7 +106,7 @@ mod tests {
     async fn add_commit_then_log() {
         let (root, roots) = init_repo().await;
         std::fs::write(root.join("a.txt"), "hi").unwrap();
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
+        let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
         GitTool.invoke(json!({"subcommand":"add","args":["a.txt"]}), &ctx).await.unwrap();
         let c = GitTool.invoke(json!({"subcommand":"commit","args":["-m","first"]}), &ctx).await.unwrap();
         assert_eq!(c.output["exit_code"], 0, "{c:?}");
@@ -128,18 +116,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn write_denied_in_readonly() {
-        let (root, roots) = init_repo().await;
-        let ctx = ToolCtx { sandbox: SandboxMode::ReadOnly, allowed_roots: &roots, session_id: "test" };
-        let r = GitTool.invoke(json!({"subcommand":"commit","args":["-m","x"]}), &ctx).await.unwrap();
-        assert!(!r.ok);
-        std::fs::remove_dir_all(&root).ok();
-    }
-
-    #[tokio::test]
     async fn unknown_subcommand_rejected() {
         let (root, roots) = init_repo().await;
-        let ctx = ToolCtx { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: &roots, session_id: "test" };
+        let ctx = ToolCtx { workspace_roots: &roots, session_id: "test" };
         let r = GitTool.invoke(json!({"subcommand":"push"}), &ctx).await.unwrap();
         assert!(!r.ok);
         std::fs::remove_dir_all(&root).ok();

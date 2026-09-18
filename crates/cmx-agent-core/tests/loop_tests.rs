@@ -5,7 +5,7 @@ use std::sync::Arc;
 use cmx_agent_core::event::{EventKind, StopReason};
 use cmx_agent_core::{
     Agent, ApprovalPolicy, AutoApprover, GuardPipeline, MockModel, ModelResponse, Policy,
-    SandboxMode, Session, ToolCall,
+    Session, ToolCall,
 };
 use cmx_agent_tools::default_registry;
 
@@ -17,7 +17,6 @@ fn agent_with(model: MockModel, approval: ApprovalPolicy) -> Agent {
         .guards(GuardPipeline::new()) // 无守卫 = 全放行，聚焦循环本身
         .approver(Arc::new(AutoApprover::approve()))
         .policy(Policy {
-            sandbox: SandboxMode::WorkspaceWrite,
             approval,
             ..Default::default()
         })

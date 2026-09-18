@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use cmx_agent_core::event::{EventKind, StopReason};
 use cmx_agent_core::tool::GuardHints;
 use cmx_agent_core::{
-    Agent, GuardPipeline, MockModel, ModelResponse, Policy, SandboxMode, Session, Tool, ToolCall,
+    Agent, GuardPipeline, MockModel, ModelResponse, Policy, Session, Tool, ToolCall,
     ToolCtx, ToolError, ToolRegistry, ToolResult, ToolSpec,
 };
 use serde_json::{Value, json};
@@ -57,10 +57,7 @@ async fn multiple_tool_calls_run_concurrently() {
         .model(Arc::new(model))
         .tools(reg)
         .guards(GuardPipeline::new())
-        .policy(Policy {
-            sandbox: SandboxMode::WorkspaceWrite,
-            ..Default::default()
-        })
+        .policy(Policy::default())
         .build()
         .unwrap();
 

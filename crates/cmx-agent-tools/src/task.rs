@@ -458,6 +458,9 @@ impl Tool for TaskTool {
         // 计划模式活开关快照（§7.5）：前台子回合随父 future 树自动继承，无需重挂；
         // 后台子回合 task-local 不跨 spawn，spawn 闭包内**显式 re-scope**（不可绕过）。
         let plan_flag = cmx_agent_core::TURN_PLAN_MODE.try_with(|f| f.clone()).ok();
+        // 审批档覆盖快照同理：IM 无人值守（UNATTENDED）后台子任务不得回落桌面全局档
+        // （存量缺口：旧实现后台丢覆盖，审批语义与父回合不一致）。前台随 future 树自动继承。
+        let policy_override = cmx_agent_core::TURN_POLICY_OVERRIDE.try_with(|ov| *ov).ok();
 
         if !background {
             return Ok(self
@@ -469,7 +472,7 @@ impl Tool for TaskTool {
                     turn_subject,
                     depth,
                     &parent_id,
-                    ctx.allowed_roots,
+                    ctx.workspace_roots,
                     ActiveSubTask {
                         sub_id: sub_id.clone(),
                         description: description.to_string(),
@@ -502,7 +505,7 @@ impl Tool for TaskTool {
         );
         let handle = self.handle.clone();
         let sink = self.handle.log_sink.get().cloned();
-        let roots = ctx.allowed_roots.to_vec(); // spawn 闭包需 'static：所有权快照
+        let roots = ctx.workspace_roots.to_vec(); // spawn 闭包需 'static：所有权快照
         let slot = _slot; // RAII guard 移交后台任务（任务收尾才释放槽）
         let child = Arc::new(child);
         let sub_id_bg = sub_id.clone(); // 回包还要用原 id
@@ -518,6 +521,7 @@ impl Tool for TaskTool {
                 bg_cancel,
                 depth,
                 plan_flag,
+                policy_override,
                 roots,
                 sink,
                 slot,
@@ -642,6 +646,7 @@ async fn run_background_child(
     bg_cancel: TurnCancel,
     depth: usize,
     plan_flag: Option<Arc<std::sync::atomic::AtomicBool>>,
+    policy_override: Option<cmx_agent_core::TurnPolicyOverride>,
     roots: Vec<std::path::PathBuf>,
     sink: Option<SubagentLogSink>,
     _slot: ChildSlotGuard,
@@ -686,10 +691,16 @@ async fn run_background_child(
             }
             outcome.map(|o| o.final_text.unwrap_or_default())
         };
-        // 显式 re-scope：task-local 不跨 tokio::spawn（§7.5 自查点）。
+        // 显式 re-scope：task-local 不跨 tokio::spawn（§7.5 自查点）；审批档覆盖与计划模式同规。
         let scoped = cmx_agent_core::SUBAGENT_TURN.scope(true, SUBAGENT_DEPTH.scope(depth + 1, run_fut));
-        match plan_flag {
-            Some(flag) => cmx_agent_core::TURN_PLAN_MODE.scope(flag, scoped).await,
+        let scoped = async {
+            match plan_flag {
+                Some(flag) => cmx_agent_core::TURN_PLAN_MODE.scope(flag, scoped).await,
+                None => scoped.await,
+            }
+        };
+        match policy_override {
+            Some(ov) => cmx_agent_core::TURN_POLICY_OVERRIDE.scope(ov, scoped).await,
             None => scoped.await,
         }
     });
@@ -709,7 +720,6 @@ async fn run_background_child(
 mod tests {
     use super::*;
     use cmx_agent_core::agents::builtin_specs;
-    use cmx_agent_core::guard::SandboxMode;
     use cmx_agent_core::model::{ModelResponse, MockModel, ModelSeam};
     use cmx_agent_core::{GuardPipeline, Policy, ToolRegistry};
     use std::path::PathBuf;
@@ -729,8 +739,7 @@ mod tests {
 
     fn tool_ctx(roots: &[PathBuf]) -> ToolCtx<'_> {
         ToolCtx {
-            sandbox: SandboxMode::WorkspaceWrite,
-            allowed_roots: roots,
+            workspace_roots: roots,
             session_id: "parent",
         }
     }
@@ -760,8 +769,7 @@ mod tests {
             .tools(reg)
             .guards(GuardPipeline::new())
             .policy(Policy {
-                sandbox: SandboxMode::WorkspaceWrite,
-                allowed_roots: vec![PathBuf::from("/tmp")],
+                workspace_roots: vec![PathBuf::from("/tmp")],
                 ..Default::default()
             })
             .build()
@@ -808,8 +816,7 @@ mod tests {
             .tools(reg)
             .guards(GuardPipeline::new())
             .policy(Policy {
-                sandbox: SandboxMode::WorkspaceWrite,
-                allowed_roots: vec![PathBuf::from("/tmp")],
+                workspace_roots: vec![PathBuf::from("/tmp")],
                 ..Default::default()
             })
             .build()
@@ -937,8 +944,7 @@ mod tests {
             .tools(reg)
             .guards(GuardPipeline::new())
             .policy(Policy {
-                sandbox: SandboxMode::WorkspaceWrite,
-                allowed_roots: vec![PathBuf::from("/tmp")],
+                workspace_roots: vec![PathBuf::from("/tmp")],
                 ..Default::default()
             })
             .build()
@@ -1006,8 +1012,7 @@ mod tests {
             .tools(reg)
             .guards(GuardPipeline::new())
             .policy(Policy {
-                sandbox: SandboxMode::WorkspaceWrite,
-                allowed_roots: vec![PathBuf::from("/tmp")],
+                workspace_roots: vec![PathBuf::from("/tmp")],
                 ..Default::default()
             })
             .build()
@@ -1108,7 +1113,7 @@ mod tests {
             .model(model)
             .tools(reg)
             .guards(GuardPipeline::new())
-            .policy(Policy { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: vec![PathBuf::from("/tmp")], ..Default::default() })
+            .policy(Policy { workspace_roots: vec![PathBuf::from("/tmp")], ..Default::default() })
             .build()
             .unwrap();
         let agent = Arc::new(agent);
@@ -1156,7 +1161,7 @@ mod tests {
             .model(model)
             .tools(reg)
             .guards(GuardPipeline::new())
-            .policy(Policy { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: vec![PathBuf::from("/tmp")], ..Default::default() })
+            .policy(Policy { workspace_roots: vec![PathBuf::from("/tmp")], ..Default::default() })
             .build()
             .unwrap();
         let agent = Arc::new(agent);
@@ -1199,7 +1204,7 @@ mod tests {
             .model(model)
             .tools(reg)
             .guards(GuardPipeline::new())
-            .policy(Policy { sandbox: SandboxMode::WorkspaceWrite, allowed_roots: vec![PathBuf::from("/tmp")], ..Default::default() })
+            .policy(Policy { workspace_roots: vec![PathBuf::from("/tmp")], ..Default::default() })
             .build()
             .unwrap();
         let agent = Arc::new(agent);
@@ -1244,8 +1249,7 @@ mod tests {
             .tools(reg)
             .guards(GuardPipeline::new())
             .policy(Policy {
-                sandbox: SandboxMode::WorkspaceWrite,
-                allowed_roots: vec![PathBuf::from("/tmp")],
+                workspace_roots: vec![PathBuf::from("/tmp")],
                 ..Default::default()
             })
             .build()

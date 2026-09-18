@@ -59,8 +59,7 @@ async fn dispatch_background(app: &crate::AgentApp, tmp: &TempDir, parent: &str)
     let task = reg.get("task").expect("task 工具应注册");
     let roots = vec![tmp.path().join("workspace")];
     let ctx = ToolCtx {
-        sandbox: cmx_agent_core::SandboxMode::WorkspaceWrite,
-        allowed_roots: &roots,
+        workspace_roots: &roots,
         session_id: parent,
     };
     let r = task

@@ -109,10 +109,7 @@ pub struct ImBridge {
     /// 自己的桌面，App ID/Secret 配好 + 登录即用，无需验证码绑定。⚠ 任何能发消息给机器人
     /// 的人都会被当作登录人——安全靠 chat_id 白名单或私聊兜底。
     personal: bool,
-    /// 无人值守全权（im.json `full_access`，默认 true 由装配侧传入）：IM 回合以回合级覆盖档
-    /// [`cmx_agent_core::TurnPolicyOverride::FULL_ACCESS`] 执行——沙箱完全放行、从不弹审批卡
-    /// （无人值守没人点卡片，默认档下高危工具会挂 300 秒然后被拒，IM 形同残废）。
-    /// false = 跟随桌面全局两旋钮。构造默认 false（fail-closed）：须装配侧显式传入。
+    /// 无人值守仅自动执行普通操作，强制审批或高风险操作直接拒绝；关闭时跟随桌面审批策略。
     full_access: bool,
     /// open_id → (身份, 缓存时刻) 正缓存（TTL 见 `BINDING_TTL`；解绑后最多 TTL 内失效）。
     binding_cache: Mutex<HashMap<String, (BoundIdentity, Instant)>>,
@@ -161,17 +158,15 @@ impl ImBridge {
         self
     }
 
-    /// 无人值守全权（装配侧按 im.json `full_access` 传入）：开启后 IM 回合以
-    /// [`cmx_agent_core::TurnPolicyOverride::FULL_ACCESS`] 覆盖档执行，不弹审批卡；
-    /// 关闭则跟随桌面全局两旋钮。
+    /// 无人值守审批覆盖只作用于 IM 回合，不改变桌面策略。
     pub fn with_full_access(mut self, on: bool) -> Self {
         self.full_access = on;
         self
     }
 
-    /// 本桥回合的权限档覆盖：全权开启时为 [`cmx_agent_core::TurnPolicyOverride::FULL_ACCESS`]。
+    /// 本桥回合的权限档覆盖：全权开启时为 [`cmx_agent_core::TurnPolicyOverride::UNATTENDED`]。
     pub fn turn_policy_override(&self) -> Option<cmx_agent_core::TurnPolicyOverride> {
-        self.full_access.then_some(cmx_agent_core::TurnPolicyOverride::FULL_ACCESS)
+        self.full_access.then_some(cmx_agent_core::TurnPolicyOverride::UNATTENDED)
     }
 
     fn allowed(&self, chat: &str) -> bool {
@@ -349,8 +344,7 @@ impl ImBridge {
                 Some(cmx_agent_app::ASSISTANT_SESSION_TITLE.to_string()),
             );
             let text = format!("【{}】{}", self.channel_label(), m.text);
-            // 无人值守全权（im.json full_access，默认开）：IM 回合以覆盖档执行——沙箱完全放行、
-            // 从不弹审批卡；关掉则跟随桌面全局两旋钮。仅本回合任务树生效，不写全局档。
+            // 无人值守审批覆盖仅作用于本回合任务树，不改变全局策略。
             let pol = self.turn_policy_override();
             let reply = match identity {
                 // 已绑定：以绑定用户身份跑回合（守卫/数据权限按此人判定，与桌面登录身份互不干扰）。
@@ -467,7 +461,7 @@ mod tests {
 
     #[test]
     fn full_access_flag_drives_turn_policy_override() {
-        // 构造默认 fail-closed（无覆盖）；with_full_access(true) → FULL_ACCESS 覆盖档。
+        // 构造默认不覆盖桌面策略，显式开启后采用无人值守审批档。
         // app/provider 仅装箱不触碰，用 unreachable 空实现即可（tick 不会被调用）。
         struct NoProvider;
         #[async_trait::async_trait]
@@ -502,7 +496,7 @@ mod tests {
         };
         assert!(mk().turn_policy_override().is_none(), "默认无覆盖（fail-closed）");
         let ov = mk().with_full_access(true).turn_policy_override();
-        assert_eq!(ov, Some(cmx_agent_core::TurnPolicyOverride::FULL_ACCESS));
+        assert_eq!(ov, Some(cmx_agent_core::TurnPolicyOverride::UNATTENDED));
         assert!(mk().with_full_access(false).turn_policy_override().is_none());
     }
 }

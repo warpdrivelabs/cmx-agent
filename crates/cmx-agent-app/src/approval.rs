@@ -31,15 +31,22 @@ pub struct PendingApprovalInfo {
     pub summary: String,
 }
 
-/// 交互式审批者。待决审批以 `call_id` → oneshot 发送端登记。
+/// 交互式审批者。待决审批以 `session_id + call_id` 复合键 → oneshot 发送端登记：
+/// call_id 由模型自报、跨会话可重号，全局单键会让并发会话互相覆盖/误取对方的等待端
+///（存量并发缺陷，本次收敛）；复合键天然按会话隔离，命中即归属正确。
 pub struct InteractiveApprover {
     pending: Mutex<HashMap<String, oneshot::Sender<ApprovalReply>>>,
-    /// call_id → 展示信息：会话中断时需精准拒绝该会话的所有待决审批；刷新后恢复卡面也要查它。
+    /// 复合键 → 展示信息：会话中断时需精准拒绝该会话的所有待决审批；刷新后恢复卡面也要查它。
     pending_info: Mutex<HashMap<String, PendingApprovalInfo>>,
     /// 已授予「本对话全部允许」的会话 id 集合——命中则内核跳过审批直接放行（不弹卡）。
     /// 进程内内存态：App 重启即清空（重启后不应静默沿用旧授权，需重新确认）。
     allow_all: Mutex<HashSet<String>>,
     timeout: Duration,
+}
+
+/// 待决审批的复合键：`session_id` 与 `call_id` 以 `\0` 连接（两者都不含 `\0`，无歧义）。
+fn pending_key(session_id: &str, call_id: &str) -> String {
+    format!("{session_id}\0{call_id}")
 }
 
 impl Default for InteractiveApprover {
@@ -59,24 +66,12 @@ impl InteractiveApprover {
     }
 
     /// 前端送回决定：弹出该 `call_id` 的等待端并唤醒（同步，不需运行时）。返回是否命中一个待决审批。
-    /// `session_hint` 非空时校验会话绑定——call_id 由模型自报、跨会话可能重号，
-    /// B 会话的决定不得作用于 A 会话挂起的审批（防跨会话误批/误拒）。
+    /// `session_hint` 非空时按「该会话 + call_id」复合键精准定位——跨会话同号 call_id 互不命中；
+    /// 空提示只匹配无会话登记（历史 `resolve` 兜底路径，前门入口已强制非空会话）。
     pub fn decide(&self, call_id: &str, approved: bool, session_hint: &str, note: &str) -> bool {
-        let bound = self
-            .pending_info
-            .lock()
-            .expect("pending info lock")
-            .get(call_id)
-            .map(|i| i.session_id.clone());
-        if !session_hint.is_empty() && bound.as_deref().is_some_and(|sid| sid != session_hint) {
-            eprintln!(
-                "[approval] 审批 {call_id} 属于会话 {:?}，拒绝来自会话 {session_hint:?} 的决定",
-                bound.as_deref().unwrap_or("")
-            );
-            return false;
-        }
-        let tx = self.pending.lock().expect("pending lock").remove(call_id);
-        self.pending_info.lock().expect("pending info lock").remove(call_id);
+        let key = pending_key(session_hint, call_id);
+        let tx = self.pending.lock().expect("pending lock").remove(&key);
+        self.pending_info.lock().expect("pending info lock").remove(&key);
         match tx {
             Some(tx) => tx
                 .send(ApprovalReply { approved, note: note.to_string() })
@@ -85,18 +80,27 @@ impl InteractiveApprover {
         }
     }
 
+    /// 按键拒绝并清理一条待决审批（内部清理路径：revoke_all / cancel_session）。
+    fn reject_key(&self, key: &str) {
+        let tx = self.pending.lock().expect("pending lock").remove(key);
+        self.pending_info.lock().expect("pending info lock").remove(key);
+        if let Some(tx) = tx {
+            let _ = tx.send(ApprovalReply { approved: false, note: String::new() });
+        }
+    }
+
     /// 全量撤销（登出/换账号）：拒绝所有待决审批 + 清空「全部允许」授权——
     /// 免审批授权不得跨登录身份沿用。
     pub fn revoke_all(&self) {
-        let ids: Vec<String> = self
+        let keys: Vec<String> = self
             .pending
             .lock()
             .expect("pending lock")
             .keys()
             .cloned()
             .collect();
-        for id in ids {
-            let _ = self.decide(&id, false, "", "");
+        for key in keys {
+            self.reject_key(&key);
         }
         self.allow_all.lock().expect("allow_all lock").clear();
     }
@@ -155,13 +159,14 @@ impl Approver for InteractiveApprover {
         reason: &str,
     ) -> (bool, String, Option<String>) {
         let (tx, rx) = oneshot::channel::<ApprovalReply>();
+        let key = pending_key(session_id, &call.id);
         {
             let mut p = self.pending.lock().expect("pending lock");
-            // 同一 call_id 若已有待决（不应发生），丢弃旧的（其接收端会得到 Err → 视为拒绝）。
-            p.insert(call.id.clone(), tx);
+            // 同会话同一 call_id 若已有待决（不应发生），丢弃旧的（其接收端会得到 Err → 视为拒绝）。
+            p.insert(key.clone(), tx);
         }
         self.pending_info.lock().expect("pending info lock").insert(
-            call.id.clone(),
+            key.clone(),
             PendingApprovalInfo {
                 call_id: call.id.clone(),
                 session_id: session_id.to_string(),
@@ -170,19 +175,19 @@ impl Approver for InteractiveApprover {
                 summary: call_summary(call),
             },
         );
-        // 挂起等前端决定；超时 / 发送端被覆盖（同 id 重登记）按拒绝，by 区分留审计。
+        // 挂起等前端决定；超时 / 发送端被覆盖（同键重登记）按拒绝，by 区分留审计。
         let (reply, by) = match tokio::time::timeout(self.timeout, rx).await {
             Ok(Ok(reply)) => (Some(reply), "user"),
             Ok(Err(_canceled)) => {
-                self.pending.lock().expect("pending lock").remove(&call.id);
+                self.pending.lock().expect("pending lock").remove(&key);
                 (None, "canceled")
             }
             Err(_timeout) => {
-                self.pending.lock().expect("pending lock").remove(&call.id);
+                self.pending.lock().expect("pending lock").remove(&key);
                 (None, "timeout")
             }
         };
-        self.pending_info.lock().expect("pending info lock").remove(&call.id);
+        self.pending_info.lock().expect("pending info lock").remove(&key);
         match reply {
             // 决定来自 decide（user 主动点按/中断清理走 decide 发送）
             Some(r) if r.approved => (true, "user".into(), None),
@@ -197,16 +202,16 @@ impl Approver for InteractiveApprover {
     }
 
     fn cancel_session(&self, session_id: &str) {
-        let ids: Vec<String> = self
+        let keys: Vec<String> = self
             .pending_info
             .lock()
             .expect("pending info lock")
-            .values()
-            .filter(|i| i.session_id == session_id)
-            .map(|i| i.call_id.clone())
+            .iter()
+            .filter(|(_, i)| i.session_id == session_id)
+            .map(|(k, _)| k.clone())
             .collect();
-        for call_id in ids {
-            let _ = self.decide(&call_id, false, "", "");
+        for key in keys {
+            self.reject_key(&key);
         }
     }
 }
@@ -225,7 +230,7 @@ mod tests {
         let h = tokio::spawn(async move { a2.resolve(&call, "需审批").await });
         // 让 resolve 先登记
         tokio::time::sleep(Duration::from_millis(50)).await;
-        assert_eq!(approver.pending_ids(), vec!["c1".to_string()]);
+        assert_eq!(approver.pending_ids(), vec![pending_key("", "c1")]);
         assert!(approver.decide("c1", true, "", ""));
         let (ok, by) = h.await.unwrap();
         assert!(ok);
@@ -240,14 +245,50 @@ mod tests {
         let a2 = approver.clone();
         let h = tokio::spawn(async move { a2.resolve_for_session_with_note("s1", &call, "x").await });
         tokio::time::sleep(Duration::from_millis(50)).await;
-        // 拒绝并附言：附言应原样带回（「告诉模型接下来应该怎么做」）
-        assert!(approver.decide("c2", false, "", "改用 echo 写入"));
+        // 拒绝并附言：附言应原样带回（「告诉模型接下来应该怎么做」）。
+        // 复合键语义：会话内登记的审批必须带会话提示才能命中；空提示只匹配无会话登记。
+        assert!(!approver.decide("c2", false, "", "错误会话提示不应命中"));
+        assert!(approver.decide("c2", false, "s1", "改用 echo 写入"));
         let (ok, by, note) = h.await.unwrap();
         assert!(!ok);
         assert_eq!(by, "user");
         assert_eq!(note.as_deref(), Some("改用 echo 写入"));
         // 待决展示信息（刷新恢复用）：应含会话/工具/摘要
         assert!(approver.pending_in_session("s1").is_empty());
+    }
+
+    /// 跨会话同号 call_id（模型自报 id 可重号）：复合键下两会话各自独立等待，
+    /// A 会话的决定不得命中/清除 B 会话的待决（旧全局单键会互相覆盖，存量并发缺陷回归锚）。
+    #[tokio::test]
+    async fn same_call_id_across_sessions_stays_isolated() {
+        let approver = std::sync::Arc::new(InteractiveApprover::new(Duration::from_secs(5)));
+        let call = ToolCall::with_id("dup", "shell", json!({"cmd":"echo a"}));
+        let (a_h, b_h) = {
+            let a2 = approver.clone();
+            let b2 = approver.clone();
+            let call2 = call.clone();
+            (
+                tokio::spawn(async move { a2.resolve_for_session("sess-a", &call, "x").await }),
+                tokio::spawn(async move { b2.resolve_for_session("sess-b", &call2, "x").await }),
+            )
+        };
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(approver.pending_in_session("sess-a").len(), 1);
+        assert_eq!(approver.pending_in_session("sess-b").len(), 1, "同号 call_id 不得互相覆盖");
+        // 只批 A：B 仍挂起，随后按会话取消（模拟中断）→ B 被拒而非被 A 的批准误唤醒。
+        assert!(approver.decide("dup", true, "sess-a", ""));
+        let (ok_a, _) = a_h.await.unwrap();
+        assert!(ok_a);
+        let approver2 = approver.clone();
+        let cancel = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            use cmx_agent_core::Approver;
+            approver2.cancel_session("sess-b");
+        });
+        let (ok_b, by_b) = b_h.await.unwrap();
+        assert!(!ok_b);
+        assert_eq!(by_b, "user", "cancel_session 走拒绝通道（by=user 因 decide 发送）");
+        cancel.await.unwrap();
     }
 
     #[tokio::test]
