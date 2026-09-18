@@ -1189,9 +1189,10 @@ function renderEvent(log, ev, sid){
     const turn=log._turn;
     if(turn) turn.dataset.ended="1";   // 完整收讫标记：截断回补（settlePendingCards）据此与「故意无计时行」的回合区分
     if(ev.reason==="stopped"){
-      // 用户已手动中断过（分隔条已画）→ 只关回合；否则画「已中断」分隔条（opencode interrupted）
+      // 用户已手动中断过（分隔条已画）→ 只关回合；否则画「已停止」分隔条（参考图二 2026-09-18，
+      // 折叠豁免常显——回放里中断回合只剩「已工作 N 秒」毫无痕迹）。
       if(log._intMarked){ log._intMarked=false; }
-      else (turn||ensureTurn(log)).append(el("turn-divider int","⎋ 已中断"));
+      else (turn||ensureTurn(log)).append(el("turn-divider int","已停止"));
     }
     else if(ev.reason==="max_steps"){ ensureTurn(log).append(el("meta note turn-note","— 达到步数上限（"+ev.steps+" 步）—")); }
     // error：不再画收尾行（用户反馈 2026-09-17：失败原因已由上方「⚠ 处理出错」note

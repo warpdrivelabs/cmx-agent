@@ -362,10 +362,12 @@
 .work-dur .chev{transition:transform .16s;font-size:10px;opacity:.6}
 .turn.folded .work-dur .chev{transform:rotate(-90deg)}
 /* 折叠组只留「已工作 N」+ 最终回复（.tail）：思考/工具卡/上下文组之外，中间过程的文字气泡、
-   状态注记（.iline ✕已拒绝、.meta 注脚、回合内 .turn-divider ⎋已中断）也一并收起。
-   例外：task_result 系统卡是回执内容不是过程细节，折叠态保持可见。 */
+   状态注记（.iline ✕已拒绝、.meta 注脚）也一并收起。
+   例外：task_result 系统卡是回执内容不是过程细节，折叠态保持可见；
+   .turn-divider（已停止）是中断结论不是过程细节——藏掉它=手动中断毫无痕迹
+   （2026-09-18 用户截图：回放里中断回合只剩「已工作 N 秒」），参考图二改为常显。 */
 .turn.folded .reasoning,.turn.folded .tool.tcard:not(.task-result),.turn.folded .ctxgroup,.turn.folded .thinking-row,
-.turn.folded .iline,.turn.folded .meta:not(.turn-note),.turn.folded .turn-divider,.turn.folded .bubble:not(.tail){display:none}
+.turn.folded .iline,.turn.folded .meta:not(.turn-note),.turn.folded .bubble:not(.tail){display:none}
 /* 折叠豁免（方案 20260914 改造二）：后台执行中（.run）的子任务卡不被折叠藏掉——
    背景任务看着凭空消失等于丢状态；收口后的子任务卡随回合折叠（可视化方案的 .subcard） */
 .turn.folded .subcard.run{display:block}
@@ -405,10 +407,12 @@
 .qa-now:hover{border-color:var(--gold);color:var(--gold);background:none}
 .qa-del:hover{border-color:var(--red);color:var(--red);background:none}
 
-/* ── 回合分隔条（中断）：轻量一行小字，不画贯穿横线（920px 列宽下横线太抢眼）── */
+/* ── 回合分隔条：基态轻量一行小字（不画贯穿横线）；.int=中断结论行（参考图二 2026-09-18）：
+   灰字「已停止」+ 下缘贯穿线，回合折叠后仍常显（是结论不是过程细节）── */
 .turn-divider{align-self:flex-start;width:fit-content;display:flex;align-items:center;gap:6px;
   font-size:11.5px;color:var(--muted);margin:2px 0}
-.turn-divider.int{color:var(--orange);opacity:.9}
+.turn-divider.int{align-self:stretch;width:auto;color:var(--muted);
+  border-bottom:1px solid var(--border2);padding:6px 0 10px;margin:6px 0 2px}
 /* 回合间隙的独立 note（计划模式开/关等状态线）：不进任何回合，比照回合分隔条的小行形态 */
 .meta.note.solo{align-self:flex-start;width:fit-content;margin:2px 0}
 
